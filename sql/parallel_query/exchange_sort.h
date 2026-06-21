@@ -145,6 +145,23 @@ struct PQ_orderby_real_init_state_shape {
   bool initialized{false};
 };
 
+struct PQ_orderby_runtime_sort_state_owner_shape {
+  uint32 workers{0};
+  uint32 sort_order_length{0};
+  uint32 max_record_length{0};
+  uint32 ref_length{0};
+  bool stable_output{false};
+  bool index_sort{false};
+  bool initialized{false};
+  bool runtime_ready{false};
+  bool filesort_constructed{false};
+  bool sort_param_initialized{false};
+  bool join_state_mutated{false};
+  bool filesorts_cleanup_attached{false};
+  bool qep_attached{false};
+  bool access_path_attached{false};
+};
+
 constexpr uint32 PQ_ORDERBY_FRAME_MAGIC = 0x50514f46;  // "PQOF"
 constexpr uint16 PQ_ORDERBY_FRAME_VERSION = 1;
 
@@ -206,6 +223,7 @@ class Exchange_sort final : public Exchange {
                                                   uint32 sort_order_length,
                                                   uint32 max_record_length,
                                                   uint32 ref_length);
+  bool run_orderby_runtime_sort_state_owner_shape_smoke();
   bool run_orderby_real_init_state_owner_smoke();
   bool run_orderby_real_init_allocation_smoke();
   bool run_orderby_frame_loader_smoke();
@@ -250,6 +268,7 @@ class Exchange_sort final : public Exchange {
   bool m_order_shape_index_sort{false};
   PQ_orderby_sort_state_shape m_sort_state_shape;
   PQ_orderby_real_init_state_shape m_real_init_state_shape;
+  PQ_orderby_runtime_sort_state_owner_shape m_runtime_sort_state_owner_shape;
 
   bool init_sort_state_shape(uint32 workers, bool stable_output,
                              bool index_sort, uint32 sort_order_length,
@@ -260,6 +279,11 @@ class Exchange_sort final : public Exchange {
                                         uint32 sort_order_length,
                                         uint32 max_record_length,
                                         uint32 ref_length);
+  bool init_runtime_sort_state_owner_shape(uint32 workers, bool stable_output,
+                                           bool index_sort,
+                                           uint32 sort_order_length,
+                                           uint32 max_record_length,
+                                           uint32 ref_length);
   bool allocate_real_init_buffers_shape();
   bool load_orderby_frame_to_record_group(MQueue_handle *handle,
                                           uint32 worker_id,
@@ -282,6 +306,7 @@ class Exchange_sort final : public Exchange {
       uint32 *refills_read, uint32 *heap_replaces_read,
       uint32 *heap_removes_read);
   void cleanup_real_init_state_owner_shape();
+  void cleanup_runtime_sort_state_owner_shape();
 };
 
 #endif  // SQL_PARALLEL_QUERY_EXCHANGE_SORT_INCLUDED

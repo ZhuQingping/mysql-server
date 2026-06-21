@@ -588,6 +588,30 @@ void Exchange_sort::cleanup_sort_state_shape() {
   m_sort_state_shape = PQ_orderby_sort_state_shape{};
 }
 
+bool Exchange_sort::init_runtime_sort_state_owner_shape(
+    uint32 workers, bool stable_output, bool index_sort,
+    uint32 sort_order_length, uint32 max_record_length, uint32 ref_length) {
+  cleanup_runtime_sort_state_owner_shape();
+  if (workers == 0 || sort_order_length == 0 || max_record_length == 0) {
+    return true;
+  }
+  if (stable_output && ref_length == 0) return true;
+
+  /*
+    M11-E5h-1 only creates a fail-closed owner shell. It must not construct
+    Filesort, initialize Sort_param, attach to JOIN cleanup, QEP, or AccessPath,
+    or claim runtime readiness.
+  */
+  m_runtime_sort_state_owner_shape.workers = workers;
+  m_runtime_sort_state_owner_shape.sort_order_length = sort_order_length;
+  m_runtime_sort_state_owner_shape.max_record_length = max_record_length;
+  m_runtime_sort_state_owner_shape.ref_length = ref_length;
+  m_runtime_sort_state_owner_shape.stable_output = stable_output;
+  m_runtime_sort_state_owner_shape.index_sort = index_sort;
+  m_runtime_sort_state_owner_shape.initialized = true;
+  return false;
+}
+
 bool Exchange_sort::init_real_init_state_owner_shape(
     uint32 workers, bool stable_output, bool index_sort,
     uint32 sort_order_length, uint32 max_record_length, uint32 ref_length) {
@@ -902,6 +926,10 @@ void Exchange_sort::cleanup_real_init_state_owner_shape() {
   m_real_init_state_shape = PQ_orderby_real_init_state_shape{};
 }
 
+void Exchange_sort::cleanup_runtime_sort_state_owner_shape() {
+  m_runtime_sort_state_owner_shape = PQ_orderby_runtime_sort_state_owner_shape{};
+}
+
 void Exchange_sort::cleanup_order_gather_shape() {
   m_min_records.clear();
   m_record_groups.clear();
@@ -912,6 +940,7 @@ void Exchange_sort::cleanup_order_gather_shape() {
   m_order_shape_index_sort = false;
   cleanup_sort_state_shape();
   cleanup_real_init_state_owner_shape();
+  cleanup_runtime_sort_state_owner_shape();
 }
 
 bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
@@ -927,6 +956,10 @@ bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
   }
 
   if (run_orderby_real_init_state_owner_smoke()) {
+    return true;
+  }
+
+  if (run_orderby_runtime_sort_state_owner_shape_smoke()) {
     return true;
   }
 
@@ -960,6 +993,46 @@ bool Exchange_sort::run_orderby_sort_state_shape_handoff_smoke(
       m_sort_state_shape.rowid_required == stable_output;
   cleanup_sort_state_shape();
   return !valid;
+}
+
+bool Exchange_sort::run_orderby_runtime_sort_state_owner_shape_smoke() {
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+
+  if (init_runtime_sort_state_owner_shape(
+          kWorkers, /*stable_output=*/true, /*index_sort=*/false,
+          kSortOrderLength, kMaxRecordLength, kRefLength)) {
+    cleanup_runtime_sort_state_owner_shape();
+    return true;
+  }
+
+  const bool valid =
+      m_runtime_sort_state_owner_shape.initialized &&
+      m_runtime_sort_state_owner_shape.workers == kWorkers &&
+      m_runtime_sort_state_owner_shape.sort_order_length == kSortOrderLength &&
+      m_runtime_sort_state_owner_shape.max_record_length == kMaxRecordLength &&
+      m_runtime_sort_state_owner_shape.ref_length == kRefLength &&
+      m_runtime_sort_state_owner_shape.stable_output &&
+      !m_runtime_sort_state_owner_shape.index_sort &&
+      !m_runtime_sort_state_owner_shape.runtime_ready &&
+      !m_runtime_sort_state_owner_shape.filesort_constructed &&
+      !m_runtime_sort_state_owner_shape.sort_param_initialized &&
+      !m_runtime_sort_state_owner_shape.join_state_mutated &&
+      !m_runtime_sort_state_owner_shape.filesorts_cleanup_attached &&
+      !m_runtime_sort_state_owner_shape.qep_attached &&
+      !m_runtime_sort_state_owner_shape.access_path_attached;
+
+  cleanup_runtime_sort_state_owner_shape();
+  return !valid || m_runtime_sort_state_owner_shape.initialized ||
+         m_runtime_sort_state_owner_shape.runtime_ready ||
+         m_runtime_sort_state_owner_shape.filesort_constructed ||
+         m_runtime_sort_state_owner_shape.sort_param_initialized ||
+         m_runtime_sort_state_owner_shape.join_state_mutated ||
+         m_runtime_sort_state_owner_shape.filesorts_cleanup_attached ||
+         m_runtime_sort_state_owner_shape.qep_attached ||
+         m_runtime_sort_state_owner_shape.access_path_attached;
 }
 
 bool Exchange_sort::run_orderby_real_init_state_owner_smoke() {

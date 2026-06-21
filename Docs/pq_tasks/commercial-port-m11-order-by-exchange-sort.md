@@ -5843,6 +5843,74 @@ Design Review - M11-E5h:
   `JOIN::filesorts_to_cleanup`, QEP, AccessPath non-attach, and owner lifetime
   checks。
 
+### M11-E5h-1: ORDER BY Runtime Sort-state Owner Shape
+
+Status: coding completed locally；waiting for Code/Doc/Test Review。
+
+Goal:
+
+- add a fail-closed runtime sort-state owner shell for future ORDER BY PQ；
+- prove the owner shell can initialize/reset without constructing `Filesort`,
+  initializing `Sort_param`, mutating `JOIN`, attaching to
+  `JOIN::filesorts_to_cleanup`, QEP, or AccessPath, or setting runtime
+  readiness；
+- keep user-visible ORDER BY serial through `HAS_ORDER_BY`。
+
+Completion Report - M11-E5h-1 Coding:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added `PQ_orderby_runtime_sort_state_owner_shape` with dimensional fields
+    plus explicit false-by-default flags for `runtime_ready`,
+    `filesort_constructed`, `sort_param_initialized`, `join_state_mutated`,
+    `filesorts_cleanup_attached`, `qep_attached`, and
+    `access_path_attached`；
+  - added `Exchange_sort::init_runtime_sort_state_owner_shape()` and
+    `cleanup_runtime_sort_state_owner_shape()`；
+  - added `Exchange_sort::run_orderby_runtime_sort_state_owner_shape_smoke()`
+    and chained it into existing DBUG-only
+    `pq_exchange_sort_state_shape_smoke` coverage；
+  - no new public status variables were added; existing
+    `Parallel_exchange_sort_state_shape_smoke_*` counters remain the
+    observable smoke boundary。
+- scope notes:
+  - no `Filesort` construction；
+  - no `Sort_param` initialization；
+  - no `THR_MALLOC` / `thd->mem_root` allocation change；
+  - no `JOIN::filesorts_to_cleanup`, QEP, or AccessPath attach；
+  - no `HAS_ORDER_BY` relaxation；
+  - no preflight readiness flag or `execution_disabled` change；
+  - no worker launch, `PQWR` / `Query_result_mq`, handler/InnoDB, default MQ
+    consumption, or default ordered `ParallelScanIterator::Read()` change。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by pq_commercial_order_by_frames pq_stats` 4/4；
+  - full `parallel_query` suite passed: 89/89。
+
+Code/Doc/Test Review - M11-E5h-1:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: one minor doc issue, fixed by adding `Docs/pq_tasks/README.md` to
+  the changed-files list；
+- confirmed the new owner shape is fail-closed and only records dimensions plus
+  false-by-default runtime side-effect flags；
+- confirmed there is no `Filesort` construction, `Sort_param` initialization,
+  `THR_MALLOC` / `thd->mem_root` change, `JOIN::filesorts_to_cleanup`, QEP, or
+  AccessPath attach；
+- confirmed there is no `HAS_ORDER_BY`, preflight readiness,
+  `execution_disabled`, worker/MQ, or default `Read()` execution-path change；
+- confirmed reusing `pq_exchange_sort_state_shape_smoke` and existing
+  `Parallel_exchange_sort_state_shape_smoke_*` counters is sufficient and no
+  new status variables are needed；
+- confirmed build, targeted MTR, full `parallel_query` suite, and
+  `git diff --check` passed。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
