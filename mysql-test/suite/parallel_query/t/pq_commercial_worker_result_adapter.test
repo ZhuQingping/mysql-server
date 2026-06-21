@@ -22,6 +22,9 @@ SET @worker_result_finishes_before = (
 SET @worker_result_errors_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_errors');
+SET @worker_result_workers_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_workers');
 SET @workers_launched_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_workers_launched');
@@ -31,15 +34,19 @@ SELECT id, v FROM pq_commercial_worker_result_adapter_t WHERE v >= 0;
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_rows') -
-  @worker_result_rows_before) >= 5 AS worker_result_rows_delta_at_least_5;
+  @worker_result_rows_before) >= 7 AS worker_result_rows_delta_at_least_7;
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_finishes') -
-  @worker_result_finishes_before) >= 4 AS worker_result_finishes_delta_at_least_4;
+  @worker_result_finishes_before) >= 5 AS worker_result_finishes_delta_at_least_5;
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_errors') -
   @worker_result_errors_before) >= 1 AS worker_result_errors_delta_at_least_1;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_workers') -
+  @worker_result_workers_before) = 1 AS worker_result_workers_delta_is_1;
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_workers_launched') -

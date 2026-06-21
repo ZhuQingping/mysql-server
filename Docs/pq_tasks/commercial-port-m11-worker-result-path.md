@@ -422,8 +422,10 @@ Counters / assertions:
 - `Parallel_worker_result_smoke_finishes` increases by the controlled FINISH
   count；
 - `Parallel_worker_result_smoke_errors` stays unchanged for the success smoke；
-- `Parallel_workers_launched` increases by the B3c worker count, expected 1 in
-  the first implementation；
+- `Parallel_worker_result_smoke_workers` increases by the B3c worker count,
+  expected 1 in the first implementation；
+- `Parallel_workers_launched` stays unchanged because B3c is a smoke probe and
+  must not pollute real PQ execution counters；
 - `Parallel_queries_executed` stays unchanged；
 - `Parallel_rows_scanned` stays unchanged；
 - callback/open/handler smoke counters stay unchanged；
@@ -467,6 +469,48 @@ Review:
   remain untouched；
 - stop condition cleanly hands off worker plan and handler/InnoDB row
   production to M11-D。
+
+Implementation status: coding/validation completed / Code-Docs-Test Review
+accepted。
+
+Implementation:
+
+- added dedicated `PQ_worker_task::QUERY_RESULT_MQ_PROBE`；
+- worker task uses worker THD, per-worker `MQueue_handle`, local
+  `Query_result_mq`, and controlled `Item_int` values only；
+- worker sends two `PQWR` ROW frames and one FINISH frame；
+- worker restores its `sent_row_count` after local `send_data()` calls；
+- leader starts one debug/smoke worker thread, waits for it, then decodes the
+  expected three frames with strict ROW/ROW/FINISH ordering；
+- added `Parallel_worker_result_smoke_workers` so B3c can prove a smoke worker
+  thread launched without polluting real `Parallel_workers_launched` execution
+  stats；
+- no cloned JOIN, worker plan, callback producer, worker TABLE open,
+  handler/InnoDB scan, or user SQL result materialization is used。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed: `pq_commercial_worker_result_adapter`
+  `pq_commercial_worker_result` `pq_stats` `pq_clone_diagnostics`, 5/5；
+- full `parallel_query` suite passed: 80/80；
+- no server restarts or reinitialization in the full suite。
+
+Code-Docs-Test Review:
+
+- Review Agent returned `ACCEPT`；
+- confirmed B3c uses only worker THD, per-worker `MQueue_handle`, local
+  `Query_result_mq`, controlled `Item_int` rows, and leader PQWR decode；
+- confirmed no cloned JOIN, worker plan, AccessPath, handler/InnoDB scan,
+  callback producer, `Field_raw_data` / `Batch_buffer`, or user-visible result
+  path is touched；
+- confirmed lifecycle cleanup, `sent_row_count` restore, strict ROW/ROW/FINISH
+  decode order, and counter semantics；
+- non-blocking risk: `Parallel_worker_result_smoke_workers` means smoke worker
+  launched, not end-to-end decode success；
+- non-blocking risk: the smoke reads the expected three frames and does not
+  drain for extra tail frames after a correct sequence。
 
 ## 风险
 

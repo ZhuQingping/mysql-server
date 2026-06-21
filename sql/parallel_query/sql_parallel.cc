@@ -56,6 +56,7 @@
 #include "mysqld_error.h"         // ER_QUERY_INTERRUPTED
 #include "sql/debug_sync.h"       // DEBUG_SYNC
 #include "sql/field.h"            // Field
+#include "sql/item.h"             // Item_int
 #include "sql/mysqld.h"           // key_thread_parallel_query_worker
 #include "sql/handler.h"          // handler
 #include "sql/parallel_query/exchange_sort.h"  // Exchange_sort
@@ -1043,6 +1044,106 @@ bool Gather_operator::run_query_result_mq_wiring_smoke(THD *leader_thd) {
   return false;
 }
 
+bool Gather_operator::run_query_result_mq_threaded_probe_smoke(
+    THD *leader_thd) {
+  if (leader_thd == nullptr || m_dop != 1) return true;
+
+  bool initialized_here = false;
+  if (!m_initialized) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+
+  auto *worker = get_worker(0);
+  if (worker == nullptr || worker->m_mq_handle == nullptr) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  worker->m_task = PQ_worker_task::QUERY_RESULT_MQ_PROBE;
+  if (start_workers(leader_thd)) {
+    worker->m_task = PQ_worker_task::NOOP;
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  pq_global_stats.worker_result_smoke_workers.fetch_add(
+      1, std::memory_order_relaxed);
+
+  bool failed = wait_for_workers(leader_thd) != 0;
+  uint32 rows_read = 0;
+  uint32 finishes_read = 0;
+
+  for (uint32 i = 0; !failed && i < 3; ++i) {
+    void *raw_data = nullptr;
+    uint32 raw_len = 0;
+    if (worker->m_mq_handle->receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+      failed = true;
+      break;
+    }
+
+    const PQ_worker_result_frame_header *header = nullptr;
+    const uchar *decoded_null_bitmap = nullptr;
+    const uchar *decoded_payload = nullptr;
+    if (pq_validate_worker_result_frame(raw_data, raw_len, &header,
+                                        &decoded_null_bitmap,
+                                        &decoded_payload)) {
+      failed = true;
+      break;
+    }
+
+    if (header->type ==
+        static_cast<uint16>(PQ_worker_result_message_type::ROW)) {
+      if (finishes_read != 0) {
+        failed = true;
+        break;
+      }
+      std::vector<PQ_worker_result_decoded_field> decoded_fields;
+      failed = pq_decode_worker_result_row(raw_data, raw_len, &decoded_fields) ||
+               decoded_fields.size() != 2 || decoded_fields[0].is_null ||
+               decoded_fields[1].is_null;
+      if (!failed && rows_read == 0) {
+        failed = decoded_fields[0].value_len != 3 ||
+                 decoded_fields[1].value_len != 3 ||
+                 memcmp(decoded_fields[0].value, "101", 3) != 0 ||
+                 memcmp(decoded_fields[1].value, "202", 3) != 0;
+      } else if (!failed && rows_read == 1) {
+        failed = decoded_fields[0].value_len != 3 ||
+                 decoded_fields[1].value_len != 3 ||
+                 memcmp(decoded_fields[0].value, "303", 3) != 0 ||
+                 memcmp(decoded_fields[1].value, "404", 3) != 0;
+      } else if (!failed) {
+        failed = true;
+      }
+      if (!failed) ++rows_read;
+    } else if (header->type ==
+               static_cast<uint16>(PQ_worker_result_message_type::FINISH)) {
+      if (rows_read != 2 || finishes_read != 0) {
+        failed = true;
+        break;
+      }
+      failed = decoded_null_bitmap != nullptr || decoded_payload != nullptr ||
+               header->field_count != 0 || header->null_bitmap_len != 0 ||
+               header->payload_len != 0;
+      if (!failed) ++finishes_read;
+    } else {
+      failed = true;
+    }
+  }
+
+  if (failed) abort_workers(leader_thd);
+  worker->m_task = PQ_worker_task::NOOP;
+  if (initialized_here) destroy();
+
+  if (failed || rows_read != 2 || finishes_read != 1) return true;
+
+  pq_global_stats.worker_result_smoke_rows.fetch_add(
+      rows_read, std::memory_order_relaxed);
+  pq_global_stats.worker_result_smoke_finishes.fetch_add(
+      finishes_read, std::memory_order_relaxed);
+  return false;
+}
+
 class PQ_limited_mq_row_sink final : public PQ_row_sink {
  public:
   PQ_limited_mq_row_sink(Exchange_nosort *exchange, uint32 worker_id,
@@ -1261,6 +1362,32 @@ bool pq_run_callback_limited_producer_task(PQ_worker_info *worker,
   return failed;
 }
 
+bool pq_run_query_result_mq_probe_task(PQ_worker_info *worker) {
+  if (worker == nullptr || worker->m_worker_thd == nullptr ||
+      worker->m_mq_handle == nullptr) {
+    return true;
+  }
+
+  THD *worker_thd = worker->m_worker_thd;
+  Query_result_mq result(nullptr, worker->m_mq_handle, false);
+  mem_root_deque<Item *> row1(worker_thd->mem_root);
+  mem_root_deque<Item *> row2(worker_thd->mem_root);
+  row1.push_back(new (worker_thd->mem_root) Item_int(101));
+  row1.push_back(new (worker_thd->mem_root) Item_int(202));
+  row2.push_back(new (worker_thd->mem_root) Item_int(303));
+  row2.push_back(new (worker_thd->mem_root) Item_int(404));
+
+  const ha_rows sent_rows_before = worker_thd->get_sent_row_count();
+  const bool failed = row1[0] == nullptr || row1[1] == nullptr ||
+                      row2[0] == nullptr || row2[1] == nullptr ||
+                      result.send_data(worker_thd, row1) ||
+                      result.send_data(worker_thd, row2) ||
+                      result.send_eof(worker_thd);
+  worker_thd->set_sent_row_count(sent_rows_before);
+  if (failed) worker->m_error_code = HA_ERR_INTERNAL_ERROR;
+  return failed;
+}
+
 bool pq_run_worker_thread_task(PQ_worker_info *worker,
                                Gather_operator *gather) {
   if (worker == nullptr) return true;
@@ -1270,6 +1397,8 @@ bool pq_run_worker_thread_task(PQ_worker_info *worker,
       return false;
     case PQ_worker_task::CALLBACK_LIMITED_PRODUCER:
       return pq_run_callback_limited_producer_task(worker, gather);
+    case PQ_worker_task::QUERY_RESULT_MQ_PROBE:
+      return pq_run_query_result_mq_probe_task(worker);
   }
   return true;
 }
