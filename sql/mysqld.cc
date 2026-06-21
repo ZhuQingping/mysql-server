@@ -10435,6 +10435,46 @@ static int show_pq_exchange_sort_stream_materialized_smoke_length_mismatch(
   return 0;
 }
 
+static int show_pq_exchange_sort_ordered_materialize_api_attempts(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_materialize_api_attempts.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_materialize_api_disabled(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_materialize_api_disabled.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_materialize_api_unsupported(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_materialize_api_unsupported.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_ordered_materialize_api_rows(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_ordered_materialize_api_rows.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_exchange_sort_frame_merge_smoke_rows(THD *, SHOW_VAR *var,
                                                         char *buf) {
   var->type = SHOW_LONGLONG;
@@ -11370,6 +11410,18 @@ SHOW_VAR status_vars[] = {
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_stream_materialized_smoke_unsupported",
      (char *)&show_pq_exchange_sort_stream_materialized_smoke_unsupported,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_materialize_api_attempts",
+     (char *)&show_pq_exchange_sort_ordered_materialize_api_attempts,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_materialize_api_disabled",
+     (char *)&show_pq_exchange_sort_ordered_materialize_api_disabled, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_materialize_api_rows",
+     (char *)&show_pq_exchange_sort_ordered_materialize_api_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ordered_materialize_api_unsupported",
+     (char *)&show_pq_exchange_sort_ordered_materialize_api_unsupported,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_smoke_runs",
      (char *)&show_pq_exchange_sort_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},

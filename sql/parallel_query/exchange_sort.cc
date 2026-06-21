@@ -2192,3 +2192,42 @@ bool Exchange_sort::run_orderby_streaming_materialization_smoke(
 
   return failed || *rows_read != 2 || *length_errors != 1;
 }
+
+bool Exchange_sort::materialize_next_ordered_record_image_status(
+    TABLE *leader_table, PQ_orderby_materialize_status *status) {
+  if (status != nullptr) *status = PQ_orderby_materialize_status::ERROR;
+  if (leader_table == nullptr || status == nullptr) return true;
+
+  /*
+    M11-E5g-4b is a default-path boundary only. The ordered materializer must
+    stay fail-closed until the default reader, worker producer, and iterator
+    lifecycle are wired by later reviewed phases.
+  */
+  *status = PQ_orderby_materialize_status::DISABLED;
+  return false;
+}
+
+bool Exchange_sort::run_orderby_materialize_api_skeleton_smoke(
+    TABLE *leader_table, uint32 *disabled, uint32 *unsupported,
+    uint32 *rows_read) {
+  if (disabled == nullptr || unsupported == nullptr || rows_read == nullptr) {
+    return true;
+  }
+  *disabled = 0;
+  *unsupported = 0;
+  *rows_read = 0;
+
+  PQ_orderby_materialize_status status = PQ_orderby_materialize_status::ERROR;
+  if (materialize_next_ordered_record_image_status(leader_table, &status)) {
+    return true;
+  }
+  if (status == PQ_orderby_materialize_status::DISABLED) {
+    *disabled = 1;
+    return false;
+  }
+  if (status == PQ_orderby_materialize_status::UNSUPPORTED) {
+    *unsupported = 1;
+    return false;
+  }
+  return true;
+}

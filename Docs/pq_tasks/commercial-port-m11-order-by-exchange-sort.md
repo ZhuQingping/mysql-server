@@ -5141,6 +5141,109 @@ Code/Doc/Test Review - M11-E5g-4a:
 - confirmed `pq_stats` status count/list is updated and docs accurately record
   diagnostic-only scope and validation。
 
+### M11-E5g-4b: Fail-closed Ordered Materialization API Skeleton
+
+Status: coding completed；`mysqld` build, targeted MTR, and full
+`parallel_query` suite passed；waiting for Code/Doc/Test Review。
+
+Goal:
+
+- add a named `Exchange_sort` ordered materialization API boundary for future
+  default ORDER BY execution wiring；
+- keep the API fail-closed until default reader, worker producer, iterator
+  lifecycle, and visible eligibility gates are reviewed；
+- expose DBUG-only counters proving the default skeleton is reachable only from
+  smoke code and returns `DISABLED` without reading MQ or writing leader record
+  buffers。
+
+Implementation:
+
+- added `PQ_orderby_materialize_status` with explicit
+  `ROW` / `EOF_REACHED` / `WOULD_BLOCK` / `DETACHED` / `UNSUPPORTED` /
+  `DISABLED` / `ERROR` states；
+- added
+  `Exchange_sort::materialize_next_ordered_record_image_status(TABLE *,
+  PQ_orderby_materialize_status *)`；
+- the 4b implementation initializes status to `ERROR`, rejects null arguments
+  as failure, and otherwise returns `false` with status `DISABLED`；
+- added `Exchange_sort::run_orderby_materialize_api_skeleton_smoke()` to call
+  the API through a DBUG-only smoke path and count disabled/unsupported/rows；
+- added status variables:
+  `Parallel_exchange_sort_ordered_materialize_api_attempts`,
+  `Parallel_exchange_sort_ordered_materialize_api_disabled`,
+  `Parallel_exchange_sort_ordered_materialize_api_rows`, and
+  `Parallel_exchange_sort_ordered_materialize_api_unsupported`；
+- extended `pq_commercial_order_by_frames` to assert no default-path counter
+  growth without DBUG and `attempts=1`, `disabled=1`, `unsupported=0`,
+  `rows=0` with `pq_exchange_sort_ordered_materialize_api_smoke`；
+- updated `pq_stats` expected `Parallel%` count and status variable list。
+
+Scope notes:
+
+- no `HAS_ORDER_BY` relaxation；
+- no `execution_disabled=false` or readiness flag change；
+- no optimizer, AccessPath, handler, InnoDB, worker launch, `PQWR` /
+  `Query_result_mq`, or worker MQ consumption change；
+- no `Exchange_sort::read_mq_message()` default path change；
+- no `ParallelScanIterator::Read()` or `PQTableScanIterator` ordered default
+  behavior change；
+- no `table->record[0]` writes in the new default skeleton；`ROW` is reserved
+  for later reviewed phases。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4b_target --tmpdir=/tmp/pqt_m11e5g4b_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4b_full --tmpdir=/tmp/pqt_m11e5g4b_full
+```
+
+Results:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats` 4/4；
+- full `parallel_query` suite passed: 89/89。
+
+Explorer result:
+
+- API Explorer recommended a distinct materialization status enum instead of
+  reusing stream-read status；
+- Explorer confirmed the default API should not read MQ, heap state, or record
+  buffers, and should return `DISABLED`/`UNSUPPORTED` until default execution is
+  explicitly opened；
+- Explorer recommended DBUG-only MTR assertions in
+  `pq_commercial_order_by_frames` and `pq_stats` inventory updates。
+
+Code/Doc/Test Review - M11-E5g-4b:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed the API is fail-closed: it initializes status to `ERROR`, rejects
+  null arguments, and otherwise only returns `DISABLED`；
+- confirmed the new API does not read MQ, heap state, call
+  `read_ordered_record_stream_shape()`, call `Exchange_sort::read_mq_message()`,
+  or write `table->record[0]`；
+- confirmed the only call site is DBUG-gated by
+  `pq_exchange_sort_ordered_materialize_api_smoke`；
+- confirmed tracked diff does not touch optimizer, AccessPath, handler,
+  InnoDB, worker launch, `PQWR` / `Query_result_mq`, or default iterator
+  `Read()` paths；
+- confirmed MTR covers ordinary-path no-growth for attempts/rows and DBUG-path
+  `attempts=1`, `disabled=1`, `unsupported=0`, `rows=0`；
+- confirmed `pq_stats` count change from 182 to 186 is consistent with exactly
+  four new status variables；
+- residual risk: this is still only an API skeleton；future phases must wire
+  default reader lifecycle, worker producer, `ROW` materialization, ordering
+  semantics, and visible eligibility gates through separate review。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

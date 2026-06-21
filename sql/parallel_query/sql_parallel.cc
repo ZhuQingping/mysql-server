@@ -924,6 +924,22 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
           .fetch_add(1, std::memory_order_relaxed);
     }
   }
+  bool ordered_materialize_api_enabled = false;
+  uint32 ordered_materialize_api_disabled = 0;
+  uint32 ordered_materialize_api_unsupported = 0;
+  uint32 ordered_materialize_api_rows = 0;
+  DBUG_EXECUTE_IF("pq_exchange_sort_ordered_materialize_api_smoke",
+                  ordered_materialize_api_enabled = true;);
+  if (ordered_materialize_api_enabled) {
+    pq_global_stats.exchange_sort_ordered_materialize_api_attempts
+        .fetch_add(1, std::memory_order_relaxed);
+    if (sort_exchange.run_orderby_materialize_api_skeleton_smoke(
+            leader_table, &ordered_materialize_api_disabled,
+            &ordered_materialize_api_unsupported,
+            &ordered_materialize_api_rows)) {
+      return true;
+    }
+  }
   uint32 frame_merge_rows_read = 0;
   uint32 frame_merge_finishes_read = 0;
   if (sort_exchange.run_orderby_frame_merge_smoke(
@@ -997,6 +1013,13 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
   pq_global_stats.exchange_sort_stream_materialized_smoke_length_mismatch
       .fetch_add(stream_materialized_length_mismatch,
                  std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_materialize_api_disabled.fetch_add(
+      ordered_materialize_api_disabled, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_materialize_api_unsupported
+      .fetch_add(ordered_materialize_api_unsupported,
+                 std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ordered_materialize_api_rows.fetch_add(
+      ordered_materialize_api_rows, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_rows.fetch_add(
       frame_merge_rows_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_finishes.fetch_add(

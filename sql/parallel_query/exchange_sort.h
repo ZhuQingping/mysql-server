@@ -88,6 +88,16 @@ enum class PQ_orderby_stream_read_status : uint8 {
   ERROR,
 };
 
+enum class PQ_orderby_materialize_status : uint8 {
+  ROW = 1,
+  EOF_REACHED,
+  WOULD_BLOCK,
+  DETACHED,
+  UNSUPPORTED,
+  DISABLED,
+  ERROR,
+};
+
 struct PQ_orderby_frame_header {
   uint32 magic;
   uint16 version;
@@ -175,6 +185,12 @@ class Exchange_sort final : public Exchange {
                                                    uint32 *rows_read,
                                                    uint32 *unsupported,
                                                    uint32 *length_errors);
+  bool materialize_next_ordered_record_image_status(
+      TABLE *leader_table, PQ_orderby_materialize_status *status);
+  bool run_orderby_materialize_api_skeleton_smoke(TABLE *leader_table,
+                                                  uint32 *disabled,
+                                                  uint32 *unsupported,
+                                                  uint32 *rows_read);
   bool run_orderby_sort_state_shape_smoke();
   bool run_orderby_sort_state_shape_handoff_smoke(uint32 workers,
                                                   bool stable_output,
