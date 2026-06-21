@@ -7,7 +7,8 @@ completed and committed；M11-E5d-S0/S1/S2/S3 completed and committed；
 M11-E5d-1 fail-closed Filesort contract shape completed and committed；
 M11-E5d-2 design completed and committed；M11-E5d-2a owned ORDER chain copy
 smoke completed and committed；M11-E5d-2b optimized flag contract smoke
-completed and committed；M11-E5d-2c restore-to-sidecar contract smoke coding
+completed and committed；M11-E5d-2c restore-to-sidecar contract smoke
+completed and committed；M11-E5d-2d clone-copy contract smoke coding
 completed，waiting for review/full validation/commit。
 
 ## 背景
@@ -1883,7 +1884,7 @@ Commit:
 ### M11-E5d-2c: Restore-to-Sidecar Contract Smoke
 
 Status: coding completed；Code/Doc/Test Review Agent accepted；full
-`parallel_query` suite passed；waiting for commit。
+`parallel_query` suite passed；committed。
 
 Goal:
 
@@ -1958,6 +1959,87 @@ Code/Doc/Test Review - M11-E5d-2c:
   and does not open user-visible ORDER BY PQ；
 - confirmed stats fields, reset, SHOW STATUS, `pq_stats`, MTR assertions, and
   docs are consistent；
+- confirmed forbidden scope is not touched。
+
+Commit:
+
+- `424216c1753` Add PQ M11E order chain restore smoke。
+
+### M11-E5d-2d: Clone-copy Contract Smoke
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；full
+`parallel_query` suite passed；waiting for commit。
+
+Goal:
+
+- prove the owned ORDER sidecar can be copied from a leader diagnostic object
+  to a clone diagnostic object without sharing copied ORDER node storage；
+- prove copied `ORDER::next` links are rewired to clone-owned vector storage
+  after value copy；
+- preserve expected aliases for resolved `Item*`, `Field*`, source `ORDER*`
+  mapping, and optimized membership flags；
+- keep real clone lifecycle and `JOIN::pq_copy_from()` untouched。
+
+Implementation:
+
+- added `pq_clone_order_chain_sidecar()`:
+  - value-copies the sidecar；
+  - rewires cloned `nodes` and `restored_nodes` `next` chains inside clone
+    vector storage；
+  - verifies copied vector sizes for owned nodes, restored nodes,
+    source-node mapping, and optimized flags；
+- added clone-match helpers that verify:
+  - cloned node addresses do not alias leader sidecar nodes；
+  - copied ORDER scalar fields and aliased pointers match；
+  - cloned `next` links point inside clone-owned vectors；
+  - source node mapping and optimized flags are preserved；
+- added DBUG smoke `pq_saved_order_chain_clone_copy_smoke` on the existing
+  `HAS_ORDER_BY` reject path；
+- smoke builds the E5d-2c restored leader sidecar, clone-copies it, then
+  validates both the full copied chain and restored optimized chain；
+- added counters:
+  `Parallel_saved_order_chain_clone_copy_smoke_attempts`,
+  `Parallel_saved_order_chain_clone_copy_smoke_success`,
+  `Parallel_saved_order_chain_clone_copy_smoke_unsupported`；
+- extended `pq_saved_order_group_contract` to verify no-DBUG zero counters,
+  DBUG attempts/success, unsupported zero, serial ORDER BY boundary, and zero
+  executed/workers/ranges；
+- updated `pq_stats` Parallel status variable count from 127 to 130。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4
+  including `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Scope notes:
+
+- no `sql/parallel_query/pq_clone.*` changes；
+- no real `JOIN::pq_copy_from()` wiring；
+- no `sql/sql_optimizer.*` hook or live optimizer list mutation；
+- no real `Filesort`, `Sort_param`, `Filesort::make_sortorder()`, sorting
+  iterator, or `exchange_sort.*` integration；
+- no worker, handler, MQ, AccessPath, `Read()`, or `HAS_ORDER_BY`
+  eligibility relaxation。
+
+Code/Doc/Test Review - M11-E5d-2d:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed `pq_clone_order_chain_sidecar()` value-copies the sidecar and
+  rewires both `nodes` and `restored_nodes` `ORDER::next` links to clone-owned
+  vector storage；
+- confirmed clone-match checks prove copied node storage does not alias leader
+  sidecar nodes；
+- confirmed scalar fields, aliased `Item*` / field-related pointers,
+  `source_nodes`, and optimized flags are preserved；
+- confirmed DBUG smoke remains under the existing `HAS_ORDER_BY` reject path
+  and does not enable user-visible ORDER BY PQ；
+- confirmed SHOW STATUS counters, reset, `pq_stats` count/order, MTR
+  assertions, and docs are consistent；
 - confirmed forbidden scope is not touched。
 
 ## Risk Areas

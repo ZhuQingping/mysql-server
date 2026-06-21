@@ -209,6 +209,9 @@ struct PQ_global_stats {
   std::atomic<uint64> saved_order_chain_restore_smoke_attempts{0};  ///< E5d-2c
   std::atomic<uint64> saved_order_chain_restore_smoke_success{0};  ///< E5d-2c
   std::atomic<uint64> saved_order_chain_restore_smoke_unsupported{0};  ///< E5d-2c
+  std::atomic<uint64> saved_order_chain_clone_copy_smoke_attempts{0};  ///< 2d
+  std::atomic<uint64> saved_order_chain_clone_copy_smoke_success{0};  ///< 2d
+  std::atomic<uint64> saved_order_chain_clone_copy_smoke_unsupported{0};  ///< 2d
   std::atomic<uint64> workers_launched{0};    ///< Total worker threads launched
   std::atomic<uint64> rows_scanned{0};        ///< Total rows scanned by PQ workers
   std::atomic<uint64> parallel_scan_iterator_order_gather_attempts{0};  ///< E3
@@ -350,6 +353,12 @@ struct PQ_global_stats {
     saved_order_chain_restore_smoke_success.store(0,
                                                   std::memory_order_relaxed);
     saved_order_chain_restore_smoke_unsupported.store(
+        0, std::memory_order_relaxed);
+    saved_order_chain_clone_copy_smoke_attempts.store(
+        0, std::memory_order_relaxed);
+    saved_order_chain_clone_copy_smoke_success.store(0,
+                                                     std::memory_order_relaxed);
+    saved_order_chain_clone_copy_smoke_unsupported.store(
         0, std::memory_order_relaxed);
     workers_launched.store(0, std::memory_order_relaxed);
     rows_scanned.store(0, std::memory_order_relaxed);
