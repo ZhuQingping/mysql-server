@@ -1037,6 +1037,101 @@ bool Exchange_sort::read_ordered_record_rich_status_shape(
   return false;
 }
 
+bool Exchange_sort::init_orderby_materializer_owner_shape(
+    TABLE *leader_table) {
+  cleanup_orderby_materializer_owner_shape();
+  if (!pq_orderby_materialization_table_supported(leader_table)) return true;
+
+  Field *first_field = leader_table->field[0];
+  const uint field_index = first_field->field_index();
+  const bool had_read_bit =
+      leader_table->read_set == nullptr ||
+      bitmap_is_set(leader_table->read_set, field_index);
+  const bool had_write_bit =
+      leader_table->write_set == nullptr ||
+      bitmap_is_set(leader_table->write_set, field_index);
+  if (leader_table->read_set != nullptr && !had_read_bit) {
+    bitmap_set_bit(leader_table->read_set, field_index);
+  }
+  if (leader_table->write_set != nullptr && !had_write_bit) {
+    bitmap_set_bit(leader_table->write_set, field_index);
+  }
+
+  m_materializer_original_record.assign(
+      leader_table->record[0],
+      leader_table->record[0] + leader_table->s->reclength);
+  if (m_materializer_original_record.size() != leader_table->s->reclength) {
+    cleanup_orderby_materializer_owner_shape();
+    return true;
+  }
+
+  m_materializer_owner_shape.leader_table = leader_table;
+  m_materializer_owner_shape.record_length = leader_table->s->reclength;
+  m_materializer_owner_shape.field_index = field_index;
+  m_materializer_owner_shape.initialized = true;
+  m_materializer_owner_shape.original_record_saved = true;
+  m_materializer_owner_shape.bitmap_state_saved = true;
+  m_materializer_owner_shape.had_read_bit = had_read_bit;
+  m_materializer_owner_shape.had_write_bit = had_write_bit;
+  return false;
+}
+
+bool Exchange_sort::materialize_ordered_record_owner_shape(
+    TABLE *leader_table, const std::vector<uchar> &row_image,
+    PQ_orderby_materialize_status *status) {
+  if (status == nullptr) return true;
+  *status = PQ_orderby_materialize_status::ERROR;
+  if (!m_materializer_owner_shape.initialized ||
+      m_materializer_owner_shape.leader_table != leader_table ||
+      !m_materializer_owner_shape.original_record_saved ||
+      leader_table == nullptr || leader_table->s == nullptr ||
+      leader_table->record[0] == nullptr ||
+      m_materializer_owner_shape.record_length != leader_table->s->reclength) {
+    *status = PQ_orderby_materialize_status::UNSUPPORTED;
+    return false;
+  }
+
+  if (row_image.size() != m_materializer_owner_shape.record_length) {
+    cleanup_orderby_materializer_owner_shape();
+    *status = PQ_orderby_materialize_status::ERROR;
+    return false;
+  }
+
+  memcpy(leader_table->record[0], row_image.data(), row_image.size());
+  ++m_materializer_owner_shape.rows_materialized;
+  *status = PQ_orderby_materialize_status::ROW;
+  return false;
+}
+
+void Exchange_sort::cleanup_orderby_materializer_owner_shape() {
+  TABLE *leader_table = m_materializer_owner_shape.leader_table;
+  if (m_materializer_owner_shape.initialized && leader_table != nullptr) {
+    if (m_materializer_owner_shape.original_record_saved &&
+        leader_table->record[0] != nullptr &&
+        m_materializer_original_record.size() ==
+            m_materializer_owner_shape.record_length) {
+      memcpy(leader_table->record[0], m_materializer_original_record.data(),
+             m_materializer_original_record.size());
+    }
+    if (m_materializer_owner_shape.bitmap_state_saved) {
+      const uint field_index = m_materializer_owner_shape.field_index;
+      if (leader_table->read_set != nullptr &&
+          !m_materializer_owner_shape.had_read_bit) {
+        bitmap_clear_bit(leader_table->read_set, field_index);
+      }
+      if (leader_table->write_set != nullptr &&
+          !m_materializer_owner_shape.had_write_bit) {
+        bitmap_clear_bit(leader_table->write_set, field_index);
+      }
+    }
+  }
+
+  m_materializer_original_record.clear();
+  m_materializer_owner_shape = PQ_orderby_materializer_owner_shape{};
+  m_materializer_owner_shape.restored = true;
+  m_orderby_materializer_shape_enabled = false;
+}
+
 void Exchange_sort::cleanup_orderby_heap_reader_state_shape() {
   if (m_order_heap != nullptr) {
     m_order_heap->reset();
@@ -1052,6 +1147,7 @@ void Exchange_sort::cleanup_orderby_heap_reader_state_shape() {
 }
 
 void Exchange_sort::cleanup_order_gather_shape() {
+  cleanup_orderby_materializer_owner_shape();
   cleanup_orderby_heap_reader_state_shape();
   m_min_records.clear();
   m_record_groups.clear();
@@ -1061,6 +1157,7 @@ void Exchange_sort::cleanup_order_gather_shape() {
   m_order_shape_index_sort = false;
   m_orderby_read_mq_shape_enabled = false;
   m_orderby_rich_status_shape_enabled = false;
+  m_orderby_materializer_shape_enabled = false;
   cleanup_sort_state_shape();
   cleanup_real_init_state_owner_shape();
   cleanup_runtime_sort_state_owner_shape();
@@ -2950,6 +3047,51 @@ bool Exchange_sort::materialize_next_ordered_record_image_status(
   if (status != nullptr) *status = PQ_orderby_materialize_status::ERROR;
   if (leader_table == nullptr || status == nullptr) return true;
 
+  if (m_orderby_materializer_shape_enabled) {
+    std::vector<uchar> row_image;
+    PQ_orderby_ordered_read_status rich_status =
+        PQ_orderby_ordered_read_status::ERROR;
+    if (read_ordered_record_rich_status_shape(&row_image, &rich_status)) {
+      return true;
+    }
+
+    switch (rich_status) {
+      case PQ_orderby_ordered_read_status::ROW:
+        if (materialize_ordered_record_owner_shape(leader_table, row_image,
+                                                   status)) {
+          return true;
+        }
+        if (*status == PQ_orderby_materialize_status::ERROR) {
+          cleanup_order_gather_shape();
+        }
+        return false;
+      case PQ_orderby_ordered_read_status::EOF_REACHED:
+        cleanup_order_gather_shape();
+        *status = PQ_orderby_materialize_status::EOF_REACHED;
+        return false;
+      case PQ_orderby_ordered_read_status::WOULD_BLOCK:
+        *status = PQ_orderby_materialize_status::WOULD_BLOCK;
+        return false;
+      case PQ_orderby_ordered_read_status::DETACHED:
+        cleanup_order_gather_shape();
+        *status = PQ_orderby_materialize_status::DETACHED;
+        return false;
+      case PQ_orderby_ordered_read_status::UNSUPPORTED:
+        *status = PQ_orderby_materialize_status::UNSUPPORTED;
+        return false;
+      case PQ_orderby_ordered_read_status::DISABLED:
+        *status = PQ_orderby_materialize_status::DISABLED;
+        return false;
+      case PQ_orderby_ordered_read_status::ERROR:
+        cleanup_order_gather_shape();
+        *status = PQ_orderby_materialize_status::ERROR;
+        return false;
+    }
+
+    *status = PQ_orderby_materialize_status::ERROR;
+    return false;
+  }
+
   /*
     M11-E5g-4b is a default-path boundary only. The ordered materializer must
     stay fail-closed until the default reader, worker producer, and iterator
@@ -2957,6 +3099,201 @@ bool Exchange_sort::materialize_next_ordered_record_image_status(
   */
   *status = PQ_orderby_materialize_status::DISABLED;
   return false;
+}
+
+bool Exchange_sort::run_orderby_materializer_owner_shape_smoke(
+    TABLE *leader_table) {
+  if (!pq_orderby_materialization_table_supported(leader_table)) return false;
+
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+  const uint32 rowid = 1;
+  const int64 key_low = 1;
+  const int64 key_high = 2;
+
+  Field *first_field = leader_table->field[0];
+  const uint field_index = first_field->field_index();
+  const bool had_read_bit =
+      leader_table->read_set == nullptr ||
+      bitmap_is_set(leader_table->read_set, field_index);
+  const bool had_write_bit =
+      leader_table->write_set == nullptr ||
+      bitmap_is_set(leader_table->write_set, field_index);
+  if (leader_table->read_set != nullptr && !had_read_bit) {
+    bitmap_set_bit(leader_table->read_set, field_index);
+  }
+  if (leader_table->write_set != nullptr && !had_write_bit) {
+    bitmap_set_bit(leader_table->write_set, field_index);
+  }
+
+  std::vector<uchar> original_record(
+      leader_table->record[0],
+      leader_table->record[0] + leader_table->s->reclength);
+  std::vector<uchar> record_low;
+  std::vector<uchar> record_high;
+
+  constexpr longlong low_value = 111;
+  constexpr longlong high_value = 222;
+  bool failed = first_field->store(high_value, false) != TYPE_OK;
+  if (!failed) {
+    record_high.assign(leader_table->record[0],
+                       leader_table->record[0] + leader_table->s->reclength);
+    failed = first_field->store(low_value, false) != TYPE_OK;
+  }
+  if (!failed) {
+    record_low.assign(leader_table->record[0],
+                      leader_table->record[0] + leader_table->s->reclength);
+  }
+  if (!original_record.empty()) {
+    memcpy(leader_table->record[0], original_record.data(),
+           original_record.size());
+  }
+
+  auto setup_exchange = [&](Exchange_sort *exchange) {
+    return exchange == nullptr || exchange->init() ||
+           exchange->init_real_init_state_owner_shape(
+               kWorkers, /*stable_output=*/true, /*index_sort=*/false,
+               kSortOrderLength, kMaxRecordLength, kRefLength) ||
+           exchange->allocate_real_init_buffers_shape() ||
+           exchange->init_orderby_heap_reader_state_shape(
+               kWorkers, /*descending=*/false) ||
+           exchange->init_orderby_materializer_owner_shape(leader_table);
+  };
+
+  auto enable_materializer = [](Exchange_sort *exchange) {
+    exchange->m_orderby_rich_status_shape_enabled = true;
+    exchange->m_orderby_materializer_shape_enabled = true;
+  };
+
+  auto record_restored = [&]() {
+    return original_record.size() == leader_table->s->reclength &&
+           memcmp(leader_table->record[0], original_record.data(),
+                  original_record.size()) == 0;
+  };
+
+  Exchange_sort row_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed) failed = setup_exchange(&row_exchange);
+  if (!failed) {
+    enable_materializer(&row_exchange);
+    failed =
+        pq_send_orderby_frame(row_exchange.get_mq_handle(0),
+                              PQ_orderby_frame_type::ROW, record_high.data(),
+                              static_cast<uint32>(record_high.size()), &rowid,
+                              sizeof(rowid), &key_high, sizeof(key_high)) ||
+        pq_send_orderby_frame(row_exchange.get_mq_handle(0),
+                              PQ_orderby_frame_type::FINISH, nullptr, 0,
+                              nullptr, 0, nullptr, 0) ||
+        pq_send_orderby_frame(row_exchange.get_mq_handle(1),
+                              PQ_orderby_frame_type::ROW, record_low.data(),
+                              static_cast<uint32>(record_low.size()), &rowid,
+                              sizeof(rowid), &key_low, sizeof(key_low)) ||
+        pq_send_orderby_frame(row_exchange.get_mq_handle(1),
+                              PQ_orderby_frame_type::FINISH, nullptr, 0,
+                              nullptr, 0, nullptr, 0);
+  }
+
+  PQ_orderby_materialize_status status =
+      PQ_orderby_materialize_status::ERROR;
+  if (!failed) {
+    failed = row_exchange.materialize_next_ordered_record_image_status(
+                 leader_table, &status) ||
+             status != PQ_orderby_materialize_status::WOULD_BLOCK ||
+             !record_restored();
+  }
+  if (!failed) {
+    failed =
+        pq_send_orderby_frame(row_exchange.get_mq_handle(2),
+                              PQ_orderby_frame_type::FINISH, nullptr, 0,
+                              nullptr, 0, nullptr, 0);
+  }
+  const longlong expected_values[] = {low_value, high_value};
+  for (const longlong expected : expected_values) {
+    if (failed) break;
+    failed = row_exchange.materialize_next_ordered_record_image_status(
+                 leader_table, &status) ||
+             status != PQ_orderby_materialize_status::ROW ||
+             first_field->val_int() != expected;
+  }
+  if (!failed) {
+    failed = row_exchange.materialize_next_ordered_record_image_status(
+                 leader_table, &status) ||
+             status != PQ_orderby_materialize_status::EOF_REACHED ||
+             !record_restored();
+  }
+  row_exchange.cleanup_order_gather_shape();
+  row_exchange.cleanup();
+
+  Exchange_sort short_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed) failed = setup_exchange(&short_exchange);
+  if (!failed) {
+    enable_materializer(&short_exchange);
+    const uint32 short_record = 333;
+    failed =
+        pq_send_orderby_frame(short_exchange.get_mq_handle(0),
+                              PQ_orderby_frame_type::ROW, &short_record,
+                              sizeof(short_record), &rowid, sizeof(rowid),
+                              &key_low, sizeof(key_low)) ||
+        pq_send_orderby_frame(short_exchange.get_mq_handle(0),
+                              PQ_orderby_frame_type::FINISH, nullptr, 0,
+                              nullptr, 0, nullptr, 0) ||
+        pq_send_orderby_frame(short_exchange.get_mq_handle(1),
+                              PQ_orderby_frame_type::FINISH, nullptr, 0,
+                              nullptr, 0, nullptr, 0) ||
+        pq_send_orderby_frame(short_exchange.get_mq_handle(2),
+                              PQ_orderby_frame_type::FINISH, nullptr, 0,
+                              nullptr, 0, nullptr, 0);
+  }
+  if (!failed) {
+    failed = short_exchange.materialize_next_ordered_record_image_status(
+                 leader_table, &status) ||
+             status != PQ_orderby_materialize_status::ERROR ||
+             !record_restored();
+  }
+  short_exchange.cleanup_order_gather_shape();
+  short_exchange.cleanup();
+
+  Exchange_sort error_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed) failed = setup_exchange(&error_exchange);
+  if (!failed) {
+    enable_materializer(&error_exchange);
+    failed =
+        pq_send_orderby_frame(error_exchange.get_mq_handle(0),
+                              PQ_orderby_frame_type::ERROR, nullptr, 0,
+                              nullptr, 0, nullptr, 0) ||
+        error_exchange.materialize_next_ordered_record_image_status(
+            leader_table, &status) ||
+        status != PQ_orderby_materialize_status::ERROR || !record_restored();
+  }
+  error_exchange.cleanup_order_gather_shape();
+  error_exchange.cleanup();
+
+  Exchange_sort detached_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed) failed = setup_exchange(&detached_exchange);
+  if (!failed) {
+    enable_materializer(&detached_exchange);
+    detached_exchange.get_mq_handle(0)->close_producer();
+    failed = detached_exchange.materialize_next_ordered_record_image_status(
+                 leader_table, &status) ||
+             status != PQ_orderby_materialize_status::DETACHED ||
+             !record_restored();
+  }
+  detached_exchange.cleanup_order_gather_shape();
+  detached_exchange.cleanup();
+
+  if (!original_record.empty()) {
+    memcpy(leader_table->record[0], original_record.data(),
+           original_record.size());
+  }
+  if (leader_table->read_set != nullptr && !had_read_bit) {
+    bitmap_clear_bit(leader_table->read_set, field_index);
+  }
+  if (leader_table->write_set != nullptr && !had_write_bit) {
+    bitmap_clear_bit(leader_table->write_set, field_index);
+  }
+
+  return failed;
 }
 
 bool Exchange_sort::run_orderby_materialize_api_skeleton_smoke(
@@ -2975,7 +3312,7 @@ bool Exchange_sort::run_orderby_materialize_api_skeleton_smoke(
   }
   if (status == PQ_orderby_materialize_status::DISABLED) {
     *disabled = 1;
-    return false;
+    return run_orderby_materializer_owner_shape_smoke(leader_table);
   }
   if (status == PQ_orderby_materialize_status::UNSUPPORTED) {
     *unsupported = 1;

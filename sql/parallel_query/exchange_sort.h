@@ -197,6 +197,19 @@ struct PQ_orderby_heap_reader_counters {
   uint32 heap_removes_read{0};
 };
 
+struct PQ_orderby_materializer_owner_shape {
+  TABLE *leader_table{nullptr};
+  uint32 record_length{0};
+  uint field_index{0};
+  uint32 rows_materialized{0};
+  bool initialized{false};
+  bool original_record_saved{false};
+  bool bitmap_state_saved{false};
+  bool had_read_bit{false};
+  bool had_write_bit{false};
+  bool restored{false};
+};
+
 constexpr uint32 PQ_ORDERBY_FRAME_MAGIC = 0x50514f46;  // "PQOF"
 constexpr uint16 PQ_ORDERBY_FRAME_VERSION = 1;
 
@@ -311,8 +324,11 @@ class Exchange_sort final : public Exchange {
   PQ_orderby_cached_merge_ctx m_heap_reader_ctx;
   std::vector<bool> m_heap_reader_in_heap;
   std::vector<bool> m_heap_reader_terminal_workers;
+  PQ_orderby_materializer_owner_shape m_materializer_owner_shape;
+  std::vector<uchar> m_materializer_original_record;
   bool m_orderby_read_mq_shape_enabled{false};
   bool m_orderby_rich_status_shape_enabled{false};
+  bool m_orderby_materializer_shape_enabled{false};
 
   bool init_sort_state_shape(uint32 workers, bool stable_output,
                              bool index_sort, uint32 sort_order_length,
@@ -362,6 +378,12 @@ class Exchange_sort final : public Exchange {
   bool read_ordered_record_rich_status_shape(
       std::vector<uchar> *row_image, PQ_orderby_ordered_read_status *status);
   bool run_orderby_rich_status_api_smoke();
+  bool init_orderby_materializer_owner_shape(TABLE *leader_table);
+  bool materialize_ordered_record_owner_shape(
+      TABLE *leader_table, const std::vector<uchar> &row_image,
+      PQ_orderby_materialize_status *status);
+  void cleanup_orderby_materializer_owner_shape();
+  bool run_orderby_materializer_owner_shape_smoke(TABLE *leader_table);
   void cleanup_orderby_heap_reader_state_shape();
   void cleanup_real_init_state_owner_shape();
   void cleanup_runtime_sort_state_owner_shape();

@@ -6892,6 +6892,115 @@ Code/Doc/Test Review - M11-E5m:
   `materialize_next_ordered_record_image_status()` remains `DISABLED`；
 - confirmed `HAS_ORDER_BY` and execution preflight remain fail-closed。
 
+### M11-E5n: Ordered Materializer Owner Shape
+
+Status: Code/Doc/Test Review accepted；ready to commit。
+
+Goal:
+
+- add a controlled ordered materializer owner shape inside `Exchange_sort`；
+- let `materialize_next_ordered_record_image_status()` consume E5m rich status
+  only when a private smoke flag is enabled；
+- materialize only full-length row images into `TABLE::record[0]`；
+- preserve original record and bitmap state through owner cleanup；
+- keep default `materialize_next_ordered_record_image_status()` behavior
+  `DISABLED` and keep user-visible ORDER BY PQ fail-closed。
+
+Design Explorer - M11-E5n:
+
+- verdict: coding allowed with narrow DBUG-only / controlled smoke scope；
+- default SQL path must remain disabled；
+- materializer must preserve E5m status distinctions and must not fold
+  `WOULD_BLOCK` or `DETACHED` into EOF；
+- controlled smoke may write `TABLE::record[0]` only with full record-length
+  checks, bitmap protection, original-record restore, and idempotent cleanup。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden:
+
+- optimizer, executor, AccessPath, iterator, `Query_result_mq`, handler/InnoDB,
+  or storage-engine changes；
+- `Gather_operator::init()` Exchange selection changes；
+- default `ParallelScanIterator::Read()` / `PQTableScanIterator::Read()` ORDER
+  BY branch；
+- user-visible sysvar, eligibility, readiness flag, or public counter changes；
+- relaxing `HAS_ORDER_BY` or execution preflight blockers。
+
+Implementation plan:
+
+- add `PQ_orderby_materializer_owner_shape` and owner-local original record
+  storage；
+- add private `m_orderby_materializer_shape_enabled`, default false；
+- add `init_orderby_materializer_owner_shape()` to save original
+  `TABLE::record[0]` and first-field bitmap state；
+- add `materialize_ordered_record_owner_shape()` to copy only full-length row
+  images；
+- add `cleanup_orderby_materializer_owner_shape()` and call it from
+  `cleanup_order_gather_shape()`；
+- extend `materialize_next_ordered_record_image_status()` so the private flag
+  path maps rich status to materializer status:
+  `ROW`, `EOF_REACHED`, `WOULD_BLOCK`, `DETACHED`, `UNSUPPORTED`, `DISABLED`,
+  and `ERROR`；
+- add private `run_orderby_materializer_owner_shape_smoke()` under the existing
+  materialize API skeleton smoke。
+
+Completion Report - M11-E5n:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added `PQ_orderby_materializer_owner_shape`；
+  - added owner-local original record storage；
+  - added private materializer smoke flag, default false；
+  - added owner init/copy/cleanup helpers；
+  - controlled materializer path consumes E5m rich status only when the private
+    flag is enabled；
+  - default materializer path still returns `DISABLED`；
+  - smoke covers `WOULD_BLOCK`, ordered `ROW` materialization, `EOF_REACHED`,
+    short-record length error, worker `ERROR`, worker `DETACHED`, original
+    record restore, and bitmap restore；
+  - no optimizer, executor, iterator, handler/InnoDB, sysvar, readiness, or
+    public counter changes。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`
+    plus `shutdown_report`；
+  - full `parallel_query` suite passed: 89/89。
+- residual risk:
+  - this is still a controlled smoke-only materializer owner；
+  - it does not prove worker/leader TABLE layout compatibility for default
+    execution；
+  - it does not connect `Gather_operator`, iterator `Read()`, real Filesort, or
+    visible ORDER BY eligibility。
+
+Code/Doc/Test Review - M11-E5n:
+
+- Review Agent verdict: `ACCEPT`；
+- no blocking findings；
+- confirmed default materializer remains fail-closed as `DISABLED` when the
+  private smoke flag is false；
+- confirmed owner shape saves and restores `TABLE::record[0]` and read/write
+  bitmap state；
+- confirmed `cleanup_order_gather_shape()` cleans materializer owner state and
+  smoke flags；
+- confirmed rich status mapping preserves `WOULD_BLOCK` and `DETACHED` as
+  non-EOF states；
+- confirmed ROW copy requires full `leader_table->s->reclength` match and short
+  record path fails closed with restore；
+- confirmed no optimizer, executor, AccessPath, iterator, `Query_result_mq`,
+  handler/InnoDB, default Gather, eligibility, sysvar, readiness, or public
+  counter changes。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
