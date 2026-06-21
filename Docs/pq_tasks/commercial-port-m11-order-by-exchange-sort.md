@@ -5688,6 +5688,161 @@ Code/Doc/Test Review - M11-E5g-4f:
 - confirmed `git diff --check` passed；
 - no build/MTR run because 4f only changes docs。
 
+## M11-E5h: ORDER BY Runtime Sort-State Owner Contract
+
+Status: design-only completed；Design Review Agent accepted；no source changes。
+
+Decision from M11-E5g-4f:
+
+- do not enter executable M11-E5g-4g；
+- disabled ORDER BY diagnostics are already covered by the existing
+  eligibility/preflight counters and `pq_commercial_order_by` assertions；
+- the next useful work is the first real runtime readiness gap: runtime
+  ownership for saved ORDER state, `Filesort`, and `Sort_param`。
+
+Goal:
+
+- define how a future ordered PQ path can hold runtime sort state without
+  mutating normal executor state；
+- decide the minimal owner object and lifetime boundaries for `Filesort` /
+  `Sort_param` before any default `Exchange_sort` read path is enabled；
+- produce a coding split that can be reviewed incrementally and still keeps
+  `HAS_ORDER_BY` as the user-visible serial boundary。
+
+Scope:
+
+- design only in M11-E5h；
+- target runtime prerequisites from 4f:
+  1. `Filesort::make_sortorder()` / saved ORDER state visibility；
+  2. persistent `Sort_param` ownership for `Exchange_sort` lifetime；
+- do not solve worker `PQOF` production, default heap reader, leader
+  materialization, rowid tie-break, default ordered `Read()`, or real kill
+  propagation in this design。
+
+Current evidence:
+
+- M11-E5d-S1/S2/S3 and E5d-2a/2b/2c/2d already built sidecar/owned ORDER chain
+  contracts, but they are DBUG/contract oriented and do not make runtime
+  `Filesort` / `Sort_param` ownership ready；
+- M11-E5d-3a/3c and E5d-4a/4b/4c introduced restored ORDER Filesort and
+  scalar handoff smokes, but the default preflight still records Filesort and
+  Sort_param runtime as missing；
+- M11-E5d-5a/5b introduced `Exchange_sort` real-init state and allocation
+  smokes, but no default SQL path owns a real sort state；
+- `pq_build_orderby_execution_preflight()` keeps
+  `filesort_runtime_ready=false` and `sort_param_runtime_ready=false` by
+  design。
+
+Proposed owner model:
+
+- introduce a future `PQ_orderby_runtime_sort_state` style owner, preferably
+  private to `exchange_sort` / ORDER BY path implementation, that contains:
+  - copied/restored ORDER chain metadata owned outside normal `JOIN` mutation；
+  - `Filesort` pointer or value owner with explicit construction/destruction
+    rules；
+  - `Sort_param` owner whose storage outlives `Exchange_sort` heap reads；
+  - table/field layout references validated as leader-only and non-mutating；
+  - diagnostic flags mapping to preflight readiness, but not setting readiness
+    true until code review proves ownership；
+- keep construction DBUG-only or helper-only until a later reviewed coding step
+  proves it can be called before the PQ commit point and cleaned up on fallback。
+
+Proposed coding split after this design review:
+
+1. M11-E5h-1 sort-state owner shape:
+   - add a fail-closed owner struct/helper that can be default-constructed,
+     reset, and report unsupported；
+   - no real `Filesort` construction, no readiness flag true；
+   - task prompt must restate `THR_MALLOC` / `thd->mem_root`,
+     `JOIN::filesorts_to_cleanup`, QEP, and AccessPath non-attach checks。
+2. M11-E5h-2 runtime saved ORDER attach smoke:
+   - DBUG-only helper copies/restores ORDER metadata into the owner and proves
+     normal `JOIN` order state is unchanged after cleanup；
+   - still no default SQL execution。
+3. M11-E5h-3 `Sort_param` lifetime smoke:
+   - DBUG-only helper initializes owner-managed scalar `Sort_param` state and
+     validates cleanup / repeated use；
+   - task prompt must restate `Filesort::m_sort_param`,
+     `Sort_param::init_for_filesort()` read-set timing, and owner lifetime
+     checks；
+   - still no default worker MQ read or visible materialization。
+4. M11-E5h-4 preflight evidence update:
+   - only after 5h-1/2/3 review, consider adding clearer diagnostics that
+     distinguish "owner shape exists" from "runtime ready"；
+   - do not set `filesort_runtime_ready` or `sort_param_runtime_ready` true
+     unless the helper is actually reachable from a reviewed default preflight
+     owner path。
+
+Allowed files for M11-E5h design:
+
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`；
+- `Docs/pq_tasks/README.md`。
+
+Potential coding files after design review:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/mysqld.cc` only for reviewed status variables；
+- `sql/parallel_query/pq_optimizer.h` / `.cc` only for fail-closed
+  preflight/diagnostics and never for eligibility opening；
+- `mysql-test/suite/parallel_query/t/pq_commercial_order_by*.test` and matching
+  result files；
+- `mysql-test/suite/parallel_query/r/pq_stats.result` if status variables are
+  added。
+
+Forbidden:
+
+- weakening or deleting `PQUnsuiteReason::HAS_ORDER_BY`；
+- setting any ORDER BY execution preflight readiness flag true by assertion；
+- changing `execution_disabled` to false；
+- modifying AccessPath factory, handler/InnoDB, worker launch, `PQWR` /
+  `Query_result_mq`, default worker MQ consumption, or default ordered
+  `ParallelScanIterator::Read()`；
+- treating DBUG-only smokes as proof of user-visible ORDER BY PQ correctness；
+- mixing secondary range/ref/ICP or GROUP BY work into ORDER BY sort-state
+  ownership。
+
+Validation:
+
+Design-only M11-E5h:
+
+```bash
+git diff --check
+```
+
+Later coding steps:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by \
+  pq_commercial_order_by_frames pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5h_target --tmpdir=/tmp/pqt_m11e5h_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5h_full --tmpdir=/tmp/pqt_m11e5h_full
+```
+
+Design Review - M11-E5h:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed skipping executable M11-E5g-4g is reasonable because 4f rejected
+  the visible gate and E5h keeps `HAS_ORDER_BY` as the serial boundary；
+- confirmed h-1/h-2/h-3/h-4 are executable as a conservative split:
+  fail-closed owner shape, DBUG-only saved ORDER attach, DBUG-only
+  `Sort_param` lifetime smoke, then optional preflight diagnostics；
+- confirmed allowed/forbidden files and validation are sufficient for
+  design-only and later coding；
+- review note applied: h-1/h-3 task prompts must explicitly restate
+  `THR_MALLOC` / `thd->mem_root`, `Filesort::m_sort_param`,
+  `Sort_param::init_for_filesort()` read-set timing,
+  `JOIN::filesorts_to_cleanup`, QEP, AccessPath non-attach, and owner lifetime
+  checks。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
