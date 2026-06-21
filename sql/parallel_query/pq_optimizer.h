@@ -115,6 +115,12 @@ enum class PQSavedOrderGroupContractStatus {
   UNSUPPORTED_MISSING_SAVED_HELPERS
 };
 
+enum class PQOrderByFilesortContractStatus {
+  READY,
+  UNSUPPORTED_NULL_INPUT,
+  UNSUPPORTED_MISSING_SAVED_HELPERS
+};
+
 /**
   Compile-only saved ORDER/GROUP contract shape.
 
@@ -202,6 +208,40 @@ bool pq_build_saved_order_group_contract(
 bool pq_copy_saved_order_group_contract(
     const PQSavedOrderGroupContract &src,
     PQSavedOrderGroupContract *dst);
+
+/**
+  Fail-closed leader Filesort readiness contract.
+
+  This shape does not allocate Filesort, Sort_param, or sort buffers. It only
+  records whether the saved ORDER/GROUP sidecar is ready enough for a later
+  Filesort lifecycle review.
+*/
+struct PQOrderByFilesortContract {
+  PQOrderByFilesortContractStatus status{
+      PQOrderByFilesortContractStatus::UNSUPPORTED_NULL_INPUT};
+  const char *detail{nullptr};
+  bool has_order{false};
+  bool stable_sort_requested{false};
+  int ordered_index_usage{0};
+  bool saved_order_group_ready{false};
+
+  void reset() {
+    status = PQOrderByFilesortContractStatus::UNSUPPORTED_NULL_INPUT;
+    detail = nullptr;
+    has_order = false;
+    stable_sort_requested = false;
+    ordered_index_usage = 0;
+    saved_order_group_ready = false;
+  }
+
+  bool ready() const {
+    return status == PQOrderByFilesortContractStatus::READY;
+  }
+};
+
+bool pq_build_orderby_filesort_contract(
+    Query_block *query_block, JOIN *join,
+    PQOrderByFilesortContract *contract);
 
 /**
   Convert a PQUnsuiteReason to a human-readable string.

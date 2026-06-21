@@ -9715,6 +9715,10 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_group_clone_copy_smoke_success,
                                 saved_order_group_clone_copy_smoke_success)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_group_clone_copy_smoke_unsupported,
                                 saved_order_group_clone_copy_smoke_unsupported)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_contract_attempts,
+                                orderby_filesort_contract_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_contract_unsupported,
+                                orderby_filesort_contract_unsupported)
 
 #undef DEFINE_PQ_CLONE_PROBE_SHOW_FUNC
 
@@ -10735,6 +10739,12 @@ SHOW_VAR status_vars[] = {
     {"Parallel_queries_executed", (char *)&show_pq_queries_executed, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_queries_fallback", (char *)&show_pq_queries_fallback, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_filesort_contract_attempts",
+     (char *)&show_pq_orderby_filesort_contract_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_filesort_contract_unsupported",
+     (char *)&show_pq_orderby_filesort_contract_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_clone_probe_attempts",
      (char *)&show_pq_clone_probe_attempts, SHOW_FUNC, SHOW_SCOPE_GLOBAL},

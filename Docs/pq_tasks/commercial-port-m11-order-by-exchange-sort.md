@@ -4,7 +4,7 @@
 
 Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
 completed and committed；M11-E5d-S0/S1/S2/S3 completed and committed；
-M11-E5d-1 fail-closed Filesort contract shape design started。
+M11-E5d-1 fail-closed Filesort contract shape completed；waiting for commit。
 
 ## 背景
 
@@ -1347,8 +1347,8 @@ Commit:
 
 ### M11-E5d-1: Fail-closed Filesort Contract Shape Design
 
-Status: design-only taskbook completed；Review Agent accepted；no source code
-change。
+Status: coding completed；Code/Doc/Test Review Agent accepted；full
+`parallel_query` suite passed；waiting for commit。
 
 Goal:
 
@@ -1481,6 +1481,72 @@ Design Review - M11-E5d-1:
 - confirmed next step after E5d-1 should be owned saved ORDER/GROUP helper
   state design/implementation, or explicitly blocked, not Filesort
   construction。
+
+Completion Report - M11-E5d-1 Coding:
+
+- changed files:
+  - `sql/parallel_query/pq_optimizer.h`；
+  - `sql/parallel_query/pq_optimizer.cc`；
+  - `sql/parallel_query/sql_parallel.h`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_saved_order_group_contract.test`；
+  - `mysql-test/suite/parallel_query/r/pq_saved_order_group_contract.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added `PQOrderByFilesortContractStatus` and
+    `PQOrderByFilesortContract` as a leader-only fail-closed Filesort readiness
+    contract；
+  - added `pq_build_orderby_filesort_contract()`；it builds
+    `PQSavedOrderGroupContract` first and returns
+    `UNSUPPORTED_MISSING_SAVED_HELPERS` unless the saved sidecar is `READY`；
+  - added debug-only `pq_orderby_filesort_contract_smoke` on the existing
+    ORDER BY reject path；
+  - added status counters:
+    `Parallel_orderby_filesort_contract_attempts` and
+    `Parallel_orderby_filesort_contract_unsupported`；
+  - extended `pq_saved_order_group_contract` to verify no-DBUG counters remain
+    unchanged, DBUG attempts grow, unsupported equals attempts, and
+    executed/workers/ranges stay zero；
+  - updated `pq_stats` expected Parallel status variable count from 116 to
+    118。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4
+    including `shutdown_report`；
+  - full `parallel_query` suite passed: 89/89。
+- scope notes:
+  - no `Filesort`, `Sort_param`, or `Filesort::make_sortorder()` construction
+    or invocation；
+  - no `sql/filesort.*`, `sql/iterators/sorting_iterator.*`,
+    `sql/sql_optimizer.*`, or `sql/parallel_query/exchange_sort.*` real
+    Filesort integration changes；
+  - no clone lifecycle, worker, handler, MQ, `Read()`, or `HAS_ORDER_BY`
+    relaxation；
+  - current MTRs intentionally keep the contract unsupported because S1-S3
+    saved ORDER/GROUP sidecar remains unsupported。
+
+Code/Doc/Test Review - M11-E5d-1:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed fail-closed boundary holds: helper depends on
+  `PQSavedOrderGroupContract::READY` and current saved ORDER/GROUP sidecar
+  remains unsupported；
+- confirmed DBUG smoke is only called in the existing `HAS_ORDER_BY` reject
+  path and does not relax user-visible ORDER BY eligibility；
+- confirmed no `Filesort`, `Sort_param`, `Filesort::make_sortorder()`,
+  `sql/filesort.*`, sorting iterator, optimizer, `exchange_sort.*`, clone,
+  worker, handler, MQ, or `Read()` real path change exists；
+- confirmed stats fields, reset, SHOW STATUS entries, and `pq_stats` result
+  are complete；
+- confirmed MTR covers no-DBUG negative, DBUG attempts/unsupported equality,
+  `Not parallel HAS_ORDER_BY`, and zero executed/workers/ranges；
+- remaining risk: `READY` path is intentionally untested until owned saved
+  ORDER/GROUP helper state is implemented。
 
 ## Risk Areas
 

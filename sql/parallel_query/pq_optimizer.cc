@@ -144,6 +144,38 @@ bool pq_copy_saved_order_group_contract(
   return dst->status != PQSavedOrderGroupContractStatus::READY;
 }
 
+bool pq_build_orderby_filesort_contract(
+    Query_block *query_block, JOIN *join,
+    PQOrderByFilesortContract *contract) {
+  if (contract == nullptr) return false;
+
+  contract->reset();
+  if (query_block == nullptr || join == nullptr) {
+    contract->status = PQOrderByFilesortContractStatus::UNSUPPORTED_NULL_INPUT;
+    contract->detail = "missing Query_block or JOIN";
+    return false;
+  }
+
+  PQSavedOrderGroupContract saved_contract;
+  (void)pq_build_saved_order_group_contract(query_block, join, &saved_contract);
+
+  contract->has_order = saved_contract.has_order;
+  contract->stable_sort_requested = saved_contract.has_order;
+  contract->ordered_index_usage = saved_contract.ordered_index_usage;
+  contract->saved_order_group_ready = saved_contract.ready();
+
+  if (!saved_contract.ready()) {
+    contract->status =
+        PQOrderByFilesortContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS;
+    contract->detail = "saved ORDER/GROUP helper contract is not ready";
+    return false;
+  }
+
+  contract->status = PQOrderByFilesortContractStatus::READY;
+  contract->detail = "ready";
+  return true;
+}
+
 struct PQ_copied_key_endpoint {
   key_range range{};
   std::vector<uchar> key;
@@ -441,6 +473,24 @@ static void pq_maybe_run_saved_order_group_clone_copy_smoke(
         1, std::memory_order_relaxed);
   } else {
     mark_unsupported();
+  }
+}
+
+static void pq_maybe_run_orderby_filesort_contract_smoke(
+    Query_block *query_block, JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_orderby_filesort_contract_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.orderby_filesort_contract_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  PQOrderByFilesortContract contract;
+  if (!pq_build_orderby_filesort_contract(query_block, join, &contract) &&
+      contract.status ==
+          PQOrderByFilesortContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS) {
+    pq_global_stats.orderby_filesort_contract_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
   }
 }
 
@@ -1151,6 +1201,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
     pq_maybe_run_saved_order_group_contract_smoke(query_block, join);
     pq_maybe_run_saved_order_group_restore_smoke(query_block, join);
     pq_maybe_run_saved_order_group_clone_copy_smoke(query_block, join);
+    pq_maybe_run_orderby_filesort_contract_smoke(query_block, join);
     return pq_reject(info, PQUnsuiteReason::HAS_ORDER_BY,
                      "query has ORDER BY");
   }

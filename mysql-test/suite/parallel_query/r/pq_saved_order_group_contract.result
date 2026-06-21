@@ -41,6 +41,14 @@ SET @pq_saved_clone_copy_unsupported_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_saved_order_group_clone_copy_smoke_unsupported');
+SET @pq_filesort_contract_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_filesort_contract_attempts');
+SET @pq_filesort_contract_unsupported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_filesort_contract_unsupported');
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -89,7 +97,18 @@ WHERE variable_name = 'Parallel_saved_order_group_clone_copy_smoke_unsupported')
 @pq_saved_clone_copy_unsupported_before AS clone_copy_unsupported_without_debug;
 clone_copy_attempts_without_debug	clone_copy_success_without_debug	clone_copy_unsupported_without_debug
 0	0	0
-SET SESSION debug="d,pq_saved_order_group_contract_smoke,pq_saved_order_group_restore_smoke,pq_saved_order_group_clone_copy_smoke";
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_filesort_contract_attempts') -
+@pq_filesort_contract_attempts_before AS filesort_contract_attempts_without_debug,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_filesort_contract_unsupported') -
+@pq_filesort_contract_unsupported_before AS filesort_contract_unsupported_without_debug;
+filesort_contract_attempts_without_debug	filesort_contract_unsupported_without_debug
+0	0
+SET SESSION debug="d,pq_saved_order_group_contract_smoke,pq_saved_order_group_restore_smoke,pq_saved_order_group_clone_copy_smoke,pq_orderby_filesort_contract_smoke";
 EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 2;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Using filesort; Not parallel HAS_ORDER_BY
@@ -137,6 +156,25 @@ WHERE variable_name = 'Parallel_saved_order_group_clone_copy_smoke_unsupported')
 @pq_saved_clone_copy_unsupported_before AS saved_clone_copy_unsupported_delta;
 saved_clone_copy_attempts_delta	saved_clone_copy_success_delta	saved_clone_copy_unsupported_delta
 1	1	0
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_filesort_contract_attempts') -
+@pq_filesort_contract_attempts_before AS filesort_contract_attempts_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_filesort_contract_unsupported') -
+@pq_filesort_contract_unsupported_before AS filesort_contract_unsupported_delta,
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_filesort_contract_attempts') -
+@pq_filesort_contract_attempts_before) =
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_filesort_contract_unsupported') -
+@pq_filesort_contract_unsupported_before) AS filesort_contract_all_unsupported;
+filesort_contract_attempts_delta	filesort_contract_unsupported_delta	filesort_contract_all_unsupported
+1	1	1
 SELECT
 (SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
