@@ -345,20 +345,128 @@ Review:
 
 #### M11-B3c: Worker-thread Guarded Probe
 
-Only after B3b review is accepted, evaluate a debug-only worker-thread probe
-that writes `PQWR` through `Query_result_mq`. This must still avoid cloned JOIN
-and must have a separate design/review step before coding.
+目标：
+
+- validate the smallest commercial worker-result sink contract on a real
+  worker thread；
+- worker thread owns a worker THD and per-worker `MQueue_handle`；
+- worker constructs `Query_result_mq(nullptr, handle, false)`；
+- worker sends controlled `Item_int` rows and FINISH through
+  `Query_result_mq::send_data()` / `send_eof()`；
+- leader drains the corresponding `PQWR` ROW / FINISH frames and validates
+  decoded values with `pq_decode_worker_result_row()`；
+- no cloned JOIN, no worker plan, no AccessPath, no handler/InnoDB scan, and no
+  user SQL result materialization。
+
+Design decision:
+
+- B3c is still a debug/smoke probe, not commercial worker plan correctness；
+- reuse `Gather_operator::init()` / `start_workers()` / `wait_for_workers()` /
+  `destroy()` and `pq_worker_thread_entry()` lifecycle scaffolding；
+- add a dedicated worker task such as `QUERY_RESULT_MQ_PROBE` instead of
+  reusing callback producer tasks；
+- DOP should start at 1 for the first implementation；
+- decoded values are visible only through smoke assertions and counters；
+- default user-visible execution remains serial/fallback。
+
+Allowed source files for B3c coding:
+
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/parallel_query/query_result_mq.h` only if a reusable controlled
+  send/decode helper is extracted；
+- `sql/parallel_query/query_result_mq.cc` only if a reusable controlled
+  send/decode helper is extracted；
+- `sql/parallel_query/pq_iterator.cc` only inside the existing guarded
+  `PQTableScanIterator::Init()` smoke chain；
+- `mysql-test/suite/parallel_query/t/pq_commercial_worker_result_adapter.test`；
+- `mysql-test/suite/parallel_query/r/pq_commercial_worker_result_adapter.result`；
+- this taskbook and progress board。
+
+Forbidden:
+
+- `storage/innobase/**`；
+- `sql/handler.*`；
+- `sql/sql_optimizer.*`；
+- `sql/sql_select.cc`；
+- `sql/sql_lex.h`；
+- `sql/sql_class.h`；
+- `sql/join_optimizer/access_path.*`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`；
+- `sql/parallel_query/pq_iterators.*`；
+- `pq_make_join()` positive path；
+- `make_pq_worker_plan()` / `pq_make_join_readinfo()`；
+- `ExecuteIteratorQuery()`；
+- `pq_open_worker_table()` / `pq_close_worker_table()`；
+- worker callback producer helpers；
+- handler/InnoDB worker scan init/next/end；
+- commercial `Field_raw_data` / `Batch_buffer` / spill / stable-sort payloads；
+- returning decoded `PQWR` data as user SQL result。
+
+Cleanup / failure requirements:
+
+- worker task must use only `worker->m_mq_handle`, worker THD, local
+  `Query_result_mq`, and controlled `Item` values；
+- worker task must restore worker THD `sent_row_count` after local
+  `send_data()` calls；
+- send failure must set worker error state and fail closed；
+- leader helper must always `wait_for_workers()` and `destroy()` after
+  `start_workers()`；
+- on leader-side decode failure, abort remaining workers, then wait/destroy；
+- no joinable worker thread may remain after helper return。
+
+Counters / assertions:
+
+- `Parallel_worker_result_smoke_rows` increases by the controlled ROW count；
+- `Parallel_worker_result_smoke_finishes` increases by the controlled FINISH
+  count；
+- `Parallel_worker_result_smoke_errors` stays unchanged for the success smoke；
+- `Parallel_workers_launched` increases by the B3c worker count, expected 1 in
+  the first implementation；
+- `Parallel_queries_executed` stays unchanged；
+- `Parallel_rows_scanned` stays unchanged；
+- callback/open/handler smoke counters stay unchanged；
+- clone probe success stays unchanged, and B3c itself must not increment clone
+  probe attempts。
+
+Validation for coding:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_worker_result_adapter \
+  pq_commercial_worker_result pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11b3c_target --tmpdir=/tmp/pqt_m11b3c_target
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11b3c_full --tmpdir=/tmp/pqt_m11b3c_full
+```
+
+Stop condition:
+
+- B3c stops after one debug-only worker thread can send controlled
+  `Query_result_mq` ROW / FINISH frames and the leader validates them；
+- B3c must not attempt cloned JOIN, worker plan construction, handler/InnoDB
+  row production, ORDER/GROUP, stable output, or user-visible worker result；
+- M11-D owns the next step: `ParallelScanIterator` lifecycle / worker plan
+  contract。
 
 Status: design completed / Docs-Design Review accepted。
 
 Review:
 
 - Docs-Design Review returned `ACCEPT`；
-- B3b is limited to local MQ + `Query_result_mq` + `PQWR` decode；
-- B3b must not start worker threads, attach cloned JOIN, modify
-  AccessPath/handler/InnoDB, or return decoded data as SQL user result；
-- B3c remains a separate debug-only worker-thread probe that requires its own
-  design/review before coding。
+- B3c is clearly limited to debug/smoke worker-thread result sink wiring, not
+  worker plan correctness；
+- allowed files and forbidden paths are narrow enough for coding；
+- cleanup, failure, counter, and MTR assertions are sufficient to prove a real
+  worker thread starts while callback/open/handler/clone/real PQ execute paths
+  remain untouched；
+- stop condition cleanly hands off worker plan and handler/InnoDB row
+  production to M11-D。
 
 ## 风险
 
