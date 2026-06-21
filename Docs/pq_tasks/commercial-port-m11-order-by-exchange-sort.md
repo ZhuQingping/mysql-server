@@ -3,8 +3,8 @@
 ## 状态
 
 Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
-completed and committed；M11-E5d-S0/S1 completed and committed；
-M11-E5d-S2 leader save/restore smoke completed，waiting for commit。
+completed and committed；M11-E5d-S0/S1/S2 completed and committed；
+M11-E5d-S3 clone-copy contract design started。
 
 ## 背景
 
@@ -1137,6 +1137,140 @@ Code/Doc/Test Review - M11-E5d-S2:
 - confirmed MTR covers no-DBUG negative, DBUG positive, zero
   executed/workers/ranges deltas, and `HAS_ORDER_BY` serial boundary；
 - next step remains S3 clone-copy contract。
+
+Commit:
+
+- `334c4ae48d0` Add PQ M11E saved state restore smoke。
+
+### M11-E5d-S3: Clone-copy Contract Design
+
+Status: design-only taskbook completed；Review Agent accepted；no source code
+change。
+
+Goal:
+
+- prove the S1/S2 saved ORDER/GROUP sidecar can be copied as value-only
+  diagnostic state for a future PQ clone without owning optimizer ORDER nodes,
+  `Item` objects, MEM_ROOT allocations, or `Query_block` private saved list
+  pointers；
+- keep this as a sidecar copy contract, not a commercial `JOIN::pq_copy_from()`
+  activation；
+- preserve `HAS_ORDER_BY` user-visible serial boundary and avoid Filesort
+  construction。
+
+Commercial reference:
+
+- commercial clone copies saved optimized ORDER/GROUP state as part of a larger
+  JOIN clone path；
+- current branch `JOIN::pq_copy_from()` is still an inert stub in
+  `sql/parallel_query/pq_clone.cc`；
+- current branch does not yet have owned commercial saved ORDER/GROUP helper
+  fields, so S3 must not wire into the real clone lifecycle。
+
+Design boundary:
+
+- S3 may add a small value-copy helper for `PQSavedOrderGroupContract` or a
+  dedicated clone-copy smoke helper；
+- S3 may copy only scalar fields and status/detail string pointers to static
+  strings；
+- S3 must not copy, duplicate, or own `ORDER *`, `Item *`, `TABLE *`,
+  `AccessPath *`, `QEP_TAB *`, MEM_ROOT memory, or `Query_block` private
+  saved list pointers；
+- S3 must not modify `JOIN::pq_copy_from()` or `Query_block::pq_restore()`；
+- if source contract is unsupported, the copied contract must remain
+  unsupported and must not become `READY`。
+
+Allowed files for coding after review:
+
+- `sql/parallel_query/pq_optimizer.h`；
+- `sql/parallel_query/pq_optimizer.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/mysqld.cc`；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden files / actions:
+
+- no `sql/sql_optimizer.*` changes；
+- no `sql/parallel_query/pq_clone.cc` changes in S3；
+- no direct `JOIN` saved-state fields；
+- no real clone activation, worker JOIN construction, resolver rewrite, or
+  `Ref_item_array` ownership changes；
+- no Filesort / Sort_param construction or `make_sortorder()`；
+- no `HAS_ORDER_BY` relaxation, `Read()` change, worker, handler, MQ, or real
+  ORDER BY producer wiring。
+
+Proposed coding shape:
+
+- add value-copy helper, for example
+  `pq_copy_saved_order_group_contract(const PQSavedOrderGroupContract &src,
+  PQSavedOrderGroupContract *dst)`；
+- add debug-only smoke under a DBUG flag such as
+  `pq_saved_order_group_clone_copy_smoke`；
+- smoke builds an S1 contract from the current leader ORDER BY rejected shape；
+- smoke copies the sidecar to a local destination object；
+- smoke verifies status, detail pointer, and scalar fields match；
+- smoke verifies unsupported source remains unsupported after copy；
+- smoke does not call `JOIN::pq_copy_from()`。
+
+Required observability:
+
+- new status counters:
+  `Parallel_saved_order_group_clone_copy_smoke_attempts`；
+  `Parallel_saved_order_group_clone_copy_smoke_success`；
+  `Parallel_saved_order_group_clone_copy_smoke_unsupported`。
+- MTR:
+  - no-DBUG negative window verifies clone-copy counters do not grow by
+    default；
+  - DBUG positive window verifies attempts/success grow；
+  - S1/S2 unsupported/restore semantics remain unchanged；
+  - `Parallel_queries_executed`, `Parallel_workers_launched`, and
+    `Parallel_ranges_dispatched` stay zero；
+  - ORDER BY EXPLAIN still reports `Not parallel HAS_ORDER_BY`。
+
+Required validation for coding:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5ds3_target --tmpdir=/tmp/pqt_m11e5ds3_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5ds3_full --tmpdir=/tmp/pqt_m11e5ds3_full
+```
+
+Acceptance checklist:
+
+- no source edits before design review；
+- sidecar copy is value-only；
+- unsupported state remains unsupported；
+- no real clone lifecycle hook is touched；
+- user-visible ORDER BY remains serial；
+- next step after S3 may be E5d-1 fail-closed Filesort contract shape, not
+  Filesort construction smoke yet。
+
+Review request:
+
+- confirm S3 should avoid `pq_clone.cc` and real `JOIN::pq_copy_from()` wiring；
+- confirm value-only sidecar copy is enough before E5d-1；
+- confirm counters/MTR prove no user-visible activation；
+- confirm whether E5d-1 after S3 should still be fail-closed Filesort contract
+  shape rather than `Filesort::make_sortorder()` smoke。
+
+Design Review - M11-E5d-S3:
+
+- Review Agent verdict: `ACCEPT`；
+- confirmed S3 should avoid `pq_clone.cc` and real `JOIN::pq_copy_from()`；
+- confirmed value-only sidecar copy is enough before E5d-1；
+- confirmed forbidden ownership boundaries cover ORDER/Item/TABLE/AccessPath/
+  QEP_TAB/MEM_ROOT/private saved list pointers and resolver/ref-item ownership；
+- confirmed counters/MTR design proves no default trigger, no user-visible
+  ORDER BY PQ, and unsupported remains unsupported；
+- confirmed next step after S3 should be E5d-1 fail-closed Filesort contract
+  shape, not `Filesort::make_sortorder()` smoke。
 
 ## Risk Areas
 
