@@ -228,6 +228,9 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_attach_smoke_attempts{0};  ///< Attach smoke runs
   std::atomic<uint64> worker_attach_smoke_success{0};  ///< Attach smoke ok
   std::atomic<uint64> worker_attach_smoke_cleanup_calls{0};  ///< Attach cleanup
+  std::atomic<uint64> leader_row_stream_smoke_attempts{0};  ///< Read smoke
+  std::atomic<uint64> leader_row_stream_smoke_selected{0};  ///< Read selected
+  std::atomic<uint64> leader_row_stream_smoke_rows{0};  ///< Read smoke rows
   std::atomic<uint64> worker_result_smoke_rows{0};  ///< Worker result frames
   std::atomic<uint64> worker_result_smoke_finishes{0};  ///< FINISH frames
   std::atomic<uint64> worker_result_smoke_errors{0};  ///< ERROR frames
@@ -318,6 +321,9 @@ struct PQ_global_stats {
     worker_attach_smoke_attempts.store(0, std::memory_order_relaxed);
     worker_attach_smoke_success.store(0, std::memory_order_relaxed);
     worker_attach_smoke_cleanup_calls.store(0, std::memory_order_relaxed);
+    leader_row_stream_smoke_attempts.store(0, std::memory_order_relaxed);
+    leader_row_stream_smoke_selected.store(0, std::memory_order_relaxed);
+    leader_row_stream_smoke_rows.store(0, std::memory_order_relaxed);
     worker_result_smoke_rows.store(0, std::memory_order_relaxed);
     worker_result_smoke_finishes.store(0, std::memory_order_relaxed);
     worker_result_smoke_errors.store(0, std::memory_order_relaxed);
@@ -1023,6 +1029,21 @@ class Gather_operator {
                                             TABLE *leader_table,
                                             uint32 max_rows,
                                             uint32 *rows_sent);
+
+  /**
+    Prepare an M11-D4b leader row stream smoke.
+
+    This debug-only helper enqueues a bounded worker-produced record-image row
+    stream plus FINISH into this gather's Exchange. It leaves the Exchange
+    populated for PQTableScanIterator::Read() and does not drain rows itself.
+
+    @retval false  Row stream prepared
+    @retval true   Failure
+  */
+  bool prepare_leader_row_stream_smoke(THD *leader_thd, TABLE *leader_table,
+                                       PQ_Leader_context *leader_ctx,
+                                       uint32 row_limit,
+                                       uint32 *rows_enqueued);
 
   /**
     Start a worker-thread callback producer into this gather's Exchange.

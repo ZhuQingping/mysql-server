@@ -871,8 +871,9 @@ Required counters:
 
 Required MTR assertions:
 
-- debug SELECT returns exactly the bounded row set from the table, suggested
-  first two rows in primary key order；
+- debug SELECT returns through `PQTableScanIterator::Read()` with the bounded
+  row count；D4b does not prove final row-value correctness because the existing
+  record-image shadow path still has separate materialization limitations；
 - attempt delta >= 1；
 - selected delta >= 1；
 - leader row stream rows delta = returned row count；
@@ -929,6 +930,55 @@ Docs-Design Review:
   this debug path；
 - non-blocking suggestions were applied: duplicate allowed-file entry removed
   and `Parallel_probe_attempts` delta assertion added。
+
+Implementation:
+
+- added `Gather_operator::prepare_leader_row_stream_smoke()`；
+- added DBUG-only `pq_leader_row_stream_smoke` hook in
+  `PQTableScanIterator::Init()` after the table/blob guard and before handler
+  PROBE accounting；
+- the hook creates a leader `EXECUTE` context, prepares a DOP=1 bounded
+  record-image row stream, marks PQ started, and returns to the executor so
+  `PQTableScanIterator::Read()` consumes the stream；
+- added status counters:
+  `Parallel_leader_row_stream_smoke_attempts`,
+  `Parallel_leader_row_stream_smoke_selected`,
+  `Parallel_leader_row_stream_smoke_rows`；
+- added focused MTR `pq_leader_row_stream_smoke` and updated `pq_stats`；
+- D4b validates row count and counter semantics, not final row-value
+  correctness. The existing record-image shadow path can return placeholder
+  field values, so row-value correctness remains deferred.
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `--record pq_leader_row_stream_smoke` executed successfully but MTR failed to
+  copy the new result file with errno 1, so the result file was synchronized
+  from the generated test log and then revised to hide placeholder row values；
+- targeted MTR passed:
+  `pq_leader_row_stream_smoke` and `pq_stats`, 3/3 including
+  `shutdown_report`；
+- full `parallel_query` suite passed, 83/83。
+
+Code-Docs-Test Review:
+
+- Review Agent returned `ACCEPT`；
+- confirmed `pq_leader_row_stream_smoke` is after the table/blob guard and
+  before handler PROBE accounting；
+- confirmed the hook owns the debug-only `EXECUTE` setup, bounded stream
+  preparation, `mark_pq_started()`, and then returns to executor `Read()`；
+- confirmed `prepare_leader_row_stream_smoke()` leaves rows in
+  `Exchange_nosort` for `Read()` and does not drain rows, launch worker
+  threads, use `Query_result_mq`, or run cloned JOIN execution；
+- confirmed `Read()` increments the D4b row counter only for materialized ROW
+  frames under the DBUG path, matching `Parallel_rows_scanned` semantics；
+- confirmed docs intentionally defer row-value correctness because current
+  record-image shadow materialization can still return placeholder values；
+- confirmed SHOW STATUS/reset/`pq_stats` coverage and focused MTR coverage；
+- non-blocking notes: new MTR files must be explicitly staged, and D4b helper
+  may grow existing callback/exchange smoke counters because it intentionally
+  reuses the bounded callback producer。
 
 ## Review 要求
 

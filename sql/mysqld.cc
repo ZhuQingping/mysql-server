@@ -9909,6 +9909,24 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_attach_smoke_cleanup_calls,
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
+#define DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(NAME, FIELD)              \
+  static int show_pq_##NAME(THD *, SHOW_VAR *var, char *buf) {          \
+    var->type = SHOW_LONGLONG;                                          \
+    var->value = buf;                                                   \
+    *((longlong *)buf) =                                                \
+        (longlong)(pq_global_stats.FIELD.load(std::memory_order_relaxed)); \
+    return 0;                                                           \
+  }
+
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(leader_row_stream_smoke_attempts,
+                                      leader_row_stream_smoke_attempts)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(leader_row_stream_smoke_selected,
+                                      leader_row_stream_smoke_selected)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(leader_row_stream_smoke_rows,
+                                      leader_row_stream_smoke_rows)
+
+#undef DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC
+
 static int show_pq_worker_result_smoke_rows(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10692,6 +10710,15 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_probe_init_unsupported, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_probe_thread_budget_unsupported",
      (char *)&show_pq_probe_thread_budget_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_leader_row_stream_smoke_attempts",
+     (char *)&show_pq_leader_row_stream_smoke_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_leader_row_stream_smoke_rows",
+     (char *)&show_pq_leader_row_stream_smoke_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_leader_row_stream_smoke_selected",
+     (char *)&show_pq_leader_row_stream_smoke_selected, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_workers_launched", (char *)&show_pq_workers_launched, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

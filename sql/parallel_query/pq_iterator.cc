@@ -140,6 +140,40 @@ bool PQTableScanIterator::Init() {
     return init_serial_fallback();
   });
 
+  DBUG_EXECUTE_IF("pq_leader_row_stream_smoke", {
+    pq_global_stats.leader_row_stream_smoke_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    uint execute_dop = 0;
+    int execute_error = table()->file->pq_leader_scan_init(
+        thd(), &m_leader_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+        false);
+    if (execute_error == HA_ERR_UNSUPPORTED) {
+      m_leader_ctx = nullptr;
+      return init_serial_fallback();
+    }
+    if (execute_error != 0) {
+      cleanup_pq_resources(true);
+      PrintError(execute_error);
+      return true;
+    }
+
+    m_gather = new Gather_operator(1);
+    uint32 rows_enqueued = 0;
+    if (m_gather == nullptr ||
+        m_gather->prepare_leader_row_stream_smoke(thd(), table(), m_leader_ctx,
+                                                  2, &rows_enqueued) ||
+        rows_enqueued != 2) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+
+    pq_global_stats.leader_row_stream_smoke_selected.fetch_add(
+        1, std::memory_order_relaxed);
+    mark_pq_started();
+    return false;
+  });
+
   // V2-2 bridge smoke: prove the handler can create and release a SQL-visible
   // leader context without starting workers or reading rows. Unsupported
   // engines/states still use the V2-1 serial fallback path; real handler
@@ -455,6 +489,10 @@ int PQTableScanIterator::Read() {
         m_executed_counted = true;
       }
       pq_global_stats.rows_scanned.fetch_add(1, std::memory_order_relaxed);
+      DBUG_EXECUTE_IF("pq_leader_row_stream_smoke", {
+        pq_global_stats.leader_row_stream_smoke_rows.fetch_add(
+            1, std::memory_order_relaxed);
+      });
       return 0;
     }
 
