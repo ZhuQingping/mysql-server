@@ -3,6 +3,8 @@
 ## 状态
 
 M11-A0 design-only completed / Docs-Design Review accepted。
+M11-A1 Item base contract compile-only skeleton completed /
+Code-Docs-Test Review accepted。
 
 ## 目标
 
@@ -69,6 +71,18 @@ skeleton，并保持 worker-start 前 fail-closed。
 ```bash
 cmake --build build-ninja --target mysqld -j 16
 ```
+
+Implementation notes:
+
+- add only the `Item::pq_clone()` / `Item::pq_copy_from()` base virtual
+  declarations needed by later commercial Item clone migration；
+- default `Item::pq_clone()` returns `nullptr`；
+- default `Item::pq_copy_from()` returns `true`；
+- do not add commercial `origin_item` / `cloned_origin_item` state fields yet；
+- do not add subclass overrides；
+- do not call these helpers from `pq_make_join()` or any optimizer/runtime path。
+
+Status: coding/validation completed / Code-Docs-Test Review accepted。
 
 ### M11-A2: Query_block / JOIN Clone-link Skeleton
 
@@ -165,3 +179,10 @@ Code-Docs-Test Review Agent，review accepted 后才提交。
 Docs-Design Review Agent accepted this A0 taskbook after confirming it keeps
 `pq_make_join()` fail-closed, does not create cloned JOIN, does not launch
 workers, and keeps AccessPath/InnoDB out of scope.
+
+M11-A1 Code-Docs-Test Review Agent accepted the minimal Item base contract
+skeleton. The accepted scope adds only `Item::pq_clone()` /
+`Item::pq_copy_from()` declarations plus fail-closed defaults, does not add
+commercial `origin_item` / `cloned_origin_item` state, does not add subclass
+overrides, and does not touch resolver/fix_fields/restore/`pq_make_join()` or
+worker paths.

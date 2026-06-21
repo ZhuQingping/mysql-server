@@ -31,3 +31,10 @@
   clone contract is migrated in a later stage together with the matching class
   declarations.
 */
+#include "sql/item.h"
+
+#include "sql/sql_lex.h"
+
+Item *Item::pq_clone(THD *, Query_block *) { return nullptr; }
+
+bool Item::pq_copy_from(THD *, Query_block *, Item *) { return true; }

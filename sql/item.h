@@ -886,6 +886,13 @@ class Item : public Parse_tree_node {
   static void operator delete(void *, MEM_ROOT *,
                               const std::nothrow_t &) noexcept {}
 
+  /// Parallel Query clone contract. The base implementation is fail-closed.
+  [[nodiscard]] virtual Item *pq_clone(THD *thd, Query_block *select);
+
+  /// Copy common state for a cloned Parallel Query item; true means failure.
+  [[nodiscard]] virtual bool pq_copy_from(THD *thd, Query_block *select,
+                                          Item *item);
+
   enum Type {
     INVALID_ITEM = 0,
     FIELD_ITEM,
