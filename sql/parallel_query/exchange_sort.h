@@ -319,6 +319,9 @@ class Exchange_sort final : public Exchange {
                                             uint32 max_record_length,
                                             uint32 ref_length);
   bool allocate_real_init_buffers_shape();
+  bool read_orderby_frame_from_worker_shape(
+      MQueue_handle *handle, PQ_orderby_loader_status *status,
+      PQ_orderby_decoded_frame *decoded);
   bool load_orderby_frame_to_record_group(MQueue_handle *handle,
                                           uint32 worker_id,
                                           PQ_orderby_loader_status *status);

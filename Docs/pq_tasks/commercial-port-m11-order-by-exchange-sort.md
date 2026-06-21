@@ -6538,6 +6538,114 @@ Code/Doc/Test Review - M11-E5j:
   - `m_heap_reader_ctx.batches` points into `m_record_groups.data()`; future
     code must keep heap-reader cleanup before clearing/resizing record groups。
 
+### M11-E5k: Exchange_sort Typed PQOF Read Helper Smoke
+
+Status: completed；Code/Doc/Test Review accepted。
+
+Goal:
+
+- extract a typed helper that reads exactly one worker `PQOF` frame from a
+  provided `MQueue_handle` and maps it to explicit loader status；
+- reuse the helper from existing record-group loader code；
+- validate ROW / FINISH / ERROR / WOULD_BLOCK / DETACHED / malformed cases
+  through controlled smoke coverage；
+- keep `Exchange_sort::read_mq_message()` inert and keep all default ORDER BY
+  execution paths closed。
+
+Design Explorer - M11-E5k:
+
+- verdict: `ACCEPT WITH SCOPE REVISION`；
+- recommended helper + DBUG smoke only, not a default `read_mq_message()`
+  branch；
+- required `read_mq_message()` to keep current non-DBUG behavior:
+  `type=FINISH`, `datap=nullptr`, `data_len=0`, `return false`；
+- required `materialize_next_ordered_record_image_status()` to remain
+  `DISABLED`；
+- rejected changing default Exchange selection, default iterator `Read()`, or
+  preflight readiness。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden:
+
+- `Exchange_sort::read_mq_message()` default semantic changes；
+- `materialize_next_ordered_record_image_status()` behavior changes；
+- `pq_optimizer.*`, readiness flags, or `HAS_ORDER_BY` eligibility changes；
+- `Gather_operator::init()` default `Exchange_nosort` replacement；
+- default `ParallelScanIterator::Read()` / `PQTableScanIterator::Read()`
+  ORDER BY branch；
+- `Query_result_mq`, handler/InnoDB, AccessPath, clone, or optimizer/executor
+  path changes；
+- new `PQOF` decoder family or mixing `PQOF` with `PQWR` / `PQRM`。
+
+Implementation:
+
+- added private helper
+  `Exchange_sort::read_orderby_frame_from_worker_shape()`；
+- helper calls `MQueue_handle::receive()` directly, maps:
+  - `MQ_WOULD_BLOCK` -> `PQ_orderby_loader_status::WOULD_BLOCK`；
+  - `MQ_DETACHED` -> `PQ_orderby_loader_status::DETACHED`；
+  - valid `PQOF` ROW / FINISH -> corresponding loader status；
+  - valid `PQOF` ERROR or malformed frame -> `ERROR` status；
+- changed `load_orderby_frame_to_record_group()` to reuse this helper before
+  writing into record groups；
+- extended existing `run_orderby_frame_contract_smoke()` to validate helper
+  status mapping for ROW / FINISH / ERROR / WOULD_BLOCK / DETACHED / malformed；
+- did not change existing frame smoke output counters and did not add public
+  status variables。
+
+Fail-closed scope:
+
+- no `read_mq_message()` default behavior change；
+- no materializer behavior change；it remains `DISABLED`；
+- no `pq_optimizer.*`, preflight readiness, or `HAS_ORDER_BY` changes；
+- no default worker MQ consumption or default ordered iterator path；
+- ordinary ORDER BY SQL remains protected by existing negative MTR coverage。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`
+  plus `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Residual risk:
+
+- helper is still controlled-smoke-only and is not a reviewed default
+  `read_mq_message()` branch；
+- future typed `read_mq_message()` work must separately prove default Exchange
+  selection cannot half-open ORDER BY PQ；
+- real wait/kill policy, materialization, Filesort key generation, DESC / NULL
+  ordering, rowid tie-break, and visible ORDER BY eligibility remain future
+  reviewed tasks。
+
+Code/Doc/Test Review - M11-E5k:
+
+- verdict: `ACCEPT`；
+- confirmed helper status mapping is reasonable for `MQ_WOULD_BLOCK`,
+  `MQ_DETACHED`, valid ROW / FINISH, valid ERROR, and malformed frames；
+- confirmed `load_orderby_frame_to_record_group()` preserves decode / copy /
+  finish behavior and treats malformed frames as non-transport loader errors；
+- confirmed smoke coverage is sufficient and existing `rows` / `finishes` /
+  `errors` output counters are unchanged；
+- confirmed no default path was opened: `read_mq_message()` remains inert and
+  materialization remains `DISABLED`；
+- review noted a minor side-effect difference: valid `PQOF` ERROR returned
+  before resetting `batch.compare_state`；fixed by resetting compare state after
+  helper return for ROW / FINISH / ERROR statuses, before status handling；
+- post-review validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`
+    plus `shutdown_report`。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

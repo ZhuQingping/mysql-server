@@ -649,12 +649,13 @@ bool Exchange_sort::allocate_real_init_buffers_shape() {
          m_record_groups.size() != m_real_init_state_shape.record_group_slots;
 }
 
-bool Exchange_sort::load_orderby_frame_to_record_group(
-    MQueue_handle *handle, uint32 worker_id,
-    PQ_orderby_loader_status *status) {
-  if (status == nullptr) return true;
+bool Exchange_sort::read_orderby_frame_from_worker_shape(
+    MQueue_handle *handle, PQ_orderby_loader_status *status,
+    PQ_orderby_decoded_frame *decoded) {
+  if (status == nullptr || decoded == nullptr) return true;
   *status = PQ_orderby_loader_status::ERROR;
-  if (handle == nullptr || worker_id >= m_record_groups.size()) return true;
+  *decoded = PQ_orderby_decoded_frame{};
+  if (handle == nullptr) return true;
 
   void *raw_data = nullptr;
   uint32 raw_len = 0;
@@ -669,16 +670,47 @@ bool Exchange_sort::load_orderby_frame_to_record_group(
   }
   if (result != MQ_SUCCESS) return true;
 
-  PQ_orderby_decoded_frame decoded;
-  if (pq_decode_orderby_frame(raw_data, raw_len, &decoded)) {
+  if (pq_decode_orderby_frame(raw_data, raw_len, decoded)) {
     *status = PQ_orderby_loader_status::ERROR;
     return false;
   }
 
-  PQ_orderby_record_batch &batch = m_record_groups[worker_id];
-  batch.compare_state = PQ_orderby_batch_compare_state::NOT_EVALUATED;
+  if (decoded->type == PQ_orderby_frame_type::ROW) {
+    *status = PQ_orderby_loader_status::ROW;
+  } else if (decoded->type == PQ_orderby_frame_type::FINISH) {
+    *status = PQ_orderby_loader_status::FINISH;
+  } else {
+    *status = PQ_orderby_loader_status::ERROR;
+  }
+  return false;
+}
 
-  if (decoded.type == PQ_orderby_frame_type::ROW) {
+bool Exchange_sort::load_orderby_frame_to_record_group(
+    MQueue_handle *handle, uint32 worker_id,
+    PQ_orderby_loader_status *status) {
+  if (status == nullptr) return true;
+  *status = PQ_orderby_loader_status::ERROR;
+  if (worker_id >= m_record_groups.size()) return true;
+
+  PQ_orderby_decoded_frame decoded;
+  if (read_orderby_frame_from_worker_shape(handle, status, &decoded)) {
+    return true;
+  }
+  if (*status == PQ_orderby_loader_status::ROW ||
+      *status == PQ_orderby_loader_status::FINISH ||
+      *status == PQ_orderby_loader_status::ERROR) {
+    m_record_groups[worker_id].compare_state =
+        PQ_orderby_batch_compare_state::NOT_EVALUATED;
+  }
+  if (*status == PQ_orderby_loader_status::WOULD_BLOCK ||
+      *status == PQ_orderby_loader_status::DETACHED ||
+      *status == PQ_orderby_loader_status::ERROR) {
+    return false;
+  }
+
+  PQ_orderby_record_batch &batch = m_record_groups[worker_id];
+
+  if (*status == PQ_orderby_loader_status::ROW) {
     PQ_orderby_cached_record record;
     if (pq_copy_decoded_orderby_frame(decoded, worker_id, &record)) {
       *status = PQ_orderby_loader_status::ERROR;
@@ -691,9 +723,8 @@ bool Exchange_sort::load_orderby_frame_to_record_group(
     return false;
   }
 
-  if (decoded.type == PQ_orderby_frame_type::FINISH) {
+  if (*status == PQ_orderby_loader_status::FINISH) {
     batch.completed = true;
-    *status = PQ_orderby_loader_status::FINISH;
     return false;
   }
 
@@ -2095,6 +2126,85 @@ bool Exchange_sort::run_orderby_frame_contract_smoke(uint32 *rows_read,
   if (!pq_validate_orderby_frame(&invalid, sizeof(invalid), &unused_header,
                                  &unused_payload)) {
     failed = true;
+  }
+
+  if (!failed) {
+    PQ_mq_event typed_sender_event;
+    PQ_mq_event typed_receiver_event;
+    char typed_ring[PQ_MQ_DEFAULT_RING_SIZE];
+    MQueue typed_queue(&typed_sender_event, &typed_receiver_event, typed_ring,
+                       sizeof(typed_ring));
+    MQueue_handle typed_handle(&typed_queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+    if (typed_handle.init()) {
+      failed = true;
+    } else {
+      PQ_orderby_loader_status status = PQ_orderby_loader_status::ERROR;
+      PQ_orderby_decoded_frame decoded;
+      failed = read_orderby_frame_from_worker_shape(&typed_handle, &status,
+                                                    &decoded) ||
+               status != PQ_orderby_loader_status::WOULD_BLOCK;
+
+      if (!failed) {
+        failed = pq_send_orderby_frame(&typed_handle,
+                                       PQ_orderby_frame_type::ROW, &record0,
+                                       sizeof(record0), &rowid0,
+                                       sizeof(rowid0), &sortkey0,
+                                       sizeof(sortkey0)) ||
+                 read_orderby_frame_from_worker_shape(&typed_handle, &status,
+                                                      &decoded) ||
+                 status != PQ_orderby_loader_status::ROW ||
+                 decoded.type != PQ_orderby_frame_type::ROW ||
+                 decoded.record_image_len != sizeof(record0) ||
+                 decoded.row_id_len != sizeof(rowid0) ||
+                 decoded.sort_key_len != sizeof(sortkey0);
+      }
+      if (!failed) {
+        failed = pq_send_orderby_frame(&typed_handle,
+                                       PQ_orderby_frame_type::FINISH, nullptr,
+                                       0, nullptr, 0, nullptr, 0) ||
+                 read_orderby_frame_from_worker_shape(&typed_handle, &status,
+                                                      &decoded) ||
+                 status != PQ_orderby_loader_status::FINISH ||
+                 decoded.type != PQ_orderby_frame_type::FINISH;
+      }
+      if (!failed) {
+        failed = pq_send_orderby_frame(&typed_handle,
+                                       PQ_orderby_frame_type::ERROR, nullptr, 0,
+                                       nullptr, 0, nullptr, 0) ||
+                 read_orderby_frame_from_worker_shape(&typed_handle, &status,
+                                                      &decoded) ||
+                 status != PQ_orderby_loader_status::ERROR ||
+                 decoded.type != PQ_orderby_frame_type::ERROR;
+      }
+      if (!failed) {
+        invalid.magic = PQ_MQ_MESSAGE_MAGIC;
+        failed = typed_handle.send(&invalid, sizeof(invalid)) != MQ_SUCCESS ||
+                 read_orderby_frame_from_worker_shape(&typed_handle, &status,
+                                                      &decoded) ||
+                 status != PQ_orderby_loader_status::ERROR;
+      }
+      typed_handle.cleanup();
+    }
+  }
+
+  if (!failed) {
+    PQ_mq_event detached_sender_event;
+    PQ_mq_event detached_receiver_event;
+    char detached_ring[PQ_MQ_DEFAULT_RING_SIZE];
+    MQueue detached_queue(&detached_sender_event, &detached_receiver_event,
+                          detached_ring, sizeof(detached_ring));
+    MQueue_handle detached_handle(&detached_queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+    if (detached_handle.init()) {
+      failed = true;
+    } else {
+      detached_handle.close_producer();
+      PQ_orderby_loader_status status = PQ_orderby_loader_status::ERROR;
+      PQ_orderby_decoded_frame decoded;
+      failed = read_orderby_frame_from_worker_shape(&detached_handle, &status,
+                                                    &decoded) ||
+               status != PQ_orderby_loader_status::DETACHED;
+      detached_handle.cleanup();
+    }
   }
 
   handle.cleanup();
