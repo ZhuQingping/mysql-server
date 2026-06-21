@@ -5,7 +5,8 @@
 Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
 completed and committed；M11-E5d-S0/S1/S2/S3 completed and committed；
 M11-E5d-1 fail-closed Filesort contract shape completed and committed；
-M11-E5d-2 owned saved ORDER/GROUP helper state design accepted。
+M11-E5d-2 design completed and committed；M11-E5d-2a owned ORDER chain copy
+smoke completed，waiting for commit。
 
 ## 背景
 
@@ -1714,6 +1715,90 @@ Design Review - M11-E5d-2:
     `ORDER_with_src` state；
   - real `Filesort`, `Sort_param`, `Exchange_sort`, and user-visible ORDER BY
     PQ still need separate review before activation。
+
+Commit:
+
+- `61e074704e1` Plan PQ M11E owned order group state。
+
+### M11-E5d-2a: Owned ORDER Chain Copy Smoke
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；full
+`parallel_query` suite passed；waiting for commit。
+
+Goal:
+
+- prove a PQ-owned sidecar can copy the optimized `JOIN::order` chain without
+  owning or copying `Item` trees；
+- prove copied `ORDER` nodes and `next` links are owned by the sidecar, while
+  resolved `Item*` aliases stay identical to the source chain；
+- keep real saved GROUP restoration, optimized flags, clone lifecycle,
+  Filesort, and user-visible ORDER BY PQ disabled。
+
+Implementation:
+
+- added an internal `PQ_owned_order_chain_sidecar` in
+  `sql/parallel_query/pq_optimizer.cc`；
+- added internal helper `pq_copy_order_chain()`:
+  - counts source `ORDER` nodes；
+  - reserves vector storage before copy；
+  - copies `ORDER` structs by value；
+  - rewires copied `next` pointers to copied nodes；
+  - preserves `ORDER_with_src::src` and `is_const_optimized()` metadata；
+  - aliases `ORDER::item`, `item_initial`, `rollup_item`,
+    `field_in_tmp_table`, and other non-owned pointers exactly as source；
+- added `pq_saved_order_chain_copy_smoke` on the existing ORDER BY reject path；
+- added status counters:
+  `Parallel_saved_order_chain_copy_smoke_attempts`,
+  `Parallel_saved_order_chain_copy_smoke_success`,
+  `Parallel_saved_order_chain_copy_smoke_unsupported`；
+- extended `pq_saved_order_group_contract` to verify:
+  - no-DBUG counters remain zero；
+  - DBUG attempts/success grow；
+  - unsupported stays zero for the controlled ORDER BY shape；
+  - `Parallel_queries_executed`, `Parallel_workers_launched`, and
+    `Parallel_ranges_dispatched` remain zero；
+  - ORDER BY still reports `Not parallel HAS_ORDER_BY`；
+- updated `pq_stats` Parallel status variable count from 118 to 121。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4
+  including `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Scope notes:
+
+- no public PQ optimizer API change yet；
+- no `sql/filesort.*`, `sql/iterators/sorting_iterator.*`,
+  `sql/sql_optimizer.*`, `exchange_sort.*`, AccessPath, clone lifecycle,
+  worker, handler, MQ, or `Read()` changes；
+- no real `Filesort`, `Sort_param`, or `Filesort::make_sortorder()`；
+- no `HAS_ORDER_BY` eligibility relaxation；
+- `PQSavedOrderGroupContract` and `PQOrderByFilesortContract` remain
+  fail-closed for real Filesort readiness。
+
+Code/Doc/Test Review - M11-E5d-2a:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed sidecar owns only copied `ORDER` nodes and copied `next` links；
+- confirmed copied non-owned pointers, including resolved `Item*` and field
+  aliases, are preserved but not owned or modified；
+- confirmed vector storage is reserved before copy and copied `next` pointers
+  are rewired to copied storage；
+- confirmed smoke is gated by `pq_saved_order_chain_copy_smoke` and the
+  existing ORDER BY reject path；
+- confirmed no real Filesort, Sort_param, sorting iterator, optimizer mutation
+  hook, exchange sort integration, clone lifecycle, worker/handler/MQ/Read, or
+  `HAS_ORDER_BY` activation；
+- confirmed stats and MTR coverage are complete；
+- remaining risks:
+  - 1024-node chain cap remains fail-closed and debug-only；
+  - future E5d-2b/2c/2d must still prove optimized flags, restored sidecar
+    chain isolation, and clone-copy lifetime before any Filesort path opens。
 
 ## Risk Areas
 
