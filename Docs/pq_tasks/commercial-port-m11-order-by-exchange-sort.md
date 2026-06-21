@@ -33,7 +33,7 @@ execution preflight blocker completed and committed as `68b27d804ca`；real
 ORDER BY execution, default worker MQ consumption, and default ordered `Read()`
 remain disabled；M11-E5d-5f runtime prerequisite diagnostics coding and
 validation completed，Code/Doc/Test Review Agent accepted，committed as
-`e38ed2e3c75`。
+`b94ca90cb75`。
 
 ## 背景
 
@@ -3967,8 +3967,8 @@ Code/Doc/Test Review - M11-E5d-5d:
 
 ### M11-E5d-5e: User-visible ORDER BY Eligibility Gate Design
 
-Status: design completed；Design Review Agent accepted；waiting for commit；no
-code edits in this subtask。
+Status: design completed；Design Review Agent accepted；committed as
+`2e290b3dee0`；no code edits in this subtask。
 
 Goal:
 
@@ -4125,7 +4125,7 @@ Design Review - M11-E5d-5e:
 
 Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
 and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
-committed as `1333004ebf9`。
+committed as `f54474bda65`。
 
 Goal:
 
@@ -4186,7 +4186,7 @@ Code/Doc/Test Review - M11-E5d-5e-1:
 
 Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
 and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
-committed as `e38ed2e3c75`。
+committed as `68b27d804ca`。
 
 Goal:
 
@@ -4348,6 +4348,159 @@ Code/Doc/Test Review - M11-E5d-5f:
   AccessPath, handler/InnoDB, worker MQ, and default ordered `Read()`；
 - residual risk: turning any prerequisite ready later requires a dedicated
   default runtime owner, lifecycle, error/KILL path, MTR coverage, and review。
+
+### M11-E5g-0: Worker ORDER BY Frame Producer and Streaming Heap Read Boundary Design
+
+Status: design completed；Design Review Agent accepted；waiting for commit；no
+code edits in this subtask。
+
+Goal:
+
+- define the minimum contracts required before
+  `worker_order_frame_producer_ready`, `exchange_sort_heap_read_ready`, or
+  `default_ordered_read_ready` can become true；
+- separate worker `PQOF` ORDER BY frame production from existing `PQWR`
+  worker-result frames；
+- define how `Exchange_sort` moves from controlled local loader / completed
+  shadow read to streaming heap read；
+- keep all execution preflight readiness flags false until a later coding task
+  provides the default runtime owner and MTR evidence。
+
+Current branch facts:
+
+- `PQOF` ORDER BY frames are decoded and loaded only by controlled local smoke
+  helpers；
+- existing `Query_result_mq` / `PQWR` frames are still the worker-result
+  protocol and must not be overloaded；
+- `Exchange_sort::read_mq_message()` remains inert and returns `FINISH`；
+- `read_ordered_record_shadow_shape()` drains already-loaded completed groups
+  with an `int64` debug sort key；
+- default `ParallelScanIterator::Read()` consumes only the `Exchange_nosort`
+  row-image path；the order-gather debug state still returns EOF；
+- 5f diagnostics prove every runtime prerequisite remains missing from the
+  default path。
+
+Commercial reference facts:
+
+- commercial ORDER BY uses a default path equivalent to:
+  `ParallelScanIterator::pq_make_filesort()` ->
+  `ParallelScanIterator::pq_init_record_gather()` ->
+  `MQ_record_gather::mq_scan_init()` ->
+  `Exchange_sort::read_mq_record()`；
+- commercial worker rows are stream-consumed through per-worker MQ, cached in
+  batches, compared by Filesort/Sort_param-compatible sort keys, and merged by
+  heap；
+- commercial row materialization writes the selected ordered row into leader
+  `table->record[0]`；
+- the current branch lacks the default worker producer, default streaming heap
+  read, default ordered `Read()` lifecycle, and ORDER BY-specific
+  kill/detach/error diagnostics。
+
+Readiness criteria:
+
+1. `worker_order_frame_producer_ready` may become true only after a coding task
+   proves a worker-side `PQOF` producer that:
+   - emits ROW / FINISH / ERROR frames distinct from `PQWR`；
+   - deep-copies worker record image, rowid/ref bytes, and sort-key payload；
+   - proves per-worker local order for the supported first subset；
+   - does not change `PQWR` wire format or existing worker-result tests；
+   - has KILL/detach/error behavior scoped to ORDER BY frames。
+
+2. `exchange_sort_heap_read_ready` may become true only after a coding task
+   proves a streaming `Exchange_sort` reader that:
+   - reads controlled or default `PQOF` frames per worker without treating
+     WOULD_BLOCK as EOF；
+   - handles ROW / FINISH / ERROR / detach explicitly；
+   - refills per-worker batches and updates/removes heap entries correctly；
+   - compares by real sort key contract and stable rowid tie-break；
+   - keeps DESC, NULL, unsupported charset/variable/blob shapes fail-closed
+     until separately tested。
+
+3. `leader_materialization_ready` may become true only after the streaming
+   reader can copy selected row images into leader `table->record[0]` through a
+   default-path-compatible owner, not only an isolated smoke。
+
+4. `default_ordered_read_ready` may become true only after
+   `ParallelScanIterator::Init()` / `Read()` own the ordered gather lifecycle,
+   worker MQ wiring, cleanup, counters, and KILL/error propagation while real
+   ORDER BY SQL remains guarded by an explicit reviewed gate。
+
+Proposed follow-up split:
+
+1. M11-E5g-1: DBUG-only worker ORDER BY `PQOF` producer smoke.
+   - coding task；
+   - should use controlled worker-like table/record image inputs；
+   - must not start default ORDER BY SQL, must not modify `PQWR`, and must keep
+     `HAS_ORDER_BY` visible boundary；
+   - may add producer-specific counters, but must not mark
+     `worker_order_frame_producer_ready=true` in preflight。
+
+2. M11-E5g-2: Streaming `Exchange_sort` heap-read state machine smoke.
+   - coding task after 5g-1；
+   - use controlled `PQOF` handles with interleaved ROW / WOULD_BLOCK / FINISH
+     / ERROR；
+   - prove heap refill/remove and explicit blocked/error statuses；
+   - do not route default `ParallelScanIterator::Read()` through it。
+
+3. M11-E5g-3: Ordered leader materialization smoke from streaming reader.
+   - coding task after 5g-2；
+   - writes selected rows into leader `table->record[0]` inside an isolated
+     smoke only；
+   - verifies row image length and table shape fail-closed。
+
+4. Later reviewed task: default ordered `ParallelScanIterator` lifecycle.
+   - only after Filesort/Sort_param runtime owner, worker producer, streaming
+     heap read, materialization, rowid tie-break, and diagnostics pass
+     independent review。
+
+5g-1 / 5g-2 / 5g-3 must remain DBUG/controlled smokes. They must not be
+interpreted as proof that the Filesort/Sort_param default runtime owner exists
+or that any ORDER BY execution preflight readiness flag may become true。
+
+Allowed files for 5g-0 design:
+
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`；
+- `Docs/pq_tasks/README.md` status only if needed。
+
+Forbidden files/actions for 5g-0:
+
+- no source or MTR edits；
+- no preflight ready flag changes；
+- no optimizer eligibility or `HAS_ORDER_BY` behavior changes；
+- no `ParallelScanIterator::Read()` default path changes；
+- no `PQWR` format changes；
+- no AccessPath, executor, handler, or InnoDB changes；
+- no claim that visible ORDER BY PQ execution is ready。
+
+Validation:
+
+- design review only；
+- no build/MTR required because no source or test code changes。
+
+Design review request:
+
+- confirm worker `PQOF` producer should be designed before default heap/read
+  activation；
+- confirm `PQOF` and `PQWR` must remain separate protocols；
+- confirm streaming heap read must handle WOULD_BLOCK / FINISH / ERROR /
+  detach explicitly；
+- confirm no preflight readiness flag should become true in 5g-0 or 5g-1；
+- confirm the proposed 5g-1/5g-2/5g-3 split is small enough for separate code
+  review。
+
+Design Review - M11-E5g-0:
+
+- Review Agent verdict: `ACCEPT` after documentation fixes；
+- findings: none after revision；
+- fixed stale commit-id/status text for 5e-1, 5e-2, 5f, and README long
+  summary；
+- confirmed 5g-0 is design-only with no source or MTR changes；
+- confirmed preflight readiness flags must remain false；
+- confirmed `PQOF` and `PQWR` remain separate protocols；
+- confirmed readiness criteria cover worker producer, streaming heap read,
+  leader materialization, and default ordered `Read()`；
+- confirmed 5g-1 / 5g-2 / 5g-3 are DBUG/controlled smokes only and cannot be
+  interpreted as Filesort/Sort_param default runtime owner readiness。
 
 ## Risk Areas
 
