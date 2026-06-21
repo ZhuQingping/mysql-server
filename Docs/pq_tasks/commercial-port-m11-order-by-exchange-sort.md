@@ -258,3 +258,172 @@ Ref/ICP Explorer returned:
 - task split does not require optimizer/AccessPath/InnoDB changes before E3/E4；
 - `HAS_ORDER_BY` serial boundary remains explicit；
 - review decides whether E1 is safe to code next。
+
+## M11-E1: Exchange_sort Commercial Shape Compile-only
+
+Status: coding, validation, and Code-Docs-Test Review completed；ready to
+commit。
+
+Goal:
+
+- add a compile-only commercial-shape boundary to current `Exchange_sort`；
+- keep existing synthetic smoke behavior unchanged；
+- keep real ORDER BY SQL rejected by `HAS_ORDER_BY`；
+- do not consume real MQ rows, do not create `Filesort`, do not modify JOIN,
+  optimizer, AccessPath, handler, InnoDB, or worker launch behavior。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- this taskbook；
+- `Docs/pq_tasks/README.md` / main M11 taskbook for status only；
+- `mysql-test/suite/parallel_query/t/pq_commercial_order_by.test` and matching
+  result only for stronger negative serial-boundary assertions。
+
+Forbidden files:
+
+- `sql/parallel_query/pq_optimizer.*`；
+- `sql/sql_optimizer.*`；
+- `sql/sql_executor.*`；
+- `sql/sql_select.*`；
+- `sql/join_optimizer/access_path.*`；
+- `storage/innobase/**`；
+- `sql/handler.*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`。
+
+Required implementation direction:
+
+1. introduce narrow current-repo equivalents for the commercial ORDER BY record
+   shape:
+   - cached record wrapper；
+   - per-worker batch wrapper；
+   - batch compare state；
+2. add `Exchange_sort` fields for future commercial path ownership:
+   - min record array；
+   - per-worker record groups；
+   - heap pointer；
+   - stable output / index-sort flags or metadata placeholders；
+3. add fail-closed methods such as `init_order_gather_shape()`,
+   `read_ordered_record_shape()`, and `cleanup_order_gather_shape()`；
+4. these methods must be callable/compilable but not used by default SQL；
+5. constructor defaults must preserve existing synthetic smoke behavior；
+6. `read_mq_message()` must remain inert for real ORDER BY path；
+7. no `Filesort` / `Sort_param` construction in E1；if forward declarations are
+   needed, keep them header-only and unused；
+8. no new user-visible status counters unless needed to make compile-only shape
+   observable；prefer no new counters for E1。
+
+Required negative assertions:
+
+- `pq_commercial_order_by` must continue to prove real ORDER BY SQL stays
+  serial-boundary rejected by `HAS_ORDER_BY`；
+- `Parallel_queries_executed`, `Parallel_workers_launched`, and
+  `Parallel_ranges_dispatched` must not grow for real ORDER BY SQL；
+- keep the existing `Parallel_queries_fallback` delta assertion at 0, but do
+  not use fallback growth as proof of ORDER BY PQ execution because current
+  behavior is optimizer rejection rather than iterator fallback；
+- existing `Parallel_exchange_sort_smoke_*` synthetic counters must remain
+  stable。
+
+Required MTR update:
+
+- extend `pq_commercial_order_by` to snapshot `Parallel_workers_launched` and
+  `Parallel_ranges_dispatched` around the real ORDER BY statements；
+- assert `orderby_workers_launched_delta = 0`；
+- assert `orderby_ranges_dispatched_delta = 0`；
+- preserve existing `orderby_executed_delta = 0` and
+  `orderby_fallback_delta = 0` assertions；
+- preserve the `EXPLAIN` output showing `Not parallel HAS_ORDER_BY`。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11e1_target --tmpdir=/tmp/pqt_m11e1_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e1_full --tmpdir=/tmp/pqt_m11e1_full
+```
+
+Agent Task Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Code Agent。
+主控 Agent 是 Codex。
+当前任务是 M11-E1 Exchange_sort Commercial Shape Compile-only。
+
+请阅读：
+- Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md；
+- sql/parallel_query/exchange_sort.h；
+- sql/parallel_query/exchange_sort.cc；
+- sql/parallel_query/exchange.h；
+- /Users/zhuqingping/Work/Database/MySQL/taurusdbondstore/sql/parallel_query/exchange_sort.h；
+- /Users/zhuqingping/Work/Database/MySQL/taurusdbondstore/sql/parallel_query/exchange_sort.cc。
+
+任务目标：
+1. 给当前 `Exchange_sort` 补 compile-only 商用字段/方法边界；
+2. 默认 fail-closed，不读取真实 MQ，不修改 optimizer/AccessPath/handler/InnoDB；
+3. 保持现有 synthetic order merge smoke 行为不变；
+4. 更新 `pq_commercial_order_by` 负向断言，证明真实 ORDER BY SQL 不增长
+   executed/workers/ranges。
+
+完成后不要自行 commit。
+```
+
+Docs-Design Review:
+
+- first review returned `REVISE`；
+- required allowing focused `pq_commercial_order_by` test/result edits even
+  without new counters；
+- required negative assertions for `Parallel_queries_executed`,
+  `Parallel_workers_launched`, and `Parallel_ranges_dispatched`；
+- requested revisions have been applied；waiting for re-review。
+- re-review returned `ACCEPT`。
+
+Implementation:
+
+- added compile-only `PQ_orderby_cached_record`,
+  `PQ_orderby_record_batch`, and `PQ_orderby_batch_compare_state` shapes；
+- added future commercial ownership placeholders to `Exchange_sort` for
+  min-records, per-worker batches, heap pointer, worker count, stable-output
+  flag, and index-sort flag；
+- added fail-closed shape methods:
+  `init_order_gather_shape()`, `read_ordered_record_shape()`, and
+  `cleanup_order_gather_shape()`；
+- kept `read_mq_message()` inert and did not consume real MQ rows；
+- did not construct `Filesort` / `Sort_param`；
+- did not modify optimizer, AccessPath, handler, InnoDB, worker launch,
+  `Query_result_mq`, clone, or resolver files；
+- extended `pq_commercial_order_by` to assert real ORDER BY SQL does not grow
+  `Parallel_workers_launched` or `Parallel_ranges_dispatched` in addition to
+  the existing `Parallel_queries_executed` and fallback assertions。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `--record pq_commercial_order_by` executed successfully but MTR failed to
+  copy the generated result file with errno 1；the generated result was already
+  reflected in the working tree；
+- targeted MTR `pq_commercial_order_by pq_stats` passed, 3/3；
+- full `parallel_query` suite passed, 86/86。
+
+Code-Docs-Test Review:
+
+- Verdict: `ACCEPT`；
+- findings: none；
+- required fixes: none；
+- confirmed source changes are compile-only shape state with no caller added；
+- confirmed `read_mq_message()` remains inert and does not consume MQ；
+- confirmed `pq_commercial_order_by` now asserts executed/fallback/workers/ranges
+  deltas and preserves `Not parallel HAS_ORDER_BY`；
+- confirmed no optimizer, AccessPath, handler, InnoDB, worker launch,
+  `query_result_mq`, clone, or resolver files were modified。

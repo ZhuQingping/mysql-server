@@ -110,9 +110,10 @@ DOP=1、无 worker thread、无 clone/JOIN、无默认 AccessPath 行为变化�
 ### M11-E: ORDER BY Gather Merge Real Path Gate
 
 依赖 B/D。当前 `Exchange_sort` 只有 synthetic smoke，真实 ORDER BY 仍
-`HAS_ORDER_BY` fallback。E 不得早于 worker result adapter。E0 已创建
-design-only taskbook，先确认商用 `Exchange_sort` / `MQ_record_gather` /
-`ParallelScanIterator` ORDER path 依赖，再决定是否进入 compile-only E1。
+`HAS_ORDER_BY` fallback。E 不得早于 worker result adapter。E0 已完成
+design-only taskbook；E1 已完成 `Exchange_sort` commercial shape compile-only
+和 ORDER BY negative boundary hardening，未改变默认 SQL 行为。下一步进入
+E2 sorted row-frame adapter smoke 设计。
 
 ### M11-F: Ref / ICP Worker Path Continuation
 
@@ -133,9 +134,9 @@ leader-local gate。F 后续需要单独 taskbook/review，不与 E 混合。
 
 ## 当前推荐下一步
 
-1. 完成 M11-E0 ORDER BY path contract docs review；
-2. 若 review accepted，进入 M11-E1 compile-only shape；
-3. M11-F ref/ICP worker path 继续保持 read-only 差异调研，避免与 E1 混合。
+1. 提交 M11-E1 compile-only shape；
+2. 生成并 review M11-E2 sorted row-frame adapter smoke taskbook；
+3. M11-F ref/ICP worker path 继续保持独立 taskbook，避免与 E2 混合。
 
 ## Review
 

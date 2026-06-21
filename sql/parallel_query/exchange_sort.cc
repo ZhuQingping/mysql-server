@@ -110,6 +110,35 @@ bool Exchange_sort::read_mq_message(MQMessageType &type, void **datap,
   return false;
 }
 
+bool Exchange_sort::init_order_gather_shape(uint32 workers,
+                                            bool stable_output,
+                                            bool index_sort) {
+  cleanup_order_gather_shape();
+  if (workers == 0) return true;
+
+  m_min_records.resize(workers);
+  m_record_groups.resize(workers);
+  m_order_shape_workers = workers;
+  m_order_shape_stable_output = stable_output;
+  m_order_shape_index_sort = index_sort;
+  m_order_shape_initialized = true;
+  return false;
+}
+
+bool Exchange_sort::read_ordered_record_shape() {
+  return !m_order_shape_initialized;
+}
+
+void Exchange_sort::cleanup_order_gather_shape() {
+  m_min_records.clear();
+  m_record_groups.clear();
+  m_order_heap = nullptr;
+  m_order_shape_workers = 0;
+  m_order_shape_initialized = false;
+  m_order_shape_stable_output = false;
+  m_order_shape_index_sort = false;
+}
+
 bool Exchange_sort::run_synthetic_order_merge_smoke(uint32 *rows_read) {
   if (rows_read == nullptr) return true;
   *rows_read = 0;

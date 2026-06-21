@@ -58,6 +58,14 @@ SET @pq_fallback_before_order = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_workers_before_order = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @pq_ranges_before_order = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
 
 # ORDER BY is still optimizer-rejected in M8. It must stay serial and must not
 # create a PQ iterator until the real Exchange_sort worker path is wired.
@@ -75,6 +83,15 @@ SELECT
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_queries_fallback') -
       @pq_fallback_before_order AS orderby_fallback_delta;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_workers_launched') -
+      @pq_workers_before_order AS orderby_workers_launched_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @pq_ranges_before_order AS orderby_ranges_dispatched_delta;
 
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query=OFF;
