@@ -1045,6 +1045,36 @@ bool Exchange_sort::read_ordered_record_rich_status_shape(
   return false;
 }
 
+bool Exchange_sort::read_default_ordered_record_heap_shape(
+    std::vector<uchar> *row_image, PQ_orderby_ordered_read_status *status) {
+  if (row_image == nullptr || status == nullptr) return true;
+  row_image->clear();
+  *status = PQ_orderby_ordered_read_status::ERROR;
+
+  if (!m_orderby_default_heap_reader_shape_enabled) {
+    *status = PQ_orderby_ordered_read_status::DISABLED;
+    return false;
+  }
+
+  if (!m_orderby_rich_status_shape_enabled) {
+    *status = PQ_orderby_ordered_read_status::UNSUPPORTED;
+    return false;
+  }
+
+  if (read_ordered_record_rich_status_shape(row_image, status)) {
+    return true;
+  }
+
+  if (*status == PQ_orderby_ordered_read_status::EOF_REACHED ||
+      *status == PQ_orderby_ordered_read_status::DETACHED ||
+      *status == PQ_orderby_ordered_read_status::ERROR) {
+    const PQ_orderby_ordered_read_status terminal_status = *status;
+    cleanup_order_gather_shape();
+    *status = terminal_status;
+  }
+  return false;
+}
+
 bool Exchange_sort::init_orderby_materializer_owner_shape(
     TABLE *leader_table) {
   cleanup_orderby_materializer_owner_shape();
@@ -1166,6 +1196,7 @@ void Exchange_sort::cleanup_order_gather_shape() {
   m_orderby_read_mq_shape_enabled = false;
   m_orderby_rich_status_shape_enabled = false;
   m_orderby_materializer_shape_enabled = false;
+  m_orderby_default_heap_reader_shape_enabled = false;
   cleanup_sort_state_shape();
   cleanup_real_init_state_owner_shape();
   cleanup_runtime_sort_state_owner_shape();
@@ -2642,6 +2673,145 @@ bool Exchange_sort::run_orderby_rich_status_api_smoke() {
   return failed;
 }
 
+bool Exchange_sort::run_orderby_default_heap_reader_contract_smoke() {
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+  const uint32 rowid = 1;
+  const int64 record_low = 100;
+  const int64 record_high = 200;
+  const int64 key_low = 1;
+  const int64 key_high = 2;
+
+  std::vector<uchar> row_image;
+  PQ_orderby_ordered_read_status status =
+      PQ_orderby_ordered_read_status::ERROR;
+
+  bool failed = read_default_ordered_record_heap_shape(&row_image, &status) ||
+                status != PQ_orderby_ordered_read_status::DISABLED ||
+                !row_image.empty();
+
+  m_orderby_default_heap_reader_shape_enabled = true;
+  if (!failed) {
+    failed = read_default_ordered_record_heap_shape(&row_image, &status) ||
+             status != PQ_orderby_ordered_read_status::UNSUPPORTED ||
+             !row_image.empty();
+  }
+  m_orderby_default_heap_reader_shape_enabled = false;
+  cleanup_order_gather_shape();
+
+  auto setup_exchange = [&](Exchange_sort *exchange) {
+    return exchange == nullptr || exchange->init() ||
+           exchange->init_real_init_state_owner_shape(
+               kWorkers, /*stable_output=*/true, /*index_sort=*/false,
+               kSortOrderLength, kMaxRecordLength, kRefLength) ||
+           exchange->allocate_real_init_buffers_shape() ||
+           exchange->init_orderby_heap_reader_state_shape(
+               kWorkers, /*descending=*/false);
+  };
+
+  auto enable_default_heap_reader = [](Exchange_sort *exchange) {
+    exchange->m_orderby_rich_status_shape_enabled = true;
+    exchange->m_orderby_default_heap_reader_shape_enabled = true;
+  };
+
+  Exchange_sort row_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed) failed = setup_exchange(&row_exchange);
+  if (!failed) {
+    enable_default_heap_reader(&row_exchange);
+    PQ_orderby_worker_frame_producer_owner worker0{
+        row_exchange.get_mq_handle(0), 0};
+    PQ_orderby_worker_frame_producer_owner worker2{
+        row_exchange.get_mq_handle(2), 2};
+    failed =
+        pq_orderby_worker_frame_producer_owner_emit_row(
+            &worker0, &record_high, sizeof(record_high), &rowid,
+            sizeof(rowid), key_high) ||
+        pq_orderby_worker_frame_producer_owner_finish(&worker0) ||
+        pq_orderby_worker_frame_producer_owner_emit_row(
+            &worker2, &record_low, sizeof(record_low), &rowid, sizeof(rowid),
+            key_low) ||
+        pq_orderby_worker_frame_producer_owner_finish(&worker2);
+  }
+  if (!failed) {
+    failed = row_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status) ||
+             status != PQ_orderby_ordered_read_status::WOULD_BLOCK ||
+             !row_image.empty();
+  }
+  if (!failed) {
+    PQ_orderby_worker_frame_producer_owner worker1{
+        row_exchange.get_mq_handle(1), 1};
+    failed = pq_orderby_worker_frame_producer_owner_finish(&worker1);
+  }
+  const int64 expected_rows[] = {record_low, record_high};
+  for (const int64 expected_row : expected_rows) {
+    if (failed) break;
+    failed = row_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status) ||
+             status != PQ_orderby_ordered_read_status::ROW ||
+             row_image.size() != sizeof(expected_row);
+    if (!failed) {
+      int64 actual_row = 0;
+      memcpy(&actual_row, row_image.data(), sizeof(actual_row));
+      failed = actual_row != expected_row;
+    }
+  }
+  if (!failed) {
+    failed = row_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status) ||
+             status != PQ_orderby_ordered_read_status::EOF_REACHED ||
+             !row_image.empty();
+  }
+  if (!failed) {
+    failed = row_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status) ||
+             status != PQ_orderby_ordered_read_status::DISABLED ||
+             !row_image.empty();
+  }
+  row_exchange.cleanup_order_gather_shape();
+  row_exchange.cleanup();
+
+  Exchange_sort error_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed) failed = setup_exchange(&error_exchange);
+  if (!failed) {
+    enable_default_heap_reader(&error_exchange);
+    PQ_orderby_worker_frame_producer_owner worker0{
+        error_exchange.get_mq_handle(0), 0};
+    failed = pq_orderby_worker_frame_producer_owner_error(&worker0) ||
+             error_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status) ||
+             status != PQ_orderby_ordered_read_status::ERROR ||
+             !row_image.empty() ||
+             error_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status) ||
+             status != PQ_orderby_ordered_read_status::DISABLED;
+  }
+  error_exchange.cleanup_order_gather_shape();
+  error_exchange.cleanup();
+
+  Exchange_sort detached_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed) failed = setup_exchange(&detached_exchange);
+  if (!failed) {
+    enable_default_heap_reader(&detached_exchange);
+    PQ_orderby_worker_frame_producer_owner worker0{
+        detached_exchange.get_mq_handle(0), 0};
+    failed = pq_orderby_worker_frame_producer_owner_detach(&worker0) ||
+             detached_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status) ||
+             status != PQ_orderby_ordered_read_status::DETACHED ||
+             !row_image.empty() ||
+             detached_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status) ||
+             status != PQ_orderby_ordered_read_status::DISABLED;
+  }
+  detached_exchange.cleanup_order_gather_shape();
+  detached_exchange.cleanup();
+
+  return failed;
+}
+
 bool Exchange_sort::run_orderby_frame_merge_smoke(uint32 *rows_read,
                                                   uint32 *finishes_read) {
   if (rows_read == nullptr || finishes_read == nullptr) return true;
@@ -3557,6 +3727,9 @@ bool Exchange_sort::run_orderby_ordered_reader_skeleton_smoke(
   if (initialized_here) cleanup();
   if (!failed) {
     failed = run_orderby_rich_status_api_smoke();
+  }
+  if (!failed) {
+    failed = run_orderby_default_heap_reader_contract_smoke();
   }
   return failed || *rows_read != 4 || *finishes_read != 3 ||
          *would_blocks_read == 0 || *errors_read != 1 ||

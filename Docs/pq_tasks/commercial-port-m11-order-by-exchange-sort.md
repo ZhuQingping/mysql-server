@@ -7212,6 +7212,116 @@ Code/Doc/Test Review - M11-E5p:
 - confirmed no public readiness counter, sysvar, optimizer, iterator, handler,
   InnoDB, or default execution path changes。
 
+### M11-E5q: Default Exchange_sort Heap Reader Integration Contract
+
+Status: Code/Doc/Test Review accepted；ready to commit。
+
+Goal:
+
+- add a default-path-shaped heap reader helper contract inside `Exchange_sort`；
+- keep the helper disabled by default；
+- in controlled smoke, compose worker `PQOF` producer owner, typed loader, owned
+  heap reader, and E5m rich status；
+- prove `ROW`, `EOF_REACHED`, `WOULD_BLOCK`, `ERROR`, `DETACHED`, and cleanup
+  semantics without opening visible ORDER BY PQ；
+- keep preflight `exchange_sort_heap_read_ready` and
+  `default_ordered_read_ready` false。
+
+Design Explorer - M11-E5q:
+
+- verdict: coding allowed, but only fail-closed contract coding；
+- helper must be default-path compatible but disabled unless a private smoke
+  flag is enabled；
+- controlled/DBUG smoke may use scalar sort keys and `PQOF` producer owner；
+- real Filesort sort-key generation, rowid tie-break, wait/kill policy,
+  materializer default path, and iterator `Read()` remain blocked。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden:
+
+- `pq_optimizer.*` readiness, `HAS_ORDER_BY`, or `execution_disabled` changes；
+- AccessPath, executor, iterator `Read()`, `Gather_operator::init()`,
+  `Query_result_mq`, `PQWR`, handler/InnoDB, worker launch, sysvar, public
+  counter, or visible ORDER BY changes；
+- claiming scalar / byte-vector sort keys are equivalent to real Filesort keys。
+
+Implementation:
+
+- added private `m_orderby_default_heap_reader_shape_enabled`, default false；
+- added private `read_default_ordered_record_heap_shape()`；
+- disabled helper returns `DISABLED`；
+- enabled helper requires E5m rich status flag, otherwise returns
+  `UNSUPPORTED`；
+- controlled path delegates to E5m rich status and cleans up owned gather state
+  on `EOF_REACHED`, `ERROR`, and `DETACHED`；
+- added `run_orderby_default_heap_reader_contract_smoke()`；
+- smoke uses E5p worker producer owner to emit worker `PQOF` frames and covers
+  disabled, unsupported, would-block, ordered rows, EOF cleanup, ERROR cleanup,
+  DETACHED cleanup, and repeat post-cleanup disabled behavior；
+- wired the smoke through existing ordered-reader skeleton smoke；
+- did not add counters or MTR files。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR:
+  `pq_commercial_order_by pq_commercial_order_by_frames pq_stats`
+  plus `shutdown_report` passed；
+- full `parallel_query` suite passed: 89/89。
+
+Completion Report - M11-E5q:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added private `m_orderby_default_heap_reader_shape_enabled`；
+  - added `read_default_ordered_record_heap_shape()`；
+  - disabled helper returns `DISABLED`；
+  - enabled helper requires E5m rich status and otherwise returns
+    `UNSUPPORTED`；
+  - terminal `EOF_REACHED`, `ERROR`, and `DETACHED` statuses clean up owned
+    gather state before returning the observed status；
+  - added `run_orderby_default_heap_reader_contract_smoke()`；
+  - smoke composes E5p producer owner, typed `PQOF` loader, owned heap reader,
+    and E5m rich status；
+  - smoke covers disabled, unsupported, would-block, ordered ROWs, EOF cleanup,
+    ERROR cleanup, DETACHED cleanup, and post-cleanup disabled behavior；
+  - no optimizer, preflight readiness, iterator, `Gather_operator`,
+    `Query_result_mq`, handler/InnoDB, sysvar, or public counter changes。
+- residual risk:
+  - this is still controlled heap-reader evidence；
+  - real default iterator integration, rowid/ref tie-break, wait/kill policy,
+    real Filesort key generation, and visible ORDER BY eligibility remain
+    blocked。
+
+Code/Doc/Test Review - M11-E5q:
+
+- Review Agent verdict: `ACCEPT`；
+- no findings；
+- confirmed changed-file scope is limited to `exchange_sort.*` plus task docs；
+- confirmed the helper is default disabled and returns `DISABLED` unless the
+  private smoke flag is enabled；
+- confirmed rich-status-disabled path returns `UNSUPPORTED`；
+- confirmed `EOF_REACHED`, `ERROR`, and `DETACHED` preserve the observed
+  terminal status while cleaning owned gather state；
+- confirmed `WOULD_BLOCK` does not clean cached rows or turn into EOF；
+- confirmed controlled smoke composes E5p producer owner, typed loader, owned
+  heap reader, and E5m rich status；
+- confirmed no optimizer, preflight readiness, `HAS_ORDER_BY`, iterator
+  `Read()`, `Gather_operator`, `Query_result_mq`, `PQWR`, handler/InnoDB,
+  sysvar, public counter, or visible ORDER BY changes；
+- confirmed materializer default remains unchanged and visible ORDER BY PQ
+  remains blocked。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

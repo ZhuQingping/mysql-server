@@ -339,6 +339,7 @@ class Exchange_sort final : public Exchange {
   bool m_orderby_read_mq_shape_enabled{false};
   bool m_orderby_rich_status_shape_enabled{false};
   bool m_orderby_materializer_shape_enabled{false};
+  bool m_orderby_default_heap_reader_shape_enabled{false};
 
   bool init_sort_state_shape(uint32 workers, bool stable_output,
                              bool index_sort, uint32 sort_order_length,
@@ -388,6 +389,9 @@ class Exchange_sort final : public Exchange {
   bool read_ordered_record_rich_status_shape(
       std::vector<uchar> *row_image, PQ_orderby_ordered_read_status *status);
   bool run_orderby_rich_status_api_smoke();
+  bool read_default_ordered_record_heap_shape(
+      std::vector<uchar> *row_image, PQ_orderby_ordered_read_status *status);
+  bool run_orderby_default_heap_reader_contract_smoke();
   bool init_orderby_materializer_owner_shape(TABLE *leader_table);
   bool materialize_ordered_record_owner_shape(
       TABLE *leader_table, const std::vector<uchar> &row_image,
