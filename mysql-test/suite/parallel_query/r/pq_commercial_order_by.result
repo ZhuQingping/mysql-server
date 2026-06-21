@@ -86,6 +86,38 @@ SET @pq_orderby_preflight_ready_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_orderby_execution_preflight_ready');
+SET @pq_orderby_preflight_missing_filesort_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_filesort');
+SET @pq_orderby_preflight_missing_sort_param_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_sort_param');
+SET @pq_orderby_preflight_missing_worker_frame_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_worker_frame');
+SET @pq_orderby_preflight_missing_exchange_heap_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_exchange_heap');
+SET @pq_orderby_preflight_missing_leader_mat_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_leader_materialize');
+SET @pq_orderby_preflight_missing_rowid_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_rowid');
+SET @pq_orderby_preflight_missing_ordered_read_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_ordered_read');
+SET @pq_orderby_preflight_missing_error_diag_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_error_diag');
 SET @old_debug=@@debug;
 SET SESSION debug="+d,pq_orderby_eligibility_contract_smoke";
 SET SESSION debug="+d,pq_orderby_execution_preflight_smoke";
@@ -122,6 +154,44 @@ WHERE variable_name = 'Parallel_orderby_execution_preflight_ready') -
 @pq_orderby_preflight_ready_before AS orderby_preflight_ready_delta;
 orderby_elig_attempts_delta	orderby_elig_candidate_disabled_delta	orderby_elig_unsupported_delta	orderby_preflight_attempts_delta	orderby_preflight_blocked_delta	orderby_preflight_ready_delta
 1	1	0	1	1	0
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_filesort') -
+@pq_orderby_preflight_missing_filesort_before AS missing_filesort_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_sort_param') -
+@pq_orderby_preflight_missing_sort_param_before AS missing_sort_param_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_worker_frame') -
+@pq_orderby_preflight_missing_worker_frame_before AS missing_worker_frame_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_exchange_heap') -
+@pq_orderby_preflight_missing_exchange_heap_before AS missing_exchange_heap_delta;
+missing_filesort_delta	missing_sort_param_delta	missing_worker_frame_delta	missing_exchange_heap_delta
+1	1	1	1
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_leader_materialize') -
+@pq_orderby_preflight_missing_leader_mat_before AS missing_leader_mat_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_rowid') -
+@pq_orderby_preflight_missing_rowid_before AS missing_rowid_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_ordered_read') -
+@pq_orderby_preflight_missing_ordered_read_before AS missing_ordered_read_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_orderby_preflight_missing_error_diag') -
+@pq_orderby_preflight_missing_error_diag_before AS missing_error_diag_delta;
+missing_leader_mat_delta	missing_rowid_delta	missing_ordered_read_delta	missing_error_diag_delta
+1	1	1	1
 EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 4;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	6	100.00	Using filesort; Not parallel HAS_ORDER_BY

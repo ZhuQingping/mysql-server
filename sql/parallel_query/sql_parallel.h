@@ -206,6 +206,14 @@ struct PQ_global_stats {
   std::atomic<uint64> orderby_execution_preflight_attempts{0};  ///< 5e-2
   std::atomic<uint64> orderby_execution_preflight_blocked{0};
   std::atomic<uint64> orderby_execution_preflight_ready{0};
+  std::atomic<uint64> orderby_execution_preflight_missing_filesort_runtime{0};  ///< 5f
+  std::atomic<uint64> orderby_execution_preflight_missing_sort_param_runtime{0};
+  std::atomic<uint64> orderby_execution_preflight_missing_worker_frame_producer{0};
+  std::atomic<uint64> orderby_execution_preflight_missing_exchange_heap_read{0};
+  std::atomic<uint64> orderby_execution_preflight_missing_leader_materialization{0};
+  std::atomic<uint64> orderby_execution_preflight_missing_rowid_tiebreak{0};
+  std::atomic<uint64> orderby_execution_preflight_missing_default_ordered_read{0};
+  std::atomic<uint64> orderby_execution_preflight_missing_error_diagnostics{0};
   std::atomic<uint64> orderby_filesort_construct_smoke_attempts{0};  ///< E5d-3c
   std::atomic<uint64> orderby_filesort_construct_smoke_success{0};  ///< E5d-3c
   std::atomic<uint64> orderby_filesort_construct_smoke_unsupported{0};  ///< E5d-3c
@@ -369,6 +377,22 @@ struct PQ_global_stats {
     orderby_execution_preflight_attempts.store(0, std::memory_order_relaxed);
     orderby_execution_preflight_blocked.store(0, std::memory_order_relaxed);
     orderby_execution_preflight_ready.store(0, std::memory_order_relaxed);
+    orderby_execution_preflight_missing_filesort_runtime.store(
+        0, std::memory_order_relaxed);
+    orderby_execution_preflight_missing_sort_param_runtime.store(
+        0, std::memory_order_relaxed);
+    orderby_execution_preflight_missing_worker_frame_producer.store(
+        0, std::memory_order_relaxed);
+    orderby_execution_preflight_missing_exchange_heap_read.store(
+        0, std::memory_order_relaxed);
+    orderby_execution_preflight_missing_leader_materialization.store(
+        0, std::memory_order_relaxed);
+    orderby_execution_preflight_missing_rowid_tiebreak.store(
+        0, std::memory_order_relaxed);
+    orderby_execution_preflight_missing_default_ordered_read.store(
+        0, std::memory_order_relaxed);
+    orderby_execution_preflight_missing_error_diagnostics.store(
+        0, std::memory_order_relaxed);
     orderby_filesort_construct_smoke_attempts.store(
         0, std::memory_order_relaxed);
     orderby_filesort_construct_smoke_success.store(0,

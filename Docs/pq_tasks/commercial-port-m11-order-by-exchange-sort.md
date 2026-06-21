@@ -31,7 +31,9 @@ design completed and committed；M11-E5d-5e-1 ORDER BY eligibility contract
 helper completed and committed as `f54474bda65`；M11-E5d-5e-2 ORDER BY
 execution preflight blocker completed and committed as `68b27d804ca`；real
 ORDER BY execution, default worker MQ consumption, and default ordered `Read()`
-remain disabled。
+remain disabled；M11-E5d-5f runtime prerequisite diagnostics coding and
+validation completed，Code/Doc/Test Review Agent accepted，committed as
+`e38ed2e3c75`。
 
 ## 背景
 
@@ -4184,7 +4186,7 @@ Code/Doc/Test Review - M11-E5d-5e-1:
 
 Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
 and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
-waiting for commit。
+committed as `e38ed2e3c75`。
 
 Goal:
 
@@ -4263,6 +4265,89 @@ Code/Doc/Test Review - M11-E5d-5e-2:
 - residual risk: unsupported ORDER BY shapes still rely on the 5e-1
   fail-closed predicate and existing serial negative tests rather than
   per-shape preflight smoke assertions。
+
+### M11-E5d-5f: ORDER BY Runtime Prerequisite Diagnostics
+
+Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
+and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
+waiting for commit。
+
+Goal:
+
+- keep the 5e-2 execution preflight fail-closed；
+- split the central blocker into per-prerequisite diagnostics so later tasks
+  can turn on readiness one dependency at a time；
+- keep `HAS_ORDER_BY` serial boundary, visible ORDER BY execution, default
+  worker MQ consumption, and default ordered `Read()` disabled。
+
+Implementation summary:
+
+- kept `pq_build_orderby_execution_preflight()` returning
+  `BLOCKED_EXECUTION_DISABLED` for the first future candidate；
+- added per-prerequisite missing counters for:
+  - filesort runtime；
+  - sort_param runtime；
+  - worker ORDER BY frame producer；
+  - `Exchange_sort` heap read；
+  - leader materialization；
+  - rowid tie-break；
+  - default ordered `Read()`；
+  - kill/detach/error diagnostics；
+- exposed short `SHOW STATUS` names under
+  `Parallel_orderby_preflight_missing_*` to avoid performance_schema variable
+  name truncation；
+- updated `pq_commercial_order_by` to assert every missing prerequisite counter
+  grows by 1 under the DBUG preflight smoke；
+- updated `pq_stats` expected variable count and variable list。
+
+Scope confirmation:
+
+- no `Exchange_sort`, iterator, AccessPath, handler, InnoDB, worker launch, or
+  worker MQ changes；
+- no `Filesort` / `Sort_param` construction or default lifetime ownership；
+- no optimizer acceptance change；
+- no user-visible ORDER BY PQ execution；
+- ordinary ORDER BY SQL still reports `Not parallel HAS_ORDER_BY`。
+
+Validation result:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11e5f_target --tmpdir=/tmp/pqt_m11e5f_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5f_full --tmpdir=/tmp/pqt_m11e5f_full
+```
+
+Result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed，3/3 including `shutdown_report`:
+  `pq_commercial_order_by pq_stats`；
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-5f:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed missing prerequisite counters increment only in the DBUG
+  `pq_orderby_execution_preflight_smoke` path and only when the preflight is
+  blocked by execution disabled；
+- confirmed `pq_build_orderby_execution_preflight()` remains fail-closed with
+  all eight prerequisites false；
+- confirmed the ORDER BY hook still returns `HAS_ORDER_BY` after smoke helpers
+  and does not open visible ORDER BY execution；
+- confirmed short `Parallel_orderby_preflight_missing_*` status names avoid
+  performance_schema variable-name truncation and are wired through stats,
+  reset, SHOW STATUS, and MTR results；
+- confirmed forbidden areas were not touched: `Exchange_sort`, iterators,
+  AccessPath, handler/InnoDB, worker MQ, and default ordered `Read()`；
+- residual risk: turning any prerequisite ready later requires a dedicated
+  default runtime owner, lifecycle, error/KILL path, MTR coverage, and review。
 
 ## Risk Areas
 

@@ -1144,6 +1144,40 @@ static void pq_maybe_run_orderby_execution_preflight_smoke(
   } else if (preflight.blocked_by_execution_disabled()) {
     pq_global_stats.orderby_execution_preflight_blocked.fetch_add(
         1, std::memory_order_relaxed);
+    if (!preflight.filesort_runtime_ready) {
+      pq_global_stats.orderby_execution_preflight_missing_filesort_runtime
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!preflight.sort_param_runtime_ready) {
+      pq_global_stats.orderby_execution_preflight_missing_sort_param_runtime
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!preflight.worker_order_frame_producer_ready) {
+      pq_global_stats
+          .orderby_execution_preflight_missing_worker_frame_producer.fetch_add(
+              1, std::memory_order_relaxed);
+    }
+    if (!preflight.exchange_sort_heap_read_ready) {
+      pq_global_stats.orderby_execution_preflight_missing_exchange_heap_read
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!preflight.leader_materialization_ready) {
+      pq_global_stats
+          .orderby_execution_preflight_missing_leader_materialization.fetch_add(
+              1, std::memory_order_relaxed);
+    }
+    if (!preflight.rowid_tiebreak_ready) {
+      pq_global_stats.orderby_execution_preflight_missing_rowid_tiebreak
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!preflight.default_ordered_read_ready) {
+      pq_global_stats.orderby_execution_preflight_missing_default_ordered_read
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!preflight.kill_detach_error_diagnostics_ready) {
+      pq_global_stats.orderby_execution_preflight_missing_error_diagnostics
+          .fetch_add(1, std::memory_order_relaxed);
+    }
   }
 }
 

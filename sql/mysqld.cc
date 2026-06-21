@@ -9732,6 +9732,30 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_blocked,
                                 orderby_execution_preflight_blocked)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_ready,
                                 orderby_execution_preflight_ready)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_missing_filesort_runtime,
+    orderby_execution_preflight_missing_filesort_runtime)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_missing_sort_param_runtime,
+    orderby_execution_preflight_missing_sort_param_runtime)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_missing_worker_frame_producer,
+    orderby_execution_preflight_missing_worker_frame_producer)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_missing_exchange_heap_read,
+    orderby_execution_preflight_missing_exchange_heap_read)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_missing_leader_materialization,
+    orderby_execution_preflight_missing_leader_materialization)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_missing_rowid_tiebreak,
+    orderby_execution_preflight_missing_rowid_tiebreak)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_missing_default_ordered_read,
+    orderby_execution_preflight_missing_default_ordered_read)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_missing_error_diagnostics,
+    orderby_execution_preflight_missing_error_diagnostics)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_construct_smoke_attempts,
                                 orderby_filesort_construct_smoke_attempts)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_construct_smoke_success,
@@ -10861,6 +10885,30 @@ SHOW_VAR status_vars[] = {
     {"Parallel_orderby_execution_preflight_ready",
      (char *)&show_pq_orderby_execution_preflight_ready, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_preflight_missing_ordered_read",
+     (char *)&show_pq_orderby_execution_preflight_missing_default_ordered_read,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_preflight_missing_error_diag",
+     (char *)&show_pq_orderby_execution_preflight_missing_error_diagnostics,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_preflight_missing_exchange_heap",
+     (char *)&show_pq_orderby_execution_preflight_missing_exchange_heap_read,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_preflight_missing_filesort",
+     (char *)&show_pq_orderby_execution_preflight_missing_filesort_runtime,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_preflight_missing_leader_materialize",
+     (char *)&show_pq_orderby_execution_preflight_missing_leader_materialization,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_preflight_missing_rowid",
+     (char *)&show_pq_orderby_execution_preflight_missing_rowid_tiebreak,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_preflight_missing_sort_param",
+     (char *)&show_pq_orderby_execution_preflight_missing_sort_param_runtime,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_preflight_missing_worker_frame",
+     (char *)&show_pq_orderby_execution_preflight_missing_worker_frame_producer,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_filesort_construct_smoke_attempts",
      (char *)&show_pq_orderby_filesort_construct_smoke_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

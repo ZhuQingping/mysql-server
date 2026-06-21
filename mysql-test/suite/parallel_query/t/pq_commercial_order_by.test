@@ -91,6 +91,38 @@ SET @pq_orderby_preflight_ready_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_orderby_execution_preflight_ready');
+SET @pq_orderby_preflight_missing_filesort_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_filesort');
+SET @pq_orderby_preflight_missing_sort_param_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_sort_param');
+SET @pq_orderby_preflight_missing_worker_frame_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_worker_frame');
+SET @pq_orderby_preflight_missing_exchange_heap_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_exchange_heap');
+SET @pq_orderby_preflight_missing_leader_mat_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_leader_materialize');
+SET @pq_orderby_preflight_missing_rowid_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_rowid');
+SET @pq_orderby_preflight_missing_ordered_read_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_ordered_read');
+SET @pq_orderby_preflight_missing_error_diag_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_error_diag');
 
 # 5e-1/5e-2: first visible ORDER BY candidate is recognized, but execution
 # remains disabled by the central preflight blocker. The query must still be
@@ -126,6 +158,42 @@ SELECT
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_orderby_execution_preflight_ready') -
       @pq_orderby_preflight_ready_before AS orderby_preflight_ready_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_filesort') -
+      @pq_orderby_preflight_missing_filesort_before AS missing_filesort_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_sort_param') -
+      @pq_orderby_preflight_missing_sort_param_before AS missing_sort_param_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_worker_frame') -
+      @pq_orderby_preflight_missing_worker_frame_before AS missing_worker_frame_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_exchange_heap') -
+      @pq_orderby_preflight_missing_exchange_heap_before AS missing_exchange_heap_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_leader_materialize') -
+      @pq_orderby_preflight_missing_leader_mat_before AS missing_leader_mat_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_rowid') -
+      @pq_orderby_preflight_missing_rowid_before AS missing_rowid_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_ordered_read') -
+      @pq_orderby_preflight_missing_ordered_read_before AS missing_ordered_read_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_error_diag') -
+      @pq_orderby_preflight_missing_error_diag_before AS missing_error_diag_delta;
 
 # ORDER BY is still optimizer-rejected in M8. It must stay serial and must not
 # create a PQ iterator until the real Exchange_sort worker path is wired.
