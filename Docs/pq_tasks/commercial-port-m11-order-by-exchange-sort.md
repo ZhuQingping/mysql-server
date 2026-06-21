@@ -6131,6 +6131,191 @@ Docs Review - M11-E5h-4:
 - confirmed the next action correctly points to the default worker `PQOF`
   producer / `Exchange_sort` default heap-reader boundary。
 
+### M11-E5i: Worker PQOF Producer Runtime Boundary
+
+Status: design accepted；ready for M11-E5i-1 serial coding。
+
+Goal:
+
+- choose the next smallest ORDER BY runtime gap after E5h；
+- define a fail-closed boundary for moving from controlled `PQOF` smoke frames
+  toward a worker-local producer contract；
+- do not open user-visible ORDER BY PQ and do not change preflight readiness。
+
+Design Explorer - M11-E5i:
+
+- verdict: `ACCEPT A`；choose worker-local controlled `PQOF` producer
+  boundary before `Exchange_sort` default heap-reader；
+- rejected immediate `Exchange_sort` default heap-reader work because it would
+  touch default Exchange selection, leader reader state machine,
+  materialization, wait/kill/error semantics, and default `Read()` behavior in
+  one step；
+- rejected more design-only inventory as the primary next action because
+  E5g-4f and E5h-4 already closed the visible-gate and preflight-evidence
+  decisions；
+- recommended serial coding, with only design/review agents running in
+  parallel。
+
+Decision:
+
+- next implementation unit is M11-E5i-1；
+- M11-E5i-1 must be an incremental consolidation of the existing E5g-4d
+  producer adapter skeleton, not a new producer family；
+- M11-E5i-1 may rename, reuse, document, or minimally enhance the existing
+  adapter skeleton so it represents one worker-local controlled `PQOF`
+  producer-owner contract；
+- M11-E5i-1 must remain DBUG-only or controlled-smoke-only；
+- M11-E5i-1 must not wire the helper into default worker execution, default
+  `Gather_operator::init()`, default `ParallelScanIterator::Read()`, or
+  visible ORDER BY eligibility。
+
+Existing baseline / Delta from M11-E5g-4d:
+
+- E5g-4d already added `PQ_orderby_worker_producer_adapter_shape`；
+- E5g-4d already added `pq_orderby_worker_producer_adapter_emit_row()`,
+  `..._finish()`, and `..._error()` helpers using existing `PQOF` frames；
+- E5g-4d already added
+  `Exchange_sort::run_orderby_worker_producer_adapter_skeleton_smoke()`；
+- E5g-4d already validates ROW / FINISH / ERROR, per-worker monotonic scalar
+  sort-key reject, and after-FINISH reject；
+- E5g-4d already added DBUG flag
+  `pq_orderby_worker_producer_adapter_skeleton_smoke` and public counters
+  `Parallel_orderby_worker_adapter_*`；
+- source still also contains older
+  `PQ_orderby_worker_frame_producer_shape` /
+  `run_orderby_worker_frame_producer_smoke()` from the pre-adapter smoke path；
+- therefore E5i-1 must not add a third parallel `PQOF` producer shape or
+  another status-variable family。
+
+M11-E5i-1 Coding Task: Consolidate worker-local PQOF producer owner contract
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/mysqld.cc` only if a new status variable is strictly needed；
+- `mysql-test/suite/parallel_query/t/pq_commercial_order_by*.test`；
+- matching `mysql-test/suite/parallel_query/r/*.result` files；
+- `mysql-test/suite/parallel_query/r/pq_stats.result` only if status
+  variables change；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden files and behavior:
+
+- no `sql/parallel_query/pq_optimizer.*` changes, except a later separately
+  reviewed fail-closed diagnostic that does not set readiness true；
+- no `sql/join_optimizer/access_path.*` changes；
+- no `sql/sql_executor.*`, `sql/sql_select.*`, `sql/handler.*`, or
+  `storage/innobase/**` changes；
+- no `sql/parallel_query/pq_clone*` changes；
+- no `sql/parallel_query/query_result_mq.*` changes and no PQWR wire-format
+  changes；
+- no default `Gather_operator::init()` `Exchange_nosort` replacement；
+- no default `ParallelScanIterator::Read()` ORDER BY path；
+- no optimizer eligibility / `HAS_ORDER_BY` relaxation；
+- no user-visible ORDER BY PQ execution。
+
+Required fail-closed conditions:
+
+- `pq_build_orderby_execution_preflight()` continues to return false；
+- `worker_order_frame_producer_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- `default_ordered_read_ready=false`；
+- `execution_disabled=true`；
+- `HAS_ORDER_BY` remains the normal SQL serial boundary；
+- DBUG smoke counters must not be interpreted as runtime readiness；
+- ordinary ORDER BY SQL must not increase `Parallel_queries_executed`,
+  worker-count, or range-count counters。
+
+Implementation expectations for M11-E5i-1:
+
+- keep `PQOF` separate from `PQWR` / `PQRM` protocols；
+- reuse or consolidate the existing E5g-4d adapter skeleton into the single
+  named worker-local producer-owner contract；
+- do not introduce a third `PQOF` producer shape, helper family, DBUG flag, or
+  status-variable family；
+- if code changes are needed, prefer:
+  - making the adapter skeleton naming and ownership comments explicit；
+  - removing ambiguity between the older frame-producer smoke and the adapter
+    owner contract without deleting tested coverage；
+  - adding focused smoke assertions only for missing ownership/lifetime
+    behavior；
+- keep existing validation of after-FINISH reject and per-worker key-order
+  reject behavior；
+- keep the first sort-key contract scalar and limited to controlled ASC smoke；
+- document that real `Filesort` key generation, DESC, NULL ordering, rowid
+  tie-break, and default worker integration remain future work。
+
+New acceptance criteria for M11-E5i-1:
+
+- the task report must explain why the resulting code has exactly one intended
+  adapter-owner contract for future worker-local `PQOF` production；
+- any remaining older producer smoke must be documented as legacy/contract
+  coverage and not as a second runtime owner；
+- no new `PQOF` producer counter family may be added unless a review identifies
+  a concrete observability gap；
+- ordinary ORDER BY SQL must continue to show zero ordinary-path growth for the
+  existing worker adapter counters。
+
+Validation for M11-E5i-1:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by \
+  pq_commercial_order_by_frames pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5i_target --tmpdir=/tmp/pqt_m11e5i_target
+```
+
+- full MTR:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5i_full --tmpdir=/tmp/pqt_m11e5i_full
+```
+
+Review requirements:
+
+- before coding: Design Review Agent must accept this taskbook；
+- after coding: Code/Doc/Test Review Agent must verify source scope,
+  fail-closed preflight behavior, ordinary ORDER BY negative counters, and MTR
+  evidence；
+- if review asks to touch default execution, split the task and stop before
+  opening a visible path。
+
+Design Review - M11-E5i:
+
+- verdict: `REVISE` before coding；
+- no critical findings；
+- important finding: original E5i-1 wording overlapped with completed
+  M11-E5g-4d adapter skeleton and could cause a coding agent to create a third
+  producer family；
+- required fix applied here:
+  - added this E5g-4d baseline/delta section；
+  - changed wording from default worker producer boundary to worker-local
+    controlled `PQOF` producer boundary；
+  - changed E5i-1 from "add a producer" to "consolidate the existing adapter
+    skeleton into a single owner contract"；
+  - explicitly forbade adding a third producer shape / DBUG flag /
+    status-variable family。
+
+Design Re-review - M11-E5i:
+
+- verdict: `ACCEPT`；
+- confirmed E5i-1 is now scoped as consolidation/enhancement of the existing
+  E5g-4d adapter skeleton, not a new producer；
+- confirmed third `PQOF` producer shape/helper/DBUG/status family is explicitly
+  forbidden；
+- confirmed fail-closed behavior, preflight readiness false state, and
+  `HAS_ORDER_BY` serial boundary remain preserved；
+- approved entering M11-E5i-1 serial coding。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
