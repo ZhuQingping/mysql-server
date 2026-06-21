@@ -567,6 +567,171 @@ Docs-Design Review:
 - non-blocking review notes require D4a to define strict allowed/forbidden
   files and worker TABLE open/close ownership before source edits。
 
+### M11-D4a: Worker Attach Contract Smoke Taskbook
+
+Status: taskbook completed / Docs-Design Review accepted。
+
+Goal:
+
+- add an isolated debug-only smoke for the worker attach contract that D4
+  selected；
+- open an independent worker TABLE/handler through the existing
+  `PQ_Worker_open_context` path；
+- call `pq_worker_scan_init()` and `pq_worker_scan_end()` exactly once on the
+  worker handler；
+- verify cleanup and observability without producing rows；
+- keep normal execution fallback before any worker-start commit point。
+
+Existing primitives to reuse:
+
+- `Gather_operator::configure_worker_open_contexts()` fills
+  `PQ_Worker_open_context` from leader table and leader context；
+- `pq_create_worker_thd()` / `pq_destroy_worker_thd()` own the worker THD；
+- `pq_open_worker_table()` / `pq_close_worker_table()` own the worker SQL TABLE
+  open/close；
+- `ha_innobase::pq_worker_scan_init()` creates a typed
+  `PQ_Worker_context` only when worker TABLE/handler independence gates pass；
+- `ha_innobase::pq_worker_scan_end()` is idempotent and releases the typed
+  worker context。
+
+Ownership rules:
+
+- `Gather_operator` owns `PQ_worker_info` and its `PQ_Worker_open_context`
+  carrier；
+- `pq_create_worker_thd()` owns worker THD setup until `pq_destroy_worker_thd()`；
+- `pq_open_worker_table()` owns worker TABLE acquisition until
+  `pq_close_worker_table()`；
+- `pq_worker_scan_init()` owns the returned `PQ_Worker_context` until
+  `pq_worker_scan_end()`；
+- the leader `PQ_Leader_context` remains owned by the caller and must be ended
+  by `pq_leader_scan_end()` after worker cleanup。
+
+Execution boundary:
+
+- D4a must run only under a new DBUG gate；
+- D4a may call handler leader `EXECUTE` mode because worker attach requires a
+  real leader context；
+- D4a must not call `mark_pq_started()` or any equivalent no-fallback commit
+  point；
+- any failure before worker thread start remains serial-fallback eligible；
+- no worker thread is started in D4a；
+- no worker row is produced or made visible to the leader。
+
+Required counters:
+
+- `Parallel_worker_attach_smoke_attempts` increments when the isolated D4a
+  helper is invoked；
+- `Parallel_worker_attach_smoke_success` increments after worker TABLE open,
+  `pq_worker_scan_init()`, `pq_worker_scan_end()`, worker TABLE close, and
+  worker THD destroy all complete；
+- `Parallel_worker_attach_smoke_cleanup_calls` increments from the D4a cleanup
+  helper once per attempt that reaches cleanup；
+- existing execution counters must remain unchanged:
+  `Parallel_queries_executed`, `Parallel_workers_launched`,
+  `Parallel_rows_scanned`。
+
+Allowed files:
+
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/parallel_query/pq_iterator.cc` only for a DBUG-only hook before the
+  existing handler PROBE, existing post-PROBE smoke chain, and any normal
+  positive execution；
+- `sql/mysqld.cc` only for SHOW STATUS exposure；
+- one focused MTR test/result under `mysql-test/suite/parallel_query/`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result` if status variable count
+  changes；
+- this taskbook。
+
+Forbidden files:
+
+- `sql/parallel_query/pq_iterators.*`；
+- `sql/parallel_query/pq_handler.*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/exchange.*`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`；
+- `sql/join_optimizer/access_path.*`；
+- `sql/sql_executor.*`；
+- `sql/sql_optimizer.*`；
+- `sql/handler.*`；
+- `storage/innobase/**`；
+- any ORDER/GROUP/ref/ICP files outside the allowed list。
+
+Forbidden behavior:
+
+- no cloned JOIN；
+- no `pq_make_join()`；
+- no `ExecuteIteratorQuery()` in worker；
+- no worker thread start；
+- no `Query_result_mq` send/read；
+- no `Exchange_nosort` row materialization；
+- no `ParallelScanIterator::Read()`；
+- no `PQblockScanIterator::Read()` pull-row path；
+- no default user-visible `PARALLEL_SCAN` execution；
+- no silent fallback after a worker has been started, though D4a must not start
+  one。
+
+Suggested implementation:
+
+1. Add a `Gather_operator` debug helper such as
+   `run_worker_attach_contract_smoke(THD *leader_thd, TABLE *leader_table,
+   PQ_Leader_context *leader_ctx)`；
+2. helper enforces DOP=1, initialized gather, configured worker open context,
+   worker THD create, worker table open, worker scan init/end, worker table
+   close, worker THD destroy；
+3. helper uses a single cleanup block to keep open/close/end/destroy
+   idempotent；
+4. `PQTableScanIterator::Init()` DBUG hook obtains a leader `EXECUTE` context,
+   runs the helper, ends the leader context, then returns existing serial
+   fallback；
+5. the hook must be placed after the table/blob guard but before
+   `probe_attempts.fetch_add()` and before
+   `pq_leader_scan_init(PROBE)`；the hook must not fall through to the existing
+   PROBE path；
+6. the hook is isolated from D3 lifecycle smoke and from the existing
+   post-PROBE smoke chain。
+
+Required MTR assertions:
+
+- attempt delta >= 1；
+- success delta >= 1；
+- cleanup delta >= 1；
+- `Parallel_queries_executed` delta = 0；
+- `Parallel_workers_launched` delta = 0；
+- `Parallel_rows_scanned` delta = 0；
+- `Parallel_worker_result_smoke_workers` delta = 0；
+- `Parallel_worker_open_smoke_runs` delta = 0 and
+  `Parallel_worker_handler_smoke_runs` delta = 0 unless D4a deliberately
+  reuses the old open-table smoke helper, in which case the task must document
+  that coupling and assert the exact expected delta for both counters；
+- SELECT result still comes from serial fallback。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query <d4a_test> pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11d4a_target --tmpdir=/tmp/pqt_m11d4a_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11d4a_full --tmpdir=/tmp/pqt_m11d4a_full
+```
+
+Docs-Design Review:
+
+- first review returned `REVISE` because the DBUG hook position needed to be
+  explicit and the MTR assertions missed
+  `Parallel_worker_handler_smoke_runs`；
+- taskbook was revised to require the hook after the table/blob guard and
+  before `probe_attempts.fetch_add()` / `pq_leader_scan_init(PROBE)`；
+- taskbook now requires the hook to call `EXECUTE`, run the D4a helper, end the
+  leader context, and directly return serial fallback without falling through；
+- taskbook now asserts both old worker open and worker handler smoke counters；
+- re-review returned `ACCEPT`。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；
