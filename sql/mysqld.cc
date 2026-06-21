@@ -9735,6 +9735,15 @@ DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC(
 DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC(
     parallel_scan_lifecycle_cleanup_calls,
     parallel_scan_lifecycle_cleanup_calls)
+DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC(
+    parallel_scan_iterator_row_value_attempts,
+    parallel_scan_iterator_row_value_attempts)
+DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC(
+    parallel_scan_iterator_row_value_selected,
+    parallel_scan_iterator_row_value_selected)
+DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC(
+    parallel_scan_iterator_row_value_rows,
+    parallel_scan_iterator_row_value_rows)
 
 #undef DEFINE_PQ_PARALLEL_SCAN_LIFECYCLE_SHOW_FUNC
 
@@ -10745,6 +10754,15 @@ SHOW_VAR status_vars[] = {
     {"Parallel_workers_launched", (char *)&show_pq_workers_launched, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_rows_scanned", (char *)&show_pq_rows_scanned, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_scan_iterator_row_value_attempts",
+     (char *)&show_pq_parallel_scan_iterator_row_value_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_scan_iterator_row_value_rows",
+     (char *)&show_pq_parallel_scan_iterator_row_value_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_scan_iterator_row_value_selected",
+     (char *)&show_pq_parallel_scan_iterator_row_value_selected, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_scan_lifecycle_cleanup_calls",
      (char *)&show_pq_parallel_scan_lifecycle_cleanup_calls, SHOW_FUNC,

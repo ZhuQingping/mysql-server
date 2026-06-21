@@ -206,6 +206,19 @@ bool PQTableScanIterator::Init() {
     return false;
   });
 
+  DBUG_EXECUTE_IF("pq_parallel_scan_iterator_row_value_smoke", {
+    m_parallel_scan_delegate = NewIterator<ParallelScanIterator>(
+        thd(), m_mem_root, nullptr, table(), m_expected_rows, m_examined_rows,
+        m_join, nullptr, false, nullptr);
+    if (m_parallel_scan_delegate == nullptr ||
+        m_parallel_scan_delegate->Init()) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+    mark_pq_started();
+    return false;
+  });
+
   // V2-2 bridge smoke: prove the handler can create and release a SQL-visible
   // leader context without starting workers or reading rows. Unsupported
   // engines/states still use the V2-1 serial fallback path; real handler
@@ -485,6 +498,10 @@ bool PQTableScanIterator::should_enter_threaded_read_shadow_path(
 }
 
 int PQTableScanIterator::Read() {
+  if (m_parallel_scan_delegate != nullptr) {
+    return m_parallel_scan_delegate->Read();
+  }
+
   if (m_serial_iterator != nullptr) {
     return m_serial_iterator->Read();
   }
@@ -559,7 +576,9 @@ int PQTableScanIterator::Read() {
 }
 
 void PQTableScanIterator::UnlockRow() {
-  if (m_serial_iterator != nullptr) {
+  if (m_parallel_scan_delegate != nullptr) {
+    m_parallel_scan_delegate->UnlockRow();
+  } else if (m_serial_iterator != nullptr) {
     m_serial_iterator->UnlockRow();
   } else {
     TableRowIterator::UnlockRow();
@@ -567,7 +586,9 @@ void PQTableScanIterator::UnlockRow() {
 }
 
 void PQTableScanIterator::SetNullRowFlag(bool is_null_row) {
-  if (m_serial_iterator != nullptr) {
+  if (m_parallel_scan_delegate != nullptr) {
+    m_parallel_scan_delegate->SetNullRowFlag(is_null_row);
+  } else if (m_serial_iterator != nullptr) {
     m_serial_iterator->SetNullRowFlag(is_null_row);
   } else {
     TableRowIterator::SetNullRowFlag(is_null_row);
@@ -575,7 +596,9 @@ void PQTableScanIterator::SetNullRowFlag(bool is_null_row) {
 }
 
 void PQTableScanIterator::StartPSIBatchMode() {
-  if (m_serial_iterator != nullptr) {
+  if (m_parallel_scan_delegate != nullptr) {
+    m_parallel_scan_delegate->StartPSIBatchMode();
+  } else if (m_serial_iterator != nullptr) {
     m_serial_iterator->StartPSIBatchMode();
   } else {
     TableRowIterator::StartPSIBatchMode();
@@ -583,7 +606,9 @@ void PQTableScanIterator::StartPSIBatchMode() {
 }
 
 void PQTableScanIterator::EndPSIBatchModeIfStarted() {
-  if (m_serial_iterator != nullptr) {
+  if (m_parallel_scan_delegate != nullptr) {
+    m_parallel_scan_delegate->EndPSIBatchModeIfStarted();
+  } else if (m_serial_iterator != nullptr) {
     m_serial_iterator->EndPSIBatchModeIfStarted();
   } else {
     if (m_gather != nullptr || m_leader_ctx != nullptr) {

@@ -31,6 +31,7 @@
 class Gather_operator;
 class JOIN;
 class MQueue_handle;
+class PQ_Leader_context;
 class QEP_TAB;
 class THD;
 struct MEM_ROOT;
@@ -60,6 +61,7 @@ class ParallelScanIterator final : public TableRowIterator {
   enum class Lifecycle_state : uint8_t {
     CONSTRUCTED,
     INITIALIZING,
+    RUNNING,
     FAIL_CLOSED,
     CLEANED_UP,
   };
@@ -76,6 +78,7 @@ class ParallelScanIterator final : public TableRowIterator {
   // Borrowed in the current fail-closed skeleton. A future positive path may
   // allocate its own Gather_operator and set m_owns_gather.
   Gather_operator *m_gather;
+  PQ_Leader_context *m_leader_ctx{nullptr};
   const bool m_stable_output;
   AccessPath *m_root_access_path;
   Lifecycle_state m_lifecycle_state{Lifecycle_state::CONSTRUCTED};
@@ -83,6 +86,7 @@ class ParallelScanIterator final : public TableRowIterator {
   bool m_cleanup_done{false};
   bool m_worker_started{false};
   bool m_no_fallback_commit{false};
+  bool m_executed_counted{false};
 };
 
 /**

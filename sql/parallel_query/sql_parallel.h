@@ -192,6 +192,9 @@ struct PQ_global_stats {
   std::atomic<uint64> clone_preflight_unsupported{0};  ///< Contract rejects
   std::atomic<uint64> workers_launched{0};    ///< Total worker threads launched
   std::atomic<uint64> rows_scanned{0};        ///< Total rows scanned by PQ workers
+  std::atomic<uint64> parallel_scan_iterator_row_value_attempts{0};  ///< D6 hook
+  std::atomic<uint64> parallel_scan_iterator_row_value_selected{0};  ///< D6 selected
+  std::atomic<uint64> parallel_scan_iterator_row_value_rows{0};  ///< D6 rows
   std::atomic<uint64> parallel_scan_lifecycle_smoke_attempts{0};  ///< DBUG smoke
   std::atomic<uint64> parallel_scan_lifecycle_fail_closed{0};  ///< Fail-closed
   std::atomic<uint64> parallel_scan_lifecycle_cleanup_calls{0};  ///< Cleanup calls
@@ -287,6 +290,11 @@ struct PQ_global_stats {
     clone_preflight_unsupported.store(0, std::memory_order_relaxed);
     workers_launched.store(0, std::memory_order_relaxed);
     rows_scanned.store(0, std::memory_order_relaxed);
+    parallel_scan_iterator_row_value_attempts.store(
+        0, std::memory_order_relaxed);
+    parallel_scan_iterator_row_value_selected.store(
+        0, std::memory_order_relaxed);
+    parallel_scan_iterator_row_value_rows.store(0, std::memory_order_relaxed);
     parallel_scan_lifecycle_smoke_attempts.store(
         0, std::memory_order_relaxed);
     parallel_scan_lifecycle_fail_closed.store(0, std::memory_order_relaxed);

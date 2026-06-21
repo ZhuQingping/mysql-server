@@ -52,6 +52,7 @@ namespace {
 constexpr double kPQSecondaryCoveringMaxEstimatedRows = 64.0;
 constexpr size_t kPQSecondaryDependentRefMaxBufferedRows = 1024;
 constexpr uint kPQSecondaryNoncoveringIcpMaxRows = 64;
+constexpr uint64 kPQParallelScanIteratorReadWaitTimeoutUs = 1000;
 
 struct PQ_copied_key_endpoint {
   key_range range{};
@@ -92,6 +93,24 @@ bool pq_secondary_covering_field_type_is_safe(const Field *field) {
     default:
       return false;
   }
+}
+
+bool pq_parallel_scan_iterator_row_value_shape_is_safe(const TABLE *table) {
+  if (table == nullptr || table->s == nullptr || table->file == nullptr ||
+      table->field == nullptr || table->s->fields != 2 ||
+      table->s->blob_fields != 0 || table->s->reclength == 0 ||
+      table->s->primary_key != MAX_KEY) {
+    return false;
+  }
+
+  for (uint i = 0; i < table->s->fields; ++i) {
+    const Field *field = table->field[i];
+    if (field == nullptr || field->is_nullable() ||
+        field->real_type() != MYSQL_TYPE_LONG) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool pq_secondary_covering_read_set_is_safe(const TABLE *table, uint keyno) {
@@ -1016,8 +1035,14 @@ void ParallelScanIterator::cleanup_lifecycle(bool init_failed) {
     m_gather = nullptr;
   }
 
+  if (m_leader_ctx != nullptr) {
+    table()->file->pq_leader_scan_end(m_leader_ctx);
+    m_leader_ctx = nullptr;
+  }
+
   m_worker_started = false;
   m_no_fallback_commit = false;
+  m_executed_counted = false;
   m_cleanup_done = true;
   pq_global_stats.parallel_scan_lifecycle_cleanup_calls.fetch_add(
       1, std::memory_order_relaxed);
@@ -1028,11 +1053,108 @@ void ParallelScanIterator::cleanup_lifecycle(bool init_failed) {
 
 bool ParallelScanIterator::Init() {
   m_lifecycle_state = Lifecycle_state::INITIALIZING;
+
+  DBUG_EXECUTE_IF("pq_parallel_scan_iterator_row_value_smoke", {
+    pq_global_stats.parallel_scan_iterator_row_value_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+
+    if (!pq_parallel_scan_iterator_row_value_shape_is_safe(table())) {
+      cleanup_lifecycle(true);
+      return true;
+    }
+
+    uint execute_dop = 0;
+    const int error = table()->file->pq_leader_scan_init(
+        thd(), &m_leader_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+        false);
+    if (error != 0) {
+      m_leader_ctx = nullptr;
+      cleanup_lifecycle(true);
+      return true;
+    }
+
+    m_gather = new Gather_operator(1);
+    m_owns_gather = true;
+    uint32 rows_enqueued = 0;
+    if (m_gather == nullptr ||
+        m_gather->prepare_leader_row_stream_smoke(thd(), table(), m_leader_ctx,
+                                                  2, &rows_enqueued) ||
+        rows_enqueued != 2) {
+      cleanup_lifecycle(true);
+      return true;
+    }
+
+    pq_global_stats.parallel_scan_iterator_row_value_selected.fetch_add(
+        1, std::memory_order_relaxed);
+    m_no_fallback_commit = true;
+    m_lifecycle_state = Lifecycle_state::RUNNING;
+    return false;
+  });
+
   cleanup_lifecycle(true);
   return true;
 }
 
-int ParallelScanIterator::Read() { return 1; }
+int ParallelScanIterator::Read() {
+  if (m_lifecycle_state != Lifecycle_state::RUNNING || m_gather == nullptr ||
+      m_gather->get_exchange() == nullptr) {
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return 1;
+  }
+
+  Exchange_nosort *exchange = m_gather->get_exchange();
+
+  for (;;) {
+    if (m_gather->check_leader_kill(thd())) {
+      m_gather->propagate_kill_to_workers(thd());
+      cleanup_lifecycle(true);
+      thd()->send_kill_message();
+      return 1;
+    }
+
+    Exchange_nosort::Materialize_status status =
+        Exchange_nosort::Materialize_status::ERROR;
+    if (exchange->materialize_next_record_image_status(table(), &status)) {
+      cleanup_lifecycle(true);
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return 1;
+    }
+
+    if (status == Exchange_nosort::Materialize_status::ROW) {
+      if (!m_executed_counted) {
+        pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
+        pq_global_stats.queries_executed.fetch_add(1,
+                                                   std::memory_order_relaxed);
+        m_executed_counted = true;
+      }
+      pq_global_stats.rows_scanned.fetch_add(1, std::memory_order_relaxed);
+      pq_global_stats.parallel_scan_iterator_row_value_rows.fetch_add(
+          1, std::memory_order_relaxed);
+      return 0;
+    }
+
+    if (status == Exchange_nosort::Materialize_status::EOF_REACHED) {
+      if (!m_executed_counted) {
+        pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
+        pq_global_stats.queries_executed.fetch_add(1,
+                                                   std::memory_order_relaxed);
+        m_executed_counted = true;
+      }
+      cleanup_lifecycle(false);
+      table()->set_no_row();
+      return -1;
+    }
+
+    if (status == Exchange_nosort::Materialize_status::WOULD_BLOCK) {
+      exchange->wait_for_message(kPQParallelScanIteratorReadWaitTimeoutUs);
+      continue;
+    }
+
+    cleanup_lifecycle(true);
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return 1;
+  }
+}
 
 bool pq_run_parallel_scan_lifecycle_smoke(THD *thd) {
   if (thd == nullptr) return true;

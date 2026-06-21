@@ -1716,6 +1716,57 @@ Docs-Design Review:
 - non-blocking suggestion to include `pq_iterator.h` in the agent read list was
   applied。
 
+Implementation:
+
+- added DBUG-only `pq_parallel_scan_iterator_row_value_smoke` bridge in
+  `PQTableScanIterator::Init()`；
+- `PQTableScanIterator::Read()` delegates to an owned debug-only
+  `ParallelScanIterator` member, so visible rows are executor-driven through
+  `ParallelScanIterator::Read()`；
+- `ParallelScanIterator::Init()` default path remains fail-closed；only the D6
+  DBUG flag plus fixed two-column integer/no-primary-key InnoDB shape enters
+  the positive path；
+- `ParallelScanIterator` now owns D6 `PQ_Leader_context` state, an owned
+  `Gather_operator`, and idempotent cleanup for EOF/error/destructor paths；
+- D6 reuses `Gather_operator::prepare_leader_row_stream_smoke()` for a bounded
+  DOP=1 row stream but records only D6-specific counters；
+- added `Parallel_scan_iterator_row_value_attempts`,
+  `Parallel_scan_iterator_row_value_selected`, and
+  `Parallel_scan_iterator_row_value_rows` SHOW STATUS counters；
+- added focused MTR `pq_parallel_scan_iterator_row_values` and updated
+  `pq_stats` status variable count to 95。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `--record pq_parallel_scan_iterator_row_values` executed successfully but MTR
+  failed to copy the generated result file with errno 1；the generated log was
+  applied manually as the result file；
+- targeted MTR `pq_parallel_scan_iterator_row_values pq_stats` passed, 3/3；
+- full `parallel_query` suite passed, 86/86。
+
+Current Status:
+
+- coding and validation completed；
+- Code-Docs-Test Review Agent returned `ACCEPT`；
+- ready to commit D6。
+
+Code-Docs-Test Review:
+
+- Verdict: `ACCEPT`；
+- findings: none；
+- required fixes: none；
+- confirmed the D6 positive path is debug-only and default
+  `ParallelScanIterator::Init()` remains fail-closed；
+- confirmed `PQTableScanIterator::Read()` delegates to
+  `ParallelScanIterator::Read()` with no helper-side drain；
+- confirmed cleanup is idempotent and owns gather/leader context in the D6
+  path；
+- confirmed no forbidden handler/InnoDB/AccessPath/exchange/query-result/clone
+  files were modified；
+- noted the new focused MTR test/result files must be included in the commit。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；

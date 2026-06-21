@@ -186,6 +186,8 @@ class PQTableScanIterator final : public TableRowIterator {
   ha_rows *m_examined_rows;    ///< Examined rows counter
   uchar *m_record;             ///< Record buffer (table->record[0])
   unique_ptr_destroy_only<RowIterator> m_serial_iterator;  ///< V2-1 fallback
+  unique_ptr_destroy_only<RowIterator>
+      m_parallel_scan_delegate;  ///< DBUG-only ParallelScanIterator bridge
   PQ_Leader_context *m_leader_ctx{nullptr};  ///< Handler leader context
   Gather_operator *m_gather{nullptr};        ///< Worker lifecycle owner
   Runtime_state m_runtime_state{Runtime_state::SAFE_FALLBACK};
