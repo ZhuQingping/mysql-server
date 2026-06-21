@@ -4,7 +4,7 @@
 
 Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
 completed and committed；M11-E5d-S0/S1 completed and committed；
-M11-E5d-S2 leader save/restore smoke design started。
+M11-E5d-S2 leader save/restore smoke completed，waiting for commit。
 
 ## 背景
 
@@ -1073,6 +1073,70 @@ Design Review - M11-E5d-S2 re-review:
   Filesort construction, `HAS_ORDER_BY` relaxation, `Read()` changes, worker,
   handler, MQ, or real ORDER BY producer wiring；
 - next step: code S2 under this design, then proceed to S3 clone-copy contract。
+
+Completion Report - M11-E5d-S2 Coding:
+
+- changed files:
+  - `sql/parallel_query/pq_optimizer.cc`；
+  - `sql/parallel_query/sql_parallel.h`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_saved_order_group_contract.test`；
+  - `mysql-test/suite/parallel_query/r/pq_saved_order_group_contract.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added debug-only `pq_saved_order_group_restore_smoke` hook on the existing
+    ORDER BY `HAS_ORDER_BY` rejection path；
+  - added RAII scalar restore guard for `simple_order`, `simple_group`,
+    `skip_sort_order`, `need_tmp_before_win`, and `select_distinct`；
+  - perturb window performs only local scalar assignment and local checks；
+  - after RAII restore, the helper rebuilds the S1 sidecar contract and
+    compares restored scalar subset against the initial snapshot；
+  - success is counted only when restore matched and S1 contract remains
+    `UNSUPPORTED_MISSING_SAVED_HELPERS`；
+  - added counters:
+    `Parallel_saved_order_group_restore_smoke_attempts`,
+    `Parallel_saved_order_group_restore_smoke_success`, and
+    `Parallel_saved_order_group_restore_smoke_unsupported`。
+- hard boundaries:
+  - no `sql/sql_optimizer.*` changes；
+  - no direct `JOIN` saved-state fields；
+  - no ORDER/GROUP list, `Item *`, `ORDER *`, QEP_TAB, AccessPath, TABLE,
+    handler, or MEM_ROOT ownership mutation；
+  - no `Filesort` / `Sort_param` construction or `make_sortorder()`；
+  - no `HAS_ORDER_BY` relaxation, `Read()` change, worker, handler, MQ, or real
+    ORDER BY producer wiring。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4。
+  - full `parallel_query` suite passed，89/89。
+
+Review request:
+
+- confirm RAII restore covers early returns and the perturb window stays local；
+- confirm success counter is only scalar smoke success, not commercial helper
+  readiness；
+- confirm default no-DBUG ORDER BY still does not enter restore smoke；
+- confirm user-visible ORDER BY PQ remains closed by `HAS_ORDER_BY`；
+- confirm next step remains S3 clone-copy contract。
+
+Code/Doc/Test Review - M11-E5d-S2:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed RAII restore covers the perturb scope and the perturb window only
+  performs local scalar assignment/comparison；
+- confirmed no `sql/sql_optimizer.*` changes, no direct JOIN saved fields, and
+  no ORDER/GROUP list, `Item *`, `ORDER *`, QEP_TAB, AccessPath, MEM_ROOT,
+  TABLE, or handler mutation；
+- confirmed restore success is counted only when the restored sidecar remains
+  `UNSUPPORTED_MISSING_SAVED_HELPERS` and the scalar subset matches；
+- confirmed MTR covers no-DBUG negative, DBUG positive, zero
+  executed/workers/ranges deltas, and `HAS_ORDER_BY` serial boundary；
+- next step remains S3 clone-copy contract。
 
 ## Risk Areas
 

@@ -294,6 +294,97 @@ static void pq_maybe_run_saved_order_group_contract_smoke(
   }
 }
 
+static bool pq_saved_order_group_scalar_subset_matches(
+    const PQSavedOrderGroupContract &lhs,
+    const PQSavedOrderGroupContract &rhs) {
+  return lhs.simple_order == rhs.simple_order &&
+         lhs.simple_group == rhs.simple_group &&
+         lhs.skip_sort_order == rhs.skip_sort_order &&
+         lhs.need_tmp_before_win == rhs.need_tmp_before_win &&
+         lhs.select_distinct == rhs.select_distinct;
+}
+
+static void pq_maybe_run_saved_order_group_restore_smoke(
+    Query_block *query_block, JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_saved_order_group_restore_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.saved_order_group_restore_smoke_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  auto mark_unsupported = []() {
+    pq_global_stats.saved_order_group_restore_smoke_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  if (query_block == nullptr || join == nullptr) {
+    mark_unsupported();
+    return;
+  }
+
+  PQSavedOrderGroupContract initial;
+  (void)pq_build_saved_order_group_contract(query_block, join, &initial);
+  if (initial.status !=
+      PQSavedOrderGroupContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS) {
+    mark_unsupported();
+    return;
+  }
+
+  bool perturbation_changed_values = false;
+  {
+    struct Scalar_restore_guard {
+      JOIN *join{nullptr};
+      bool simple_order{false};
+      bool simple_group{false};
+      bool skip_sort_order{false};
+      bool need_tmp_before_win{false};
+      bool select_distinct{false};
+
+      explicit Scalar_restore_guard(JOIN *join_arg)
+          : join(join_arg),
+            simple_order(join_arg->simple_order),
+            simple_group(join_arg->simple_group),
+            skip_sort_order(join_arg->skip_sort_order),
+            need_tmp_before_win(join_arg->need_tmp_before_win),
+            select_distinct(join_arg->select_distinct) {}
+
+      ~Scalar_restore_guard() {
+        join->simple_order = simple_order;
+        join->simple_group = simple_group;
+        join->skip_sort_order = skip_sort_order;
+        join->need_tmp_before_win = need_tmp_before_win;
+        join->select_distinct = select_distinct;
+      }
+    } restore_guard(join);
+
+    join->simple_order = !restore_guard.simple_order;
+    join->simple_group = !restore_guard.simple_group;
+    join->skip_sort_order = !restore_guard.skip_sort_order;
+    join->need_tmp_before_win = !restore_guard.need_tmp_before_win;
+    join->select_distinct = !restore_guard.select_distinct;
+
+    perturbation_changed_values =
+        join->simple_order != restore_guard.simple_order &&
+        join->simple_group != restore_guard.simple_group &&
+        join->skip_sort_order != restore_guard.skip_sort_order &&
+        join->need_tmp_before_win != restore_guard.need_tmp_before_win &&
+        join->select_distinct != restore_guard.select_distinct;
+  }
+
+  PQSavedOrderGroupContract restored;
+  (void)pq_build_saved_order_group_contract(query_block, join, &restored);
+  if (perturbation_changed_values &&
+      restored.status ==
+          PQSavedOrderGroupContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS &&
+      pq_saved_order_group_scalar_subset_matches(initial, restored)) {
+    pq_global_stats.saved_order_group_restore_smoke_success.fetch_add(
+        1, std::memory_order_relaxed);
+  } else {
+    mark_unsupported();
+  }
+}
+
 static void pq_maybe_run_secondary_range_partition_smoke(
     THD *thd, TABLE *table, AccessPath *range_scan, uint keyno) {
   bool enabled = false;
@@ -999,6 +1090,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   // ================================================================
   if (query_block->is_ordered()) {
     pq_maybe_run_saved_order_group_contract_smoke(query_block, join);
+    pq_maybe_run_saved_order_group_restore_smoke(query_block, join);
     return pq_reject(info, PQUnsuiteReason::HAS_ORDER_BY,
                      "query has ORDER BY");
   }

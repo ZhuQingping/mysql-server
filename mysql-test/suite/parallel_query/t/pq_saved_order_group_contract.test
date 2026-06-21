@@ -1,5 +1,5 @@
 # Test: pq_saved_order_group_contract
-# M11-E5d-S1: saved ORDER/GROUP helper contract remains fail-closed.
+# M11-E5d-S1/S2: saved ORDER/GROUP helper contract remains fail-closed.
 
 --source include/have_innodb_16k.inc
 --source include/have_debug.inc
@@ -29,6 +29,18 @@ SET @pq_saved_contract_unsupported_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_saved_order_group_contract_unsupported');
+SET @pq_saved_restore_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_saved_order_group_restore_smoke_attempts');
+SET @pq_saved_restore_success_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_saved_order_group_restore_smoke_success');
+SET @pq_saved_restore_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_saved_order_group_restore_smoke_unsupported');
 SET @pq_executed_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -43,7 +55,25 @@ SET @pq_ranges_before = (
     WHERE variable_name = 'Parallel_ranges_dispatched');
 
 SET @old_debug=@@SESSION.debug;
-SET SESSION debug="d,pq_saved_order_group_contract_smoke";
+
+# Without DBUG, the restore smoke is not entered.
+EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 2;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_group_restore_smoke_attempts') -
+      @pq_saved_restore_attempts_before AS restore_attempts_without_debug,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_group_restore_smoke_success') -
+      @pq_saved_restore_success_before AS restore_success_without_debug,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_group_restore_smoke_unsupported') -
+      @pq_saved_restore_unsupported_before AS restore_unsupported_without_debug;
+
+SET SESSION debug="d,pq_saved_order_group_contract_smoke,pq_saved_order_group_restore_smoke";
 
 EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 2;
 
@@ -58,6 +88,20 @@ SELECT
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_saved_order_group_contract_unsupported') -
       @pq_saved_contract_unsupported_before AS saved_contract_unsupported_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_group_restore_smoke_attempts') -
+      @pq_saved_restore_attempts_before AS saved_restore_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_group_restore_smoke_success') -
+      @pq_saved_restore_success_before AS saved_restore_success_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_group_restore_smoke_unsupported') -
+      @pq_saved_restore_unsupported_before AS saved_restore_unsupported_delta;
 
 SELECT
   (SELECT CAST(variable_value AS UNSIGNED)
