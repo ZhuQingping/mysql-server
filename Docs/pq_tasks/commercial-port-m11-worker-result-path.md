@@ -5,6 +5,8 @@
 M11-B0 design-only completed / Docs-Design Review accepted。
 M11-B1/B2 PQWR leader decode adapter coding/validation completed /
 Code-Docs-Test Review accepted。
+M11-B3a guarded worker-result wiring probe design completed /
+Docs-Design Review accepted。
 
 ## 目标
 
@@ -206,6 +208,118 @@ Result:
 - leader 使用 B1/B2 adapter 消费；
 - 仍不接 commercial cloned JOIN；
 - 不改 AccessPath，不打开默认用户可见路径。
+
+Design scope:
+
+- B3 is a guarded wiring probe, not a commercial worker JOIN execution path；
+- input side must be an existing controlled smoke producer, not
+  `pq_make_join()` / cloned JOIN；
+- transport must be `Query_result_mq` / `PQWR`；
+- leader side must reuse B1/B2 decode adapter；
+- output is observed through counters / smoke assertions only, not returned as
+  SQL user result；
+- default user-visible execution remains serial/fallback。
+
+Suggested split:
+
+#### M11-B3a: Design-only Wiring Contract
+
+目标：
+
+- define the exact smoke producer and consumer boundary；
+- choose whether to reuse an existing callback producer or add a local synthetic
+  `Query_result_mq` wiring helper；
+- define counters and MTR assertions；
+- forbid AccessPath / cloned JOIN / InnoDB path changes。
+
+允许文件：
+
+- `Docs/pq_tasks/commercial-port-m11-worker-result-path.md`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-gap-analysis.md`。
+
+Status: design completed / Docs-Design Review accepted。
+
+#### M11-B3b: Local Query_result_mq Wiring Helper
+
+目标：
+
+- add a local helper that constructs `Query_result_mq` with a local
+  `MQueue_handle`；
+- feed controlled `Item` values through `Query_result_mq::send_data()` and
+  `send_eof()`；
+- leader decodes the received `PQWR` ROW with `pq_decode_worker_result_row()`；
+- validate decoded values and FINISH；
+- do not start worker thread, do not attach to cloned JOIN, do not touch
+  handler/InnoDB。
+
+允许文件：
+
+- `sql/parallel_query/query_result_mq.h`；
+- `sql/parallel_query/query_result_mq.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/parallel_query/pq_iterator.cc` only inside existing guarded smoke chain；
+- `mysql-test/suite/parallel_query/t/pq_commercial_worker_result_adapter.test`；
+- `mysql-test/suite/parallel_query/r/pq_commercial_worker_result_adapter.result`；
+- this taskbook。
+
+禁止：
+
+- `storage/innobase/**`；
+- `sql/handler.*`；
+- `sql/sql_optimizer.*`；
+- `sql/sql_select.cc`；
+- `sql/sql_lex.h`；
+- `sql/sql_class.h`；
+- `sql/join_optimizer/access_path.*`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`；
+- `sql/parallel_query/pq_iterators.*`；
+- real worker thread launch；
+- `pq_make_join()` positive path；
+- returning decoded `PQWR` data as user SQL result。
+
+Counters / assertions:
+
+- reuse `Parallel_worker_result_smoke_rows` and
+  `Parallel_worker_result_smoke_finishes` only if the helper successfully
+  decodes the local `PQWR` frames；
+- `Parallel_workers_launched` delta must stay 0 for the local wiring helper；
+- do not increment `Parallel_queries_executed`；
+- targeted MTR should distinguish B3b from B1/B2 by checking a strictly larger
+  rows/finishes delta or an additional decoded-value marker in result output。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_worker_result_adapter pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11b3_target --tmpdir=/tmp/pqt_m11b3_target
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11b3_full --tmpdir=/tmp/pqt_m11b3_full
+```
+
+#### M11-B3c: Worker-thread Guarded Probe
+
+Only after B3b review is accepted, evaluate a debug-only worker-thread probe
+that writes `PQWR` through `Query_result_mq`. This must still avoid cloned JOIN
+and must have a separate design/review step before coding.
+
+Status: design completed / Docs-Design Review accepted。
+
+Review:
+
+- Docs-Design Review returned `ACCEPT`；
+- B3b is limited to local MQ + `Query_result_mq` + `PQWR` decode；
+- B3b must not start worker threads, attach cloned JOIN, modify
+  AccessPath/handler/InnoDB, or return decoded data as SQL user result；
+- B3c remains a separate debug-only worker-thread probe that requires its own
+  design/review before coding。
 
 ## 风险
 
