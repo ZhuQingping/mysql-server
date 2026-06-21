@@ -797,3 +797,127 @@ Code/Doc/Test Review - M11-E3:
   flat；
 - residual risk is intentional: debug-only no-row bridge smoke, not visible
   ordered row materialization or real worker/MQ order-frame behavior。
+
+## M11-E4: User-visible ORDER BY Gate Design
+
+Status: design review accepted；waiting for commit。
+
+Goal:
+
+- evaluate whether the current branch can safely relax the user-visible
+  `HAS_ORDER_BY` serial boundary；
+- define the exact minimum gate conditions for any future visible ORDER BY PQ；
+- decide whether coding should happen now or remain blocked。
+
+Design conclusion:
+
+- do not open user-visible ORDER BY PQ in M11-E4；
+- keep `HAS_ORDER_BY` as the default serial boundary；
+- E4 is a design and diagnostics checkpoint only；
+- visible ordered rows must wait for a later task after real ORDER BY row
+  materialization, worker frame protocol, and leader merge semantics are wired。
+
+Commercial reference path:
+
+- `ParallelScanIterator::pq_make_filesort()` restores or builds the leader
+  `ORDER` / `Filesort` metadata；
+- `ParallelScanIterator::pq_init_record_gather()` creates the record gather
+  path and passes `Filesort` into the gather layer；
+- worker outputs are record frames, not the current E2/E3 controlled smoke
+  records；
+- `Exchange_sort` reads worker MQ frames, performs K-way merge, and writes
+  visible rows into `table->record[0]`；
+- optimizer side saves/restores optimized group/order state and handles ordered
+  index usage, reverse range, stable output, and order-by-subquery guards。
+
+Current branch gap:
+
+- current `Exchange_sort` has commercial-shaped fields and controlled adapter
+  smoke only；
+- `Exchange_sort::read_mq_message()` is still inert for real worker frames；
+- `ParallelScanIterator::Read()` has a positive D6 `Exchange_nosort` row-value
+  path and an E3 no-row order-gather smoke, but no visible ordered row path；
+- current worker-result adapter does not yet feed real ORDER BY record frames
+  with `Filesort` / `Sort_param` semantics；
+- current optimizer still rejects real ORDER BY as `HAS_ORDER_BY`；
+- current tests prove no-row shape and serial boundary, not visible ordered
+  correctness。
+
+Hard stop conditions:
+
+- do not remove or weaken `HAS_ORDER_BY` rejection for normal SQL in E4；
+- do not mark `Parallel_queries_executed` for ORDER BY without visible ordered
+  row materialization；
+- do not consume `Exchange_sort` real MQ frames until frame ownership,
+  record image layout, rowid tie-break, ASC/DESC, NULL ordering, and EOF/error
+  protocol are tested；
+- do not modify optimizer `JOIN::optimize()` / AccessPath factory eligibility
+  for ORDER BY in the same commit as `Exchange_sort` row materialization；
+- do not mix M11-F ref/ICP worker path into ORDER BY gate work。
+
+Minimum future user-visible gate, not for E4 coding:
+
+- single query block, single base table；
+- InnoDB only, no partition table；
+- no GROUP BY, DISTINCT, window functions, HAVING, rollup, subquery in ORDER BY,
+  BLOB/TEXT selected fields, generated/hidden/functional-index fields, or
+  locking reads；
+- projection limited to fixed-length integer fields already proven by row-image
+  tests；
+- ORDER BY limited to selected fixed-length integer fields with explicit
+  ASC-only first; DESC requires a separate reviewed test；
+- deterministic tie-break must be explicit in SQL or implemented through
+  stable rowid/ref-length semantics before LIMIT is allowed；
+- DOP initially 1 for leader-side correctness, then DOP 2/4 after real
+  worker-frame merge tests；
+- fallback must happen before any PQ commit point if the shape check fails。
+
+Required tests before any future coding opens the gate:
+
+- real SQL positive:
+  - `SELECT id, k FROM t ORDER BY k ASC, id ASC` returns the same rows/order as
+    serial；
+  - duplicate keys verify deterministic tie-break；
+  - empty table and one-row table verify EOF handling；
+  - optional LIMIT only after deterministic full-order correctness is proven。
+- negative SQL:
+  - DESC before DESC support, nullable fields, non-integer fields, expressions,
+    GROUP BY, DISTINCT, window, HAVING, locking read, partition table, BLOB/TEXT
+    all remain serial with diagnostics；
+  - `Parallel_queries_executed`, workers, ranges, handler/InnoDB, clone, and
+    worker-result counters do not grow for rejected shapes。
+- internal counters:
+  - future ORDER BY path must use dedicated visible-path counters distinct from
+    E2/E3 smoke counters；
+  - E2/E3 smoke counters remain non-authoritative for visible SQL execution。
+
+Proposed next split:
+
+- M11-E4a: design review for the above gate and hard-stop decision；
+- M11-E4b: optional diagnostics-only patch if review wants a clearer
+  `HAS_ORDER_BY` subreason for ORDER BY blocked by missing real row path；
+- M11-E5a: real `Exchange_sort` worker-frame materialization design；
+- M11-E5b: DBUG-only visible-row `Exchange_sort` adapter path；
+- M11-E5c: guarded user-visible ORDER BY path only after E5a/E5b review
+  accepts result correctness and failure cleanup。
+
+Validation for E4:
+
+- design review only；
+- no source build/test required unless E4b diagnostics-only coding is approved。
+
+Design Review - M11-E4:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed keeping `HAS_ORDER_BY` serial boundary is reasonable because the
+  current optimizer still rejects `query_block->is_ordered()` and the iterator
+  factory depends on `join->pq_eligible`；
+- confirmed current branch gaps are complete: Filesort/JOIN saved order,
+  `MQ_record_gather`, worker record frames, `Exchange_sort` real read, and
+  optimizer eligibility；
+- confirmed hard stops protect default SQL behavior；
+- confirmed future gate covers LIMIT, tie-break, DESC, NULL, partition,
+  locking read, GROUP BY, DISTINCT, window, HAVING, BLOB/TEXT, and related
+  negative tests；
+- confirmed E4a/E4b/E5a/E5b/E5c split is safe to submit as design-only。
