@@ -282,6 +282,99 @@ Review:
 Only after D1/D2 accepted. Evaluate a debug-only `PARALLEL_SCAN` construction
 probe. It must not start workers or call handler/InnoDB.
 
+Design:
+
+- D3 owns the first legal trigger for `ParallelScanIterator` lifecycle smoke；
+- add a debug-only construction helper that builds a local
+  `ParallelScanIterator` skeleton and calls `Init()`；
+- the helper must not route through normal query AccessPath selection；
+- the helper must not start worker threads, allocate `Gather_operator`, call
+  handler/InnoDB, or call `Read()`；
+- the helper lives in `pq_iterators.*`；
+- a minimal DBUG-only hook in `PQTableScanIterator::Init()` may invoke the
+  helper before handler PROBE, before `Gather_operator` allocation, and before
+  the existing guarded smoke chain；
+- after the DBUG hook runs, `PQTableScanIterator::Init()` must continue through
+  the existing serial fallback behavior；
+- the DBUG hook must be independently gated and must not run in normal
+  execution；
+- counters from D2 may be added only for synthetic/debug lifecycle smoke。
+
+Required D3 counters:
+
+- `Parallel_scan_lifecycle_smoke_attempts` increments when the synthetic helper
+  is invoked；
+- `Parallel_scan_lifecycle_fail_closed` increments when `Init()` returns the
+  expected fail-closed result；
+- `Parallel_scan_lifecycle_cleanup_calls` increments from the cleanup helper。
+
+Required D3 MTR assertions:
+
+- lifecycle smoke attempts delta >= 1；
+- lifecycle fail-closed delta >= 1；
+- cleanup calls delta >= 1；
+- `Parallel_queries_executed` delta remains 0 for the lifecycle smoke window；
+- `Parallel_workers_launched` delta remains 0；
+- `Parallel_rows_scanned` delta remains 0；
+- worker-result smoke worker counter does not change because D3 must not start
+  the M11-B3c worker-result probe as part of this isolated assertion window；
+- handler/InnoDB probe/open/handler counters do not change in the isolated
+  D3 assertion window。
+
+Allowed files for D3 coding:
+
+- `sql/parallel_query/pq_iterators.h`；
+- `sql/parallel_query/pq_iterators.cc`；
+- `sql/parallel_query/pq_iterator.cc` only for a DBUG-only hook before handler
+  PROBE in `PQTableScanIterator::Init()`；
+- `sql/parallel_query/sql_parallel.h` only for stat fields and reset updates；
+- `sql/mysqld.cc` only for SHOW STATUS exposure；
+- one focused MTR test/result under `mysql-test/suite/parallel_query/`；
+- this taskbook。
+
+Potential hook:
+
+- add `DBUG_EXECUTE_IF("pq_parallel_scan_lifecycle_smoke", ...)` before
+  `PQTableScanIterator::Init()` calls handler `pq_leader_scan_init(PROBE)`；
+- the hook calls only the `pq_iterators.*` synthetic lifecycle helper；
+- the hook must not call the normal `PARALLEL_SCAN` AccessPath factory；
+- the hook must not call the existing post-PROBE smoke chain。
+
+Forbidden:
+
+- worker thread launch；
+- `Gather_operator` allocation；
+- handler/InnoDB calls；
+- `Query_result_mq` / worker result path；
+- cloned JOIN / `pq_make_join()`；
+- normal AccessPath `PARALLEL_SCAN` positive execution；
+- `access_path.*` changes；
+- serial fallback behavior changes；
+- touching `storage/innobase/**`。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query <new_or_focused_d3_test> pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11d3_target --tmpdir=/tmp/pqt_m11d3_target
+```
+
+Status: design completed / Docs-Design Review accepted。
+
+Review:
+
+- first Docs-Design Review returned `REVISE` because D3 still lacked a legal
+  SQL/MTR trigger；
+- design was revised to allow a minimal DBUG-only `pq_iterator.cc` hook before
+  handler PROBE；
+- the hook must call only the `pq_iterators.*` synthetic lifecycle helper and
+  then continue existing serial fallback behavior；
+- re-review returned `ACCEPT`。
+
 ## Deferred
 
 - real cloned JOIN execution；
