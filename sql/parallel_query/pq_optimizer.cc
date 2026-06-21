@@ -539,6 +539,60 @@ static bool pq_run_orderby_filesort_construct_smoke(Query_block *query_block,
   return filesort != nullptr && filesort->sort_order_length() == restored_count;
 }
 
+static bool pq_run_orderby_sort_param_init_smoke(Query_block *query_block,
+                                                 JOIN *join) {
+  if (query_block == nullptr || join == nullptr || join->thd == nullptr ||
+      join->order.empty() || join->order.order->next == nullptr) {
+    return false;
+  }
+
+  TABLE *table = pq_find_orderby_filesort_smoke_table(query_block, join);
+  if (table == nullptr) return false;
+
+  PQ_owned_order_chain_sidecar leader_sidecar;
+  PQ_owned_order_chain_sidecar clone_sidecar;
+  ORDER_with_src optimized_without_first(join->order.order->next,
+                                         join->order.src,
+                                         join->order.is_const_optimized());
+  if (!pq_copy_order_chain(join->order, &leader_sidecar) ||
+      !pq_order_chain_copy_matches(join->order, leader_sidecar) ||
+      !pq_record_order_chain_optimized_flags(optimized_without_first,
+                                             &leader_sidecar) ||
+      !pq_restore_order_chain_from_flags(&leader_sidecar) ||
+      !pq_restored_order_chain_matches_optimized(optimized_without_first,
+                                                 leader_sidecar) ||
+      !pq_clone_order_chain_sidecar(leader_sidecar, &clone_sidecar) ||
+      !pq_order_chain_sidecar_clone_matches(leader_sidecar, clone_sidecar) ||
+      !pq_restored_order_chain_matches_optimized(optimized_without_first,
+                                                 clone_sidecar)) {
+    return false;
+  }
+
+  const uint restored_count = clone_sidecar.restored_nodes.size();
+  if (restored_count == 0) return false;
+
+  Filesort *filesort = new (join->thd->mem_root)
+      Filesort(join->thd, {table}, /*keep_buffers=*/false,
+               clone_sidecar.restored_head(), HA_POS_ERROR,
+               /*remove_duplicates=*/false, /*force_sort_rowids=*/false,
+               /*unwrap_rollup=*/false);
+  if (filesort == nullptr || filesort->sort_order_length() != restored_count ||
+      filesort->sortorder == nullptr) {
+    return false;
+  }
+
+  Sort_param sort_param;
+  const Bounds_checked_array<st_sort_field> sort_fields(
+      filesort->sortorder, filesort->sort_order_length());
+  sort_param.init_for_filesort(
+      filesort, sort_fields,
+      sortlength(join->thd, filesort->sortorder,
+                 filesort->sort_order_length()),
+      filesort->tables, HA_POS_ERROR, /*remove_duplicates=*/false);
+  return sort_param.local_sortorder.size() == filesort->sort_order_length() &&
+         sort_param.max_record_length() > 0;
+}
+
 struct PQ_copied_key_endpoint {
   key_range range{};
   std::vector<uchar> key;
@@ -894,6 +948,24 @@ static void pq_maybe_run_orderby_filesort_construct_smoke(
         1, std::memory_order_relaxed);
   } else {
     pq_global_stats.orderby_filesort_construct_smoke_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+}
+
+static void pq_maybe_run_orderby_sort_param_init_smoke(Query_block *query_block,
+                                                       JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_orderby_sort_param_init_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.orderby_sort_param_init_smoke_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (pq_run_orderby_sort_param_init_smoke(query_block, join)) {
+    pq_global_stats.orderby_sort_param_init_smoke_success.fetch_add(
+        1, std::memory_order_relaxed);
+  } else {
+    pq_global_stats.orderby_sort_param_init_smoke_unsupported.fetch_add(
         1, std::memory_order_relaxed);
   }
 }
@@ -1753,6 +1825,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
     pq_maybe_run_orderby_filesort_restored_order_contract_smoke(query_block,
                                                                 join);
     pq_maybe_run_orderby_filesort_construct_smoke(query_block, join);
+    pq_maybe_run_orderby_sort_param_init_smoke(query_block, join);
     pq_maybe_run_saved_order_chain_copy_smoke(query_block, join);
     pq_maybe_run_saved_order_chain_flags_smoke(query_block, join);
     pq_maybe_run_saved_order_chain_restore_smoke(query_block, join);

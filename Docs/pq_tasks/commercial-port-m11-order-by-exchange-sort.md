@@ -12,8 +12,10 @@ completed and committed；M11-E5d-2d clone-copy contract smoke completed and
 committed；M11-E5d-3 design completed and committed；M11-E5d-3a restored
 ORDER Filesort contract completed and committed；M11-E5d-3b Filesort
 constructor risk design completed and committed；M11-E5d-3c debug-only
-Filesort construction smoke completed and committed。Next: design Sort_param /
-Exchange_sort initialization boundary before any further coding。
+Filesort construction smoke completed and committed；M11-E5d-4 Sort_param /
+Exchange_sort initialization boundary design completed and committed；
+M11-E5d-4a debug-only Sort_param init smoke coding completed and targeted
+validation passed，waiting for code/doc/test review, full suite, and commit。
 
 ## 背景
 
@@ -2520,8 +2522,8 @@ Commit:
 
 ### M11-E5d-4: Sort_param / Exchange_sort Initialization Boundary Design
 
-Status: design-only taskbook completed；Design Review Agent accepted；waiting
-for commit。
+Status: design-only taskbook completed；Design Review Agent accepted；committed
+as `cfc1ad722cd`。
 
 Goal:
 
@@ -2681,6 +2683,97 @@ Design Review - M11-E5d-4:
   `Filesort` must remain unpersisted and debug-only；
 - confirmed forbidden scope, allowed files, and validation commands are
   complete for E5d-4a。
+
+### M11-E5d-4a: Debug-only Sort_param Init Smoke
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；`git diff
+--check`, `mysqld` build, targeted MTR, and full `parallel_query` suite passed；
+waiting for commit。
+
+Goal:
+
+- verify that a restored sidecar ORDER chain can initialize a stack-local
+  `Sort_param` through a debug `Filesort` under a dedicated DBUG flag；
+- keep this validation inside the existing `HAS_ORDER_BY` reject path；
+- do not attach `Filesort`, `Sort_param`, buffers, heap, MQ, or
+  `Exchange_sort` state to the user-visible execution path。
+
+Implementation summary:
+
+- added `pq_run_orderby_sort_param_init_smoke()` in
+  `sql/parallel_query/pq_optimizer.cc`；
+- the helper reuses the E5d-2/E5d-3 sidecar flow:
+  - copies the current ORDER chain into leader-owned sidecar storage；
+  - records and restores optimized flags for the ORDER chain without the first
+    node；
+  - clone-copies the restored sidecar；
+  - constructs a debug-only `Filesort` from the cloned restored ORDER chain；
+  - initializes a stack-local `Sort_param` with `init_for_filesort()`；
+  - accepts only when `local_sortorder.size() == sort_order_length()` and
+    `max_record_length() > 0`；
+- added DBUG flag `pq_orderby_sort_param_init_smoke`；
+- added status counters:
+  - `Parallel_orderby_sort_param_init_smoke_attempts`；
+  - `Parallel_orderby_sort_param_init_smoke_success`；
+  - `Parallel_orderby_sort_param_init_smoke_unsupported`；
+- extended `pq_saved_order_group_contract` to verify:
+  - no-DBUG counters remain zero；
+  - DBUG smoke records one attempt and one success；
+  - `HAS_ORDER_BY` still rejects the query；
+  - `Parallel_queries_executed`, `Parallel_workers_launched`, and
+    `Parallel_ranges_dispatched` remain zero；
+- masked the unstable EXPLAIN `rows` estimate in this test with
+  `--replace_column 10 #` because it can vary between 4 and 5 across runs。
+
+Scope confirmation:
+
+- no edits to `sql/filesort.*`, `sql/sort_param.*`,
+  `sql/iterators/sorting_iterator.*`, `sql/parallel_query/exchange_sort.*`,
+  `sql/parallel_query/pq_iterators.*`, `sql/parallel_query/pq_clone.*`, or
+  `sql/sql_optimizer.*`；
+- no `Filesort::make_sortorder()` visibility change；
+- no direct `using_addon_fields()` call；
+- no `filesort()` execution；
+- no `Exchange_sort::init()`；
+- no worker thread, MQ, handler/InnoDB, `Read()`, AccessPath, or ORDER BY
+  eligibility relaxation；
+- the `Sort_param` is stack-local and never persisted。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d4a_target2 --tmpdir=/tmp/pqt_m11e5d4a_target2
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d4a_full --tmpdir=/tmp/pqt_m11e5d4a_full
+```
+
+Result:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed，4/4 including `shutdown_report`。
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-4a:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed the DBUG flag is checked before attempts counter increments；
+- confirmed the call is only inside the existing `query_block->is_ordered()`
+  / `HAS_ORDER_BY` rejection window；
+- confirmed stack-local `Sort_param` is not stored；
+- confirmed debug `Filesort` is only fed by cloned restored sidecar ORDER
+  nodes whose owning vectors remain alive across constructor and
+  `init_for_filesort()`；
+- confirmed `HAS_ORDER_BY` remains rejected after smoke execution；
+- confirmed counters, reset, `SHOW_VAR`, and `pq_stats` are consistent；
+- no blocking test or documentation gaps。
 
 ## Risk Areas
 

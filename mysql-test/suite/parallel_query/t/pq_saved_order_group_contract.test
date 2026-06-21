@@ -1,5 +1,5 @@
 # Test: pq_saved_order_group_contract
-# M11-E5d-S1/S2/S3/E5d-1/E5d-2a/E5d-2b/E5d-2c/E5d-2d/E5d-3a/E5d-3c: saved ORDER/GROUP helper contract remains fail-closed.
+# M11-E5d-S1/S2/S3/E5d-1/E5d-2a/E5d-2b/E5d-2c/E5d-2d/E5d-3a/E5d-3c/E5d-4a: saved ORDER/GROUP helper contract remains fail-closed.
 
 --source include/have_innodb_16k.inc
 --source include/have_debug.inc
@@ -85,6 +85,18 @@ SET @pq_filesort_restored_order_contract_unsupported_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_orderby_filesort_restored_order_contract_unsupported');
+SET @pq_sort_param_init_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_sort_param_init_smoke_attempts');
+SET @pq_sort_param_init_success_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_sort_param_init_smoke_success');
+SET @pq_sort_param_init_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_sort_param_init_smoke_unsupported');
 SET @pq_order_chain_copy_attempts_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -149,6 +161,7 @@ SET @pq_ranges_before = (
 SET @old_debug=@@SESSION.debug;
 
 # Without DBUG, the restore smoke is not entered.
+--replace_column 10 #
 EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 2;
 
 SELECT
@@ -220,6 +233,20 @@ SELECT
 SELECT
   (SELECT CAST(variable_value AS UNSIGNED)
      FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_sort_param_init_smoke_attempts') -
+      @pq_sort_param_init_attempts_before AS sort_param_init_attempts_without_debug,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_sort_param_init_smoke_success') -
+      @pq_sort_param_init_success_before AS sort_param_init_success_without_debug,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_sort_param_init_smoke_unsupported') -
+      @pq_sort_param_init_unsupported_before AS sort_param_init_unsupported_without_debug;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_saved_order_chain_copy_smoke_attempts') -
       @pq_order_chain_copy_attempts_before AS order_chain_copy_attempts_without_debug,
   (SELECT CAST(variable_value AS UNSIGNED)
@@ -273,8 +300,9 @@ SELECT
      WHERE variable_name = 'Parallel_saved_order_chain_clone_copy_smoke_unsupported') -
       @pq_order_chain_clone_copy_unsupported_before AS order_chain_clone_copy_unsupported_without_debug;
 
-SET SESSION debug="d,pq_saved_order_group_contract_smoke,pq_saved_order_group_restore_smoke,pq_saved_order_group_clone_copy_smoke,pq_orderby_filesort_contract_smoke,pq_orderby_filesort_restored_order_contract_smoke,pq_orderby_filesort_construct_smoke,pq_saved_order_chain_copy_smoke,pq_saved_order_chain_flags_smoke,pq_saved_order_chain_restore_smoke,pq_saved_order_chain_clone_copy_smoke";
+SET SESSION debug="d,pq_saved_order_group_contract_smoke,pq_saved_order_group_restore_smoke,pq_saved_order_group_clone_copy_smoke,pq_orderby_filesort_contract_smoke,pq_orderby_filesort_restored_order_contract_smoke,pq_orderby_filesort_construct_smoke,pq_orderby_sort_param_init_smoke,pq_saved_order_chain_copy_smoke,pq_saved_order_chain_flags_smoke,pq_saved_order_chain_restore_smoke,pq_saved_order_chain_clone_copy_smoke";
 
+--replace_column 10 #
 EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 2;
 
 SET SESSION debug=@old_debug;
@@ -362,6 +390,20 @@ SELECT
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_orderby_filesort_construct_smoke_unsupported') -
       @pq_filesort_construct_unsupported_before AS filesort_construct_unsupported_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_sort_param_init_smoke_attempts') -
+      @pq_sort_param_init_attempts_before AS sort_param_init_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_sort_param_init_smoke_success') -
+      @pq_sort_param_init_success_before AS sort_param_init_success_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_sort_param_init_smoke_unsupported') -
+      @pq_sort_param_init_unsupported_before AS sort_param_init_unsupported_delta;
 
 SELECT
   (SELECT CAST(variable_value AS UNSIGNED)
