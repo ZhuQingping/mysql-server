@@ -4831,6 +4831,224 @@ Code/Doc/Test Review - M11-E5g-3:
 - after follow-up fix, `git diff --check`, `mysqld` build, targeted MTR, and
   full `parallel_query` suite passed again。
 
+### M11-E5g-4: Default ORDER BY Execution Path Boundary Design
+
+Status: design in progress；no source execution path changes allowed in this
+stage。
+
+Goal:
+
+- define the remaining contract gap between debug-only ORDER BY streaming
+  smokes and a default executable ORDER BY PQ path；
+- decide which readiness flags may become true in later coding phases, and
+  which must remain false until all preceding contracts are proven；
+- split future coding into small reviewed stages that preserve the current
+  `HAS_ORDER_BY` serial boundary until an explicit visible gate review；
+- keep this stage design-only and avoid changing optimizer eligibility,
+  `ParallelScanIterator::Read()`, worker launch, InnoDB, or default
+  `Exchange_sort` behavior。
+
+Current confirmed baseline:
+
+- `pq_build_orderby_execution_preflight()` still returns
+  `BLOCKED_EXECUTION_DISABLED` and keeps `execution_disabled=true`；
+- `pq_build_saved_order_group_contract()` remains fail-closed for the default
+  runtime handoff path, so restored ORDER state is not yet executable evidence；
+- ORDER BY candidate diagnostics exist, but `pq_check_query()` still rejects
+  visible ORDER BY through `PQUnsuiteReason::HAS_ORDER_BY`；
+- `PQOrderByExecutionPreflight` readiness flags for
+  `worker_order_frame_producer_ready`, `exchange_sort_heap_read_ready`,
+  `leader_materialization_ready`, `rowid_tiebreak_ready`, and
+  `default_ordered_read_ready` remain false；
+- `PQTableScanIterator::Init()` can run `pq_parallel_scan_iterator_order_gather_smoke`
+  only under DBUG and falls back serial otherwise；
+- `Gather_operator::run_exchange_sort_smoke()` now has controlled smokes for
+  frame contract, worker producer, streaming heap read, and leader
+  materialization, but none is wired into default execution；
+- default `Exchange_sort::read_mq_message()` and default
+  `ParallelScanIterator::Read()` ordered behavior are unchanged。
+
+Required contracts before any visible ORDER BY PQ:
+
+1. Filesort runtime contract:
+   - define exactly which `Filesort` / `Sort_param` values are copied or owned
+     by PQ runtime；
+   - define whether `ParallelScanIterator::Init()` or `PQTableScanIterator::Init()`
+     owns allocation/cleanup, and where fallback remains legal；
+   - prove `Sort_param::make_sortkey()` can run without mutating shared
+     JOIN/QEP_TAB state outside a bounded owner；
+   - reject nullable ORDER BY, DESC, stable output/tie-break, and non-simple
+     ORDER expressions until explicit support exists。
+2. Saved ORDER/GROUP executable-state contract:
+   - convert the current saved/restored ORDER/GROUP contract from diagnostic
+     evidence into runtime-owned state；
+   - prove restored ORDER chain and table bitmap state survive optimizer to
+     iterator handoff；
+   - keep the path fail-closed until restored state can be consumed without
+     shared JOIN mutation。
+3. Worker ORDER BY producer contract:
+   - convert worker record images to `PQOF` frames through a non-DBUG producer
+     function with bounded ownership；
+   - prove each worker stream is locally sorted before leader heap merge；
+   - preserve independent worker TABLE/handler/prebuilt lifecycle；
+   - report ROW / FINISH / ERROR / DETACH with observable counters。
+4. Leader streaming reader contract:
+   - promote `read_ordered_record_stream_shape()` from smoke helper shape into a
+     default-safe reader interface；
+   - define bounded wait / kill / detach behavior for WOULD_BLOCK and worker
+     ERROR；
+   - guarantee heap comparator ownership after any buffer cleanup/reinit。
+5. Leader materialization contract:
+   - materialize only full-length record images matching leader `TABLE::record[0]`；
+   - preserve read/write bitmaps and original record contents on fallback/error；
+   - reject unsupported table shapes and length mismatch before exposing a row。
+6. Iterator integration contract:
+   - define how `PQTableScanIterator::Init()` selects an ORDER BY gather path
+     only after preflight readiness；
+   - define how `Read()` drains ordered rows and falls back only before workers
+     are started；
+   - once workers are started, errors must surface or cleanly detach, not
+     silently fallback mid-stream。
+7. Visible eligibility contract:
+   - keep `HAS_ORDER_BY` serial until all readiness flags are true；
+   - when opened, limit to a narrow ASC, non-nullable, single-table, simple
+     ORDER BY subset with no LIMIT pushdown, no DESC, no expressions, no BLOB,
+     no GROUP BY interaction, and no ref/ICP combination。
+
+Proposed coding split after design review:
+
+- M11-E5g-4a: default ORDER BY execution state contract and preflight readiness
+  detail design/counters only; no true flags；
+- M11-E5g-4b: fail-closed ordered materialization API skeleton, default returns
+  unsupported/disabled and does not connect to `Read()`；
+- M11-E5g-4c: default-safe `Exchange_sort` ordered reader skeleton extracted
+  from smoke helper, controlled/DBUG-only, proving status preservation；
+- M11-E5g-4d: worker `PQOF` producer adapter skeleton with DBUG-only caller and
+  no ordinary ORDER BY SQL entry；
+- M11-E5g-4e: kill/detach/ERROR diagnostics for the ordered shadow path；
+- M11-E5g-4f: final visible gate design for a minimal ASC-only ORDER BY subset；
+- M11-E5g-4g: visible gate coding only if 4f review accepts all constraints。
+
+Allowed files for M11-E5g-4 design-only:
+
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`；
+- `Docs/pq_tasks/README.md`。
+
+Allowed files for later coding phases, after separate review:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/parallel_query/pq_iterator.h`；
+- `sql/parallel_query/pq_iterator.cc`；
+- `sql/parallel_query/pq_optimizer.h`；
+- `sql/parallel_query/pq_optimizer.cc` only for diagnostics/preflight fields
+  until the visible gate phase；
+- focused MTR under `mysql-test/suite/parallel_query/`。
+
+Forbidden in M11-E5g-4 and all pre-visible-gate coding:
+
+- changing `pq_check_query()` to stop rejecting `HAS_ORDER_BY`；
+- setting `PQOrderByExecutionPreflight::execution_disabled=false`；
+- setting default readiness flags true without a matching reviewed coding
+  phase and MTR；
+- changing default `Exchange_sort::read_mq_message()` semantics；
+- changing non-DBUG `ParallelScanIterator::Read()` ordered behavior；
+- changing `PQWR` / `Query_result_mq` protocol or worker-result behavior；
+- changing InnoDB worker scan, handler APIs, AccessPath construction, or
+  `JOIN::optimize()` hooks for ORDER BY；
+- enabling DESC, nullable ORDER BY, expression ORDER BY, LIMIT pushdown,
+  rowid/stable tie-break, GROUP BY + ORDER BY, ref/ICP + ORDER BY, or
+  multi-table ORDER BY。
+
+Required tests for future coding:
+
+- preflight/status:
+  - each readiness flag is visible as false until its exact coding phase；
+  - `pq_commercial_order_by` continues to report `Not parallel HAS_ORDER_BY`
+    before visible gate；
+  - ordinary ORDER BY keeps `Parallel_queries_executed = 0`,
+    `Parallel_workers_launched = 0`, and `Parallel_ranges_dispatched = 0`；
+  - ordinary ORDER BY must not grow `Parallel_exchange_sort_*_smoke_*`
+    counters；
+  - `pq_stats` count and numeric variable checks stay aligned。
+- ordered reader:
+  - ASC two/three worker stream；
+  - WOULD_BLOCK bounded wait；
+  - ERROR frame；
+  - worker detach；
+  - empty worker FINISH；
+  - length mismatch。
+- iterator shadow:
+  - DBUG-only ordered read returns sorted rows；
+  - external KILL cleanup；
+  - worker ERROR cleanup；
+  - no mid-stream serial fallback after workers start。
+- visible gate, only after review:
+  - minimal ASC single-table supported query；
+  - DESC/nullable/expression/LIMIT/GROUP BY/ref/ICP/multi-table negative cases；
+  - result equivalence against serial baseline；
+  - full `parallel_query` suite。
+
+Hard stop conditions:
+
+- stop if `Sort_param::make_sortkey()` needs shared JOIN/QEP_TAB mutation that
+  cannot be isolated；
+- stop if saved/restored ORDER/GROUP state cannot be handed to runtime as an
+  executable owner-owned contract；
+- stop if worker row image and leader table record layouts cannot be proven
+  identical for the supported subset；
+- stop if ordered reader cannot distinguish WOULD_BLOCK from EOF under bounded
+  wait；
+- stop if worker ERROR/DETACH cannot be surfaced without corrupting the leader
+  record；
+- stop if visible ORDER BY requires changing AccessPath or InnoDB scan
+  contracts before the SQL-layer reader path is proven。
+
+Validation for M11-E5g-4:
+
+- design review only；
+- no build/MTR required unless the design task accidentally changes source or
+  test files。
+
+Design Explorer - M11-E5g-4:
+
+- Explorer recommendation: keep 5g-4 strictly `design-only / boundary-only`；
+- confirmed debug-only `PQOF` producer, streaming heap smoke, and leader
+  materialization smoke are not default execution path evidence；
+- confirmed default ORDER BY PQ must not open in 5g-4 and ordinary ORDER BY SQL
+  must continue through `HAS_ORDER_BY` serial boundary；
+- highlighted missing prerequisites: default `Filesort` / `Sort_param`
+  lifecycle owner, executable saved ORDER/GROUP state, worker `PQOF` default
+  producer, default `Exchange_sort` MQ consumption, ordered materialization API,
+  ordered iterator `Read()` state, tie-break / NULL / DESC / LIMIT policy, and
+  one-by-one preflight readiness flip policy；
+- confirmed forbidden scope includes relaxing `HAS_ORDER_BY`, changing default
+  ordered `Read()`, making `Exchange_sort::read_mq_message()` real, changing
+  `PQWR`, AccessPath, handler/InnoDB worker launch, or setting readiness flags
+  true；
+- suggested future coding split has been reflected in the taskbook as 4a-4g。
+
+Design Review - M11-E5g-4:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed 5g-4 is design-only and allows only taskbook/README edits；
+- confirmed default ORDER BY PQ remains closed by `HAS_ORDER_BY`, disabled
+  preflight, false readiness flags, DBUG-only smokes, inert
+  `Exchange_sort::read_mq_message()`, and unchanged ordered `Read()` behavior；
+- confirmed hard blockers are covered: `Filesort` / `Sort_param` ownership,
+  saved ORDER/GROUP executable state, worker `PQOF`, `Exchange_sort` reader,
+  leader materialization, iterator `Read()`, tie-break / NULL / DESC / LIMIT,
+  and readiness flip policy；
+- confirmed 4a-4g split is small and ordered；
+- confirmed tests cover serial ORDER BY, zero executed/workers/ranges, no smoke
+  counter growth, reader states, KILL/error cleanup, and visible-gate negative
+  matrix；
+- non-blocking review note requested an explicit `PQWR` / `Query_result_mq`
+  forbidden bullet；added before commit。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
