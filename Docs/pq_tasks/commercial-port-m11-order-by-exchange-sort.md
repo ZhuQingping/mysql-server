@@ -2775,6 +2775,179 @@ Code/Doc/Test Review - M11-E5d-4a:
 - confirmed counters, reset, `SHOW_VAR`, and `pq_stats` are consistent；
 - no blocking test or documentation gaps。
 
+### M11-E5d-4b: Exchange_sort Real-state Adapter Boundary Design
+
+Status: design-only taskbook completed；Design Review Agent accepted；waiting
+for commit。
+
+Goal:
+
+- define the smallest safe boundary for moving from a standalone
+  `Sort_param` smoke to an `Exchange_sort`-owned real-state shape；
+- avoid directly copying commercial `Exchange_sort::init()` because it combines
+  `Filesort::make_sortorder()`, DESC metadata, `Sort_param`, heap buffers,
+  record groups, MQ handles, and `read_mq_record()` consumption in one path；
+- keep user-visible ORDER BY PQ disabled until the adapter, frame format, MQ
+  consumption, and `Read()` path are jointly reviewed。
+
+Commercial reference summary:
+
+- commercial `ParallelScanIterator::pq_make_filesort()` rebuilds leader ORDER
+  state, handles optimized-out ORDER BY / index-order cases, creates a
+  `Filesort`, and passes it to `MQ_record_gather::mq_scan_init()`；
+- commercial `MQ_record_gather::mq_scan_init()` constructs `Exchange_sort`
+  with leader `TABLE`, worker split-table handler, worker count, ref length,
+  DESC group metadata, stable-output flag, and index-sort flag；
+- commercial `Exchange_sort::init()` then:
+  - calls `Exchange::init()`；
+  - calls `Filesort::make_sortorder()` again through a public commercial
+    method；
+  - applies DESC group metadata to `sortorder[pos].reverse`；
+  - allocates persistent `Sort_param` on `pq_mem_root`；
+  - pushes the leader table into `Filesort::tables`；
+  - calls `Sort_param::init_for_filesort()`；
+  - allocates compare-key buffers, tmp rowid buffer, per-worker record groups,
+    min-record array, and heap；
+  - later `store_mq_record()` deep-copies MQ rows and `read_mq_record()` copies
+    the selected record into `table->record[0]`。
+
+Current branch facts:
+
+- current `Exchange_sort` is intentionally smaller and owns:
+  - typed ORDER BY frame decode/validation；
+  - synthetic K-way merge smoke；
+  - controlled frame merge smoke；
+  - empty-worker / ERROR edge smoke；
+  - debug-only row materialization smoke；
+  - a lightweight order-gather shape (`init_order_gather_shape()`) with worker,
+    stable-output, and index-sort flags；
+- current branch does not have commercial `MQ_record_gather`；
+- current branch does not expose `Filesort::make_sortorder()`；
+- E5d-4a proves `Sort_param::init_for_filesort()` can initialize from a debug
+  `Filesort` built from a restored sidecar ORDER chain, but it deliberately
+  does not persist state in `Exchange_sort`；
+- current worker result format for ORDER BY remains the typed
+  `PQ_orderby_frame_header` / `PQ_orderby_cached_record` smoke format, not a
+  direct commercial `mq_record_st` copy。
+
+Design decision:
+
+- do not copy commercial `Exchange_sort::init()` wholesale；
+- do not add a real `Exchange_sort::init()` override that consumes `Filesort`
+  or MQ in the next coding step；
+- do not modify `sql/filesort.*` to expose `make_sortorder()`；
+- introduce the next coding task as a DBUG-only adapter-shape smoke that
+  stores scalar observable metadata only；
+- do not persist a real `Sort_param` object/snapshot in E5d-4b-1；persistent
+  `Sort_param` ownership and teardown require a separate follow-up design；
+- keep all persistent adapter state unreachable from default SQL execution；
+- keep the current synthetic/typed-frame smokes as test guards around the
+  future adapter。
+
+Proposed next coding step:
+
+1. M11-E5d-4b-1 Debug-only Exchange_sort Sort-state Adapter Shape:
+   - allowed files:
+     - `sql/parallel_query/exchange_sort.h`
+     - `sql/parallel_query/exchange_sort.cc`
+     - `sql/parallel_query/sql_parallel.cc` only if the existing smoke runner
+       needs to call the new helper；
+     - `sql/parallel_query/sql_parallel.h` and `sql/mysqld.cc` only for new
+       counters；
+     - focused MTR under `mysql-test/suite/parallel_query/`；
+     - this task document and README；
+   - forbidden for this coding step:
+     - `sql/parallel_query/pq_optimizer.cc`；
+   - preferred implementation:
+     - add a small `PQ_orderby_sort_state_shape` struct or equivalent private
+       fields in `Exchange_sort` that records worker count, stable-output flag,
+       index-sort flag, sort-order length, `max_record_length`, and whether
+       rowid/ref buffers would be required；
+     - add a DBUG-only smoke helper driven entirely by synthetic scalar values
+       from `Exchange_sort` / `sql_parallel` smoke setup；
+     - copy only scalar metadata into `Exchange_sort`, then immediately
+       cleanup/resets it；
+     - verify the existing frame smokes still pass and `HAS_ORDER_BY` remains
+       rejected；
+   - follow-up, not E5d-4b-1:
+     - passing scalar values produced from E5d-4a-style `Filesort` /
+       stack-local `Sort_param` initialization across module boundaries；
+     - any `pq_optimizer.cc` hook that connects optimizer-side Filesort
+       validation with `Exchange_sort` state。
+
+Forbidden files / actions for E5d-4b-1:
+
+- no `sql/filesort.*` or `sql/sort_param.*` edits；
+- no `sql/parallel_query/pq_optimizer.cc` edits；
+- no `Filesort::make_sortorder()` visibility change；
+- no commercial `MQ_record_gather` import；
+- no `Exchange_sort::init()` real-path override；
+- no worker MQ consumption from default SQL；
+- no `ParallelScanIterator::Read()` changes；
+- no optimizer eligibility or AccessPath changes；
+- no handler/InnoDB changes；
+- no persisted raw `ORDER *`, `Filesort *`, `Sort_param *`, `TABLE *`, or
+  handler pointer in adapter state；
+- no persisted real `Sort_param` object or snapshot；
+- no `filesort()` execution。
+
+Required validation for E5d-4b-1:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_saved_order_group_contract pq_commercial_order_by pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11e5d4b1_target \
+  --tmpdir=/tmp/pqt_m11e5d4b1_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d4b1_full --tmpdir=/tmp/pqt_m11e5d4b1_full
+```
+
+MTR requirements for E5d-4b-1:
+
+- no-DBUG counters for the new adapter-shape smoke must remain zero；
+- DBUG smoke must record expected attempt/success counters, or a deliberate
+  fail-closed unsupported counter if a synthetic prerequisite is absent；
+- real ORDER BY SQL must still show `HAS_ORDER_BY` serial rejection；
+- `Parallel_queries_executed`, `Parallel_workers_launched`, and
+  `Parallel_ranges_dispatched` must remain zero for the real ORDER BY negative
+  guard。
+
+Design review request:
+
+- confirm E5d-4b should remain design/shape-first and not copy commercial
+  `Exchange_sort::init()`；
+- confirm E5d-4b-1 should not persist `Filesort *` / `Sort_param *` pointers
+  or real `Sort_param` snapshots；
+- confirm scalar sort-state metadata is sufficient for the next adapter smoke；
+- confirm `Exchange_sort::init()` real path, worker MQ consumption, and
+  `ParallelScanIterator::Read()` integration must remain separate follow-ups；
+- confirm the allowed/forbidden file boundaries and validation list are
+  complete。
+
+Design Review - M11-E5d-4b:
+
+- first review verdict: `REVISE`；
+- required changes applied:
+  - resolved `pq_optimizer.cc` ambiguity by forbidding it for E5d-4b-1；
+  - moved optimizer-side scalar handoff to a later follow-up；
+  - tightened E5d-4b-1 to scalar metadata only；
+  - explicitly prohibited persisted real `Sort_param` object/snapshot；
+  - updated stale README next action；
+  - added MTR requirements for no-DBUG zero counters, DBUG success or
+    fail-closed unsupported counters, `HAS_ORDER_BY` rejection, and zero
+    executed/workers/ranges；
+- re-review verdict: `ACCEPT`；
+- findings after revision: none blocking；
+- confirmed E5d-4b correctly blocks direct commercial `Exchange_sort::init()`
+  copy and separates `make_sortorder`, DESC metadata, `Sort_param`, heap
+  buffers, MQ, `Read()`, and eligibility；
+- confirmed E5d-4b-1 may proceed as a debug-only scalar sort-state adapter
+  shape under `Exchange_sort` / `sql_parallel` synthetic smoke setup。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
