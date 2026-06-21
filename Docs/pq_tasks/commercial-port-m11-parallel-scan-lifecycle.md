@@ -776,6 +776,160 @@ Code-Docs-Test Review:
 - confirmed cleanup uses a single guarded path and MTR covers attach counters,
   old open/handler smoke counters, PROBE delta, and real execution counters。
 
+### M11-D4b: Leader Row Stream Adapter Smoke Taskbook
+
+Status: taskbook completed / Docs-Design Review accepted。
+
+Goal:
+
+- add a debug-only leader row stream smoke that lets the leader consume a
+  bounded worker-produced row stream through the existing
+  `PQTableScanIterator::Read()` path；
+- prove the leader-side runtime state, `Exchange_nosort` materialization, EOF
+  cleanup, and execution counters work together under a guarded path；
+- keep default execution unchanged；
+- do not introduce cloned JOIN, commercial worker plan, or user-visible default
+  `PARALLEL_SCAN`。
+
+Relationship to earlier work:
+
+- D4a proves worker TABLE/handler attach and `pq_worker_scan_init/end` cleanup；
+- D4b may reuse existing callback row production and `Exchange_nosort`
+  record-image materialization；
+- D4b must not reuse old local smokes that drain rows entirely inside
+  `Gather_operator` if the goal is to exercise `PQTableScanIterator::Read()`；
+- D4b must not use `Query_result_mq` as the worker execution result path yet；
+  `Query_result_mq` / `PQWR` remains covered by M11-B smokes until cloned JOIN
+  worker execution exists。
+
+Allowed path:
+
+1. DBUG-only hook in `PQTableScanIterator::Init()` after table/blob guard and
+   before existing handler PROBE accounting；
+2. hook obtains handler leader `EXECUTE` context with DOP=1；
+3. hook creates and owns `m_gather` for the iterator；
+4. hook configures worker open context from leader table/context；
+5. hook starts a bounded controlled producer that enqueues record-image ROW
+   frames and FINISH into `m_gather->get_exchange()`；
+6. hook calls `mark_pq_started()` and returns `false` so the normal executor
+   calls `PQTableScanIterator::Read()`；
+7. `Read()` materializes rows through
+   `Exchange_nosort::materialize_next_record_image_status()`；
+8. EOF calls existing `cleanup_pq_resources(false)` and returns `-1`。
+
+Required limits:
+
+- DOP fixed at 1；
+- row production bounded to a small fixed limit, suggested 2 rows；
+- only non-BLOB single-table InnoDB full scan shapes；
+- no ORDER BY / GROUP BY / ref / range / ICP / partition / reverse；
+- no worker thread start in D4b unless a later reviewed revision explicitly
+  chooses threaded shadow as a separate subtask；
+- no cloned JOIN or `ExecuteIteratorQuery()`；
+- no `Query_result_mq` send/read in D4b。
+
+Allowed files:
+
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/parallel_query/pq_iterator.cc` only for a DBUG-only hook before handler
+  PROBE and for using existing runtime state helpers；
+- `sql/mysqld.cc` only for SHOW STATUS exposure；
+- one focused MTR test/result under `mysql-test/suite/parallel_query/`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result` if status variable count
+  changes；
+- this taskbook。
+
+Forbidden files:
+
+- `sql/parallel_query/pq_iterators.*`；
+- `sql/parallel_query/pq_handler.*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/exchange.*`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`；
+- `sql/join_optimizer/access_path.*`；
+- `sql/sql_executor.*`；
+- `sql/sql_optimizer.*`；
+- `sql/handler.*`；
+- `storage/innobase/**`。
+
+Required counters:
+
+- `Parallel_leader_row_stream_smoke_attempts` increments when D4b hook is
+  invoked；
+- `Parallel_leader_row_stream_smoke_selected` increments after the hook has
+  prepared `m_gather`, produced bounded rows, marked PQ started, and returned
+  to executor；
+- `Parallel_leader_row_stream_smoke_rows` increments by the number of rows
+  returned through `PQTableScanIterator::Read()` under this DBUG path；
+- existing real execution counters may increment under this debug path only
+  according to current `Read()` semantics:
+  `Parallel_queries_executed` delta must be 1 and `Parallel_rows_scanned`
+  delta must equal the returned row count；
+- `Parallel_workers_launched` delta must remain 0。
+
+Required MTR assertions:
+
+- debug SELECT returns exactly the bounded row set from the table, suggested
+  first two rows in primary key order；
+- attempt delta >= 1；
+- selected delta >= 1；
+- leader row stream rows delta = returned row count；
+- `Parallel_queries_executed` delta = 1；
+- `Parallel_rows_scanned` delta = returned row count；
+- `Parallel_workers_launched` delta = 0；
+- `Parallel_probe_attempts` delta = 0；
+- old worker-result smoke worker counter delta = 0；
+- D4a attach counters do not grow unless the implementation intentionally
+  reuses D4a helper and documents the coupling。
+
+Suggested implementation:
+
+1. Add a `Gather_operator` helper such as
+   `prepare_leader_row_stream_smoke(THD *leader_thd, TABLE *leader_table,
+   PQ_Leader_context *leader_ctx, uint32 row_limit, uint32 *rows_enqueued)`；
+2. helper initializes gather if needed, configures worker open context, opens
+   worker TABLE/handler, calls `pq_worker_scan_init()`, produces up to
+   `row_limit` record images through existing callback row sink into
+   `Exchange_nosort`, enqueues FINISH, then ends/closes worker resources；
+3. helper must leave `Exchange_nosort` populated for `PQTableScanIterator::Read()`
+   and must not drain rows itself；
+4. `PQTableScanIterator::Init()` owns `m_gather` after helper succeeds；
+5. on any failure before `mark_pq_started()`, cleanup and return an error or
+   serial fallback according to existing pre-commit behavior；the first coding
+   step should prefer fail-closed error for unexpected DBUG smoke failure and
+   serial fallback only for unsupported handler/shape；
+6. after `mark_pq_started()`, use existing `Read()` cleanup/error behavior。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query <d4b_test> pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11d4b_target --tmpdir=/tmp/pqt_m11d4b_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11d4b_full --tmpdir=/tmp/pqt_m11d4b_full
+```
+
+Docs-Design Review:
+
+- Review Agent returned `ACCEPT`；
+- confirmed D4b is a reasonable step after D4a because it exercises
+  `PQTableScanIterator::Read()` with a bounded row stream while staying
+  DBUG-only；
+- confirmed the scope excludes worker thread start, cloned JOIN,
+  `Query_result_mq` formal worker plan, ORDER/GROUP/ref/ICP, and default
+  `PARALLEL_SCAN`；
+- confirmed `Parallel_queries_executed=1` and
+  `Parallel_rows_scanned=returned rows` match current `Read()` semantics for
+  this debug path；
+- non-blocking suggestions were applied: duplicate allowed-file entry removed
+  and `Parallel_probe_attempts` delta assertion added。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；
