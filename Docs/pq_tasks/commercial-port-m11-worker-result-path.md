@@ -304,6 +304,45 @@ TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
   --vardir=/tmp/pqv_m11b3_full --tmpdir=/tmp/pqt_m11b3_full
 ```
 
+Status: coding/validation completed / Code-Docs-Test Review accepted。
+
+Implementation:
+
+- added a local `pq_run_query_result_mq_wiring_smoke()` helper；
+- constructs local `MQueue` / `MQueue_handle` / `Query_result_mq` only；
+- sends two controlled rows through `Query_result_mq::send_data()` and one
+  FINISH through `send_eof()`；
+- leader reads the local `PQWR` frames and validates decoded values with
+  `pq_decode_worker_result_row()`；
+- restores the leader `sent_row_count` after the local send path；
+- increments only `Parallel_worker_result_smoke_rows` and
+  `Parallel_worker_result_smoke_finishes` after successful decode；
+- fails closed if ROW appears after FINISH, if FINISH appears before the two
+  expected ROW frames, or if FINISH is duplicated；
+- does not start worker threads, attach cloned JOIN, modify AccessPath,
+  touch handler/InnoDB, or return decoded `PQWR` data as user SQL result。
+
+Validation result:
+
+- `mysqld` build passed；
+- `pq_commercial_worker_result_adapter pq_commercial_worker_result pq_stats`
+  targeted MTR passed: 4/4；
+- full `parallel_query` suite passed: 80/80；
+- no server restarts or reinitialization in the full suite。
+- after Code-Docs-Test Review REVISE, frame-order fail-closed check was added；
+- post-revision `mysqld` build passed；
+- post-revision targeted MTR passed: 4/4。
+
+Review:
+
+- Code-Docs-Test Review first returned `REVISE` because the helper did not
+  require FINISH after exactly two ROW frames；
+- the helper now rejects ROW after FINISH, FINISH before two ROW frames, and
+  duplicate FINISH in the expected three-frame smoke；
+- re-review returned `ACCEPT`；
+- remaining non-blocking risk: this local smoke validates the expected three
+  frames only and does not drain for tail frames after a correct sequence。
+
 #### M11-B3c: Worker-thread Guarded Probe
 
 Only after B3b review is accepted, evaluate a debug-only worker-thread probe

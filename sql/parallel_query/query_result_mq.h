@@ -90,6 +90,9 @@ bool pq_run_query_result_mq_send_data_smoke(THD *thd, uint32 *rows_read,
 bool pq_run_query_result_mq_adapter_smoke(THD *thd, uint32 *rows_read,
                                           uint32 *finishes_read);
 
+bool pq_run_query_result_mq_wiring_smoke(THD *thd, uint32 *rows_read,
+                                         uint32 *finishes_read);
+
 /*
   This is used to get result from a query executed by PQ worker
 */

@@ -907,6 +907,19 @@ class Gather_operator {
   bool run_query_result_mq_adapter_smoke(THD *leader_thd);
 
   /**
+    Run an M11-B3b local Query_result_mq wiring smoke.
+
+    This sends two local Query_result_mq ROW frames through a local MQueue and
+    decodes them with the PQWR leader adapter. It does not start worker
+    threads, attach cloned JOIN, touch handler/InnoDB, or return decoded data
+    as user SQL result.
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_query_result_mq_wiring_smoke(THD *leader_thd);
+
+  /**
     Run a limited V2-8J callback multi-row producer smoke pass.
 
     This uses the push-style handler callback producer and a SQL-owned row sink
