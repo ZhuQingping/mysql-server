@@ -9,7 +9,8 @@ M11-D0-D6 `ParallelScanIterator` lifecycle contract, guarded construction
 probe, worker attach smoke, leader row stream smoke, post-commit ERROR cleanup
 smoke, row-value correctness smoke, and debug-only commercial
 `ParallelScanIterator` row-value positive path completed coding/validation；
-D6 is waiting for Code-Docs-Test Review。
+D6 Code-Docs-Test Review returned `ACCEPT` and commit `ec873cffc8` was
+created。
 
 ## 目标
 
@@ -109,12 +110,17 @@ DOP=1、无 worker thread、无 clone/JOIN、无默认 AccessPath 行为变化�
 ### M11-E: ORDER BY Gather Merge Real Path Gate
 
 依赖 B/D。当前 `Exchange_sort` 只有 synthetic smoke，真实 ORDER BY 仍
-`HAS_ORDER_BY` fallback。E 不得早于 worker result adapter。
+`HAS_ORDER_BY` fallback。E 不得早于 worker result adapter。E0 已创建
+design-only taskbook，先确认商用 `Exchange_sort` / `MQ_record_gather` /
+`ParallelScanIterator` ORDER path 依赖，再决定是否进入 compile-only E1。
 
 ### M11-F: Ref / ICP Worker Path Continuation
 
 依赖 A/B/D。当前 ref / ICP 是 leader-local/no-worker/no-MQ gate。
 F 负责继续评估 `PQRefIterator`、`ha_pq_next`、secondary ICP worker path。
+只读 Explorer 已确认不建议立即编码：当前仓使用 typed worker context，
+`pq_worker_scan_next()` 仍 intentionally unsupported，M9 ref/ICP 是
+leader-local gate。F 后续需要单独 taskbook/review，不与 E 混合。
 
 ## 验收边界
 
@@ -127,9 +133,9 @@ F 负责继续评估 `PQRefIterator`、`ha_pq_next`、secondary ICP worker path�
 
 ## 当前推荐下一步
 
-1. 完成 M11-D6 Code-Docs-Test Review；
-2. review accepted 后提交 D6；
-3. D6 稳定后再评估 M11-E ORDER BY real path 或 M11-F ref/ICP worker path。
+1. 完成 M11-E0 ORDER BY path contract docs review；
+2. 若 review accepted，进入 M11-E1 compile-only shape；
+3. M11-F ref/ICP worker path 继续保持 read-only 差异调研，避免与 E1 混合。
 
 ## Review
 
