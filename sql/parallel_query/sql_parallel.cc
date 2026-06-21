@@ -846,11 +846,24 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd
   if (sort_exchange.run_cached_record_adapter_smoke(&cached_rows_read)) {
     return true;
   }
+  uint32 frame_rows_read = 0;
+  uint32 frame_finishes_read = 0;
+  uint32 frame_errors_read = 0;
+  if (sort_exchange.run_orderby_frame_contract_smoke(
+          &frame_rows_read, &frame_finishes_read, &frame_errors_read)) {
+    return true;
+  }
 
   pq_global_stats.exchange_sort_smoke_runs.fetch_add(
       1, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_smoke_rows.fetch_add(
       rows_read + cached_rows_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_frame_smoke_rows.fetch_add(
+      frame_rows_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_frame_smoke_finishes.fetch_add(
+      frame_finishes_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_frame_smoke_errors.fetch_add(
+      frame_errors_read, std::memory_order_relaxed);
   return false;
 }
 

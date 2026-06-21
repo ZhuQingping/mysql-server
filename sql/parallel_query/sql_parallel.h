@@ -253,6 +253,9 @@ struct PQ_global_stats {
   std::atomic<uint64> exchange_partial_group_smoke_finishes{0};  ///< FINISH
   std::atomic<uint64> exchange_sort_smoke_runs{0};  ///< ORDER BY merge smoke
   std::atomic<uint64> exchange_sort_smoke_rows{0};  ///< ORDER BY smoke rows
+  std::atomic<uint64> exchange_sort_frame_smoke_rows{0};  ///< ORDER frames
+  std::atomic<uint64> exchange_sort_frame_smoke_finishes{0};  ///< FINISH
+  std::atomic<uint64> exchange_sort_frame_smoke_errors{0};  ///< ERROR
   std::atomic<uint64> groupby_dop1_factory_attempts{0};  ///< GROUP BY hook
   std::atomic<uint64> groupby_dop1_factory_selected{0};  ///< PQ wrapper selected
   std::atomic<uint64> groupby_dop1_native_delegate_executed{0};  ///< Native delegate
@@ -363,6 +366,9 @@ struct PQ_global_stats {
     exchange_partial_group_smoke_finishes.store(0, std::memory_order_relaxed);
     exchange_sort_smoke_runs.store(0, std::memory_order_relaxed);
     exchange_sort_smoke_rows.store(0, std::memory_order_relaxed);
+    exchange_sort_frame_smoke_rows.store(0, std::memory_order_relaxed);
+    exchange_sort_frame_smoke_finishes.store(0, std::memory_order_relaxed);
+    exchange_sort_frame_smoke_errors.store(0, std::memory_order_relaxed);
     groupby_dop1_factory_attempts.store(0, std::memory_order_relaxed);
     groupby_dop1_factory_selected.store(0, std::memory_order_relaxed);
     groupby_dop1_native_delegate_executed.store(0, std::memory_order_relaxed);

@@ -1082,3 +1082,78 @@ Design Review - M11-E5a:
 - residual risk carried forward: before any visible ORDER BY gate, DESC and
   NULL-ordering tests must be explicit, even if initial E5b only supports ASC
   and fails closed for nullable/DESC shapes。
+
+## M11-E5b-0: ORDER BY Frame Contract Helper
+
+Status: completed and committed；next step is M11-E5b-1 controlled frame K-way
+merge smoke。
+
+Goal:
+
+- introduce a dedicated ORDER BY frame contract that is distinct from existing
+  PQWR worker-result frames；
+- validate ROW / FINISH / ERROR frame decode through a controlled local MQ；
+- keep real `Exchange_sort` materialization, optimizer eligibility, and
+  user-visible ORDER BY PQ disabled。
+
+Completion Report - M11-E5b-0 Coding:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `sql/parallel_query/sql_parallel.h`；
+  - `sql/parallel_query/sql_parallel.cc`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_commercial_order_by_frames.test`；
+  - `mysql-test/suite/parallel_query/r/pq_commercial_order_by_frames.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added `PQ_orderby_frame_header` with `PQ_ORDERBY_FRAME_MAGIC` / version and
+    independent `PQ_orderby_frame_type`；
+  - added `pq_validate_orderby_frame()` and `pq_decode_orderby_frame()`；
+  - added controlled `Exchange_sort::run_orderby_frame_contract_smoke()` using
+    a local MQ handle and validating two ROW frames, one FINISH, one ERROR, and
+    rejection of a non-ORDER-BY magic；
+  - wired the contract smoke into existing `Gather_operator::run_exchange_sort_smoke()`；
+  - added dedicated counters:
+    `Parallel_exchange_sort_frame_smoke_rows`,
+    `Parallel_exchange_sort_frame_smoke_finishes`,
+    `Parallel_exchange_sort_frame_smoke_errors`；
+  - updated `pq_stats` expected status count from 98 to 101。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by_frames pq_commercial_order_by pq_stats` 4/4
+    including `shutdown_report`；
+  - full `parallel_query` suite passed: 88/88；
+  - after review hygiene fix, `git diff --check`, `mysqld` build, and targeted
+    MTR passed again。
+- scope notes:
+  - no optimizer, executor, AccessPath, InnoDB, or default
+    `ParallelScanIterator::Read()` changes；
+  - existing PQWR frame format remains unchanged；
+  - `pq_commercial_order_by` still keeps real ORDER BY SQL serial through
+    `HAS_ORDER_BY`；
+  - this is a frame contract smoke only, not visible ORDER BY row
+    materialization。
+
+Code/Doc/Test Review - M11-E5b-0:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed ORDER BY frame contract is distinct from existing PQWR and does not
+  change `Query_result_mq` wire format or leader PQWR decode；
+- confirmed validator/decode cover null inputs, minimum header length, magic,
+  version, type, payload length, total length, and non-ROW zero-payload
+  constraints；
+- confirmed local MQ smoke does not touch optimizer, executor, InnoDB, default
+  `ParallelScanIterator::Read()`, or user-visible ORDER BY；
+- confirmed counters are wired through `PQ_global_stats`, reset, SHOW STATUS,
+  and `pq_stats.result`；
+- confirmed MTR coverage is adequate for E5b-0 and `pq_commercial_order_by`
+  still verifies `HAS_ORDER_BY` serial boundary；
+- applied review hygiene follow-up: `pq_validate_orderby_frame()` now clears
+  output pointers before validating the frame。

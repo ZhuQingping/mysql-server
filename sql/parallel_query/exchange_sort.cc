@@ -23,8 +23,12 @@
 #include "sql/parallel_query/exchange_sort.h"
 
 #include <array>
+#include <cstring>
 
 namespace {
+
+static_assert(sizeof(PQ_orderby_frame_header) == 28,
+              "PQ ORDER BY frame header must stay wire-stable");
 
 struct PQ_orderby_smoke_stream {
   const PQ_orderby_smoke_record *records{nullptr};
@@ -145,6 +149,67 @@ PQ_orderby_cached_record pq_make_cached_orderby_record(int64 key,
   return record;
 }
 
+uint16 pq_orderby_frame_type_to_uint(PQ_orderby_frame_type type) {
+  return static_cast<uint16>(type);
+}
+
+bool pq_is_valid_orderby_frame_type(uint16 type) {
+  return type >= static_cast<uint16>(PQ_orderby_frame_type::ROW) &&
+         type <= static_cast<uint16>(PQ_orderby_frame_type::ERROR);
+}
+
+bool pq_send_orderby_frame(MQueue_handle *handle, PQ_orderby_frame_type type,
+                           const void *record_image, uint32 record_image_len,
+                           const void *row_id, uint32 row_id_len,
+                           const void *sort_key, uint32 sort_key_len,
+                           uint32 flags = 0) {
+  if (handle == nullptr) return true;
+  if ((record_image_len > 0 && record_image == nullptr) ||
+      (row_id_len > 0 && row_id == nullptr) ||
+      (sort_key_len > 0 && sort_key == nullptr)) {
+    return true;
+  }
+  if (type != PQ_orderby_frame_type::ROW &&
+      (record_image_len != 0 || row_id_len != 0 || sort_key_len != 0)) {
+    return true;
+  }
+
+  const uint64 payload_len64 = static_cast<uint64>(record_image_len) +
+                               row_id_len + sort_key_len;
+  if (payload_len64 > UINT32_MAX) return true;
+  const uint32 payload_len = static_cast<uint32>(payload_len64);
+  const uint64 total_len64 =
+      static_cast<uint64>(sizeof(PQ_orderby_frame_header)) + payload_len;
+  if (total_len64 > UINT32_MAX) return true;
+  const uint32 total_len = static_cast<uint32>(total_len64);
+
+  std::vector<uchar> message(total_len);
+  auto *header = reinterpret_cast<PQ_orderby_frame_header *>(message.data());
+  header->magic = PQ_ORDERBY_FRAME_MAGIC;
+  header->version = PQ_ORDERBY_FRAME_VERSION;
+  header->type = pq_orderby_frame_type_to_uint(type);
+  header->flags = flags;
+  header->record_image_len = record_image_len;
+  header->row_id_len = row_id_len;
+  header->sort_key_len = sort_key_len;
+  header->payload_len = payload_len;
+
+  uchar *payload = message.data() + sizeof(PQ_orderby_frame_header);
+  if (record_image_len > 0) {
+    memcpy(payload, record_image, record_image_len);
+    payload += record_image_len;
+  }
+  if (row_id_len > 0) {
+    memcpy(payload, row_id, row_id_len);
+    payload += row_id_len;
+  }
+  if (sort_key_len > 0) {
+    memcpy(payload, sort_key, sort_key_len);
+  }
+
+  return handle->send(message.data(), total_len) != MQ_SUCCESS;
+}
+
 bool pq_orderby_cached_merge(PQ_orderby_record_batch *batches, uint32 nbatches,
                              bool descending,
                              const uint32 *expected_row_ids,
@@ -198,6 +263,75 @@ bool pq_orderby_cached_merge(PQ_orderby_record_batch *batches, uint32 nbatches,
 }
 
 }  // namespace
+
+bool pq_validate_orderby_frame(const void *raw_data, uint32 raw_len,
+                               const PQ_orderby_frame_header **header,
+                               const uchar **payload) {
+  if (raw_data == nullptr || header == nullptr || payload == nullptr) {
+    return true;
+  }
+  *header = nullptr;
+  *payload = nullptr;
+  if (raw_len < sizeof(PQ_orderby_frame_header)) return true;
+
+  auto *frame = static_cast<const PQ_orderby_frame_header *>(raw_data);
+  if (frame->magic != PQ_ORDERBY_FRAME_MAGIC ||
+      frame->version != PQ_ORDERBY_FRAME_VERSION ||
+      !pq_is_valid_orderby_frame_type(frame->type)) {
+    return true;
+  }
+
+  const uint64 expected_payload_len =
+      static_cast<uint64>(frame->record_image_len) + frame->row_id_len +
+      frame->sort_key_len;
+  if (expected_payload_len > UINT32_MAX ||
+      expected_payload_len != frame->payload_len) {
+    return true;
+  }
+  const uint64 expected_len =
+      static_cast<uint64>(sizeof(PQ_orderby_frame_header)) +
+      frame->payload_len;
+  if (expected_len > UINT32_MAX || expected_len != raw_len) return true;
+
+  if (frame->type != static_cast<uint16>(PQ_orderby_frame_type::ROW) &&
+      frame->payload_len != 0) {
+    return true;
+  }
+
+  *header = frame;
+  *payload = frame->payload_len == 0
+                 ? nullptr
+                 : static_cast<const uchar *>(raw_data) +
+                       sizeof(PQ_orderby_frame_header);
+  return false;
+}
+
+bool pq_decode_orderby_frame(const void *raw_data, uint32 raw_len,
+                             PQ_orderby_decoded_frame *decoded) {
+  if (decoded == nullptr) return true;
+
+  const PQ_orderby_frame_header *header = nullptr;
+  const uchar *payload = nullptr;
+  if (pq_validate_orderby_frame(raw_data, raw_len, &header, &payload)) {
+    return true;
+  }
+
+  decoded->type = static_cast<PQ_orderby_frame_type>(header->type);
+  decoded->record_image = nullptr;
+  decoded->record_image_len = header->record_image_len;
+  decoded->row_id = nullptr;
+  decoded->row_id_len = header->row_id_len;
+  decoded->sort_key = nullptr;
+  decoded->sort_key_len = header->sort_key_len;
+
+  if (decoded->type == PQ_orderby_frame_type::ROW) {
+    if (payload == nullptr || header->record_image_len == 0) return true;
+    decoded->record_image = payload;
+    decoded->row_id = payload + header->record_image_len;
+    decoded->sort_key = decoded->row_id + header->row_id_len;
+  }
+  return false;
+}
 
 bool Exchange_sort::read_mq_message(MQMessageType &type, void **datap,
                                     uint32 &data_len) {
@@ -348,4 +482,96 @@ bool Exchange_sort::run_cached_record_adapter_smoke(uint32 *rows_read) {
 
   *rows_read = asc_rows + desc_rows;
   return false;
+}
+
+bool Exchange_sort::run_orderby_frame_contract_smoke(uint32 *rows_read,
+                                                     uint32 *finishes_read,
+                                                     uint32 *errors_read) {
+  if (rows_read == nullptr || finishes_read == nullptr ||
+      errors_read == nullptr) {
+    return true;
+  }
+  *rows_read = 0;
+  *finishes_read = 0;
+  *errors_read = 0;
+
+  PQ_mq_event sender_event;
+  PQ_mq_event receiver_event;
+  char ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue queue(&sender_event, &receiver_event, ring, sizeof(ring));
+  MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (handle.init()) return true;
+
+  const int64 record0 = 100;
+  const int64 record1 = 200;
+  const uint32 rowid0 = 10;
+  const uint32 rowid1 = 20;
+  const int64 sortkey0 = 1;
+  const int64 sortkey1 = 2;
+
+  bool failed =
+      pq_send_orderby_frame(&handle, PQ_orderby_frame_type::ROW, &record0,
+                            sizeof(record0), &rowid0, sizeof(rowid0),
+                            &sortkey0, sizeof(sortkey0)) ||
+      pq_send_orderby_frame(&handle, PQ_orderby_frame_type::ROW, &record1,
+                            sizeof(record1), &rowid1, sizeof(rowid1),
+                            &sortkey1, sizeof(sortkey1)) ||
+      pq_send_orderby_frame(&handle, PQ_orderby_frame_type::FINISH, nullptr, 0,
+                            nullptr, 0, nullptr, 0) ||
+      pq_send_orderby_frame(&handle, PQ_orderby_frame_type::ERROR, nullptr, 0,
+                            nullptr, 0, nullptr, 0);
+
+  for (uint32 i = 0; !failed && i < 4; ++i) {
+    void *raw_data = nullptr;
+    uint32 raw_len = 0;
+    if (handle.receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+      failed = true;
+      break;
+    }
+
+    PQ_orderby_decoded_frame decoded;
+    if (pq_decode_orderby_frame(raw_data, raw_len, &decoded)) {
+      failed = true;
+      break;
+    }
+
+    if (decoded.type == PQ_orderby_frame_type::ROW) {
+      const int64 expected_record = *rows_read == 0 ? record0 : record1;
+      const uint32 expected_rowid = *rows_read == 0 ? rowid0 : rowid1;
+      const int64 expected_sortkey = *rows_read == 0 ? sortkey0 : sortkey1;
+      failed =
+          *rows_read >= 2 || decoded.record_image_len != sizeof(record0) ||
+          decoded.row_id_len != sizeof(rowid0) ||
+          decoded.sort_key_len != sizeof(sortkey0) ||
+          memcmp(decoded.record_image, &expected_record, sizeof(record0)) != 0 ||
+          memcmp(decoded.row_id, &expected_rowid, sizeof(rowid0)) != 0 ||
+          memcmp(decoded.sort_key, &expected_sortkey, sizeof(sortkey0)) != 0;
+      if (!failed) ++(*rows_read);
+    } else if (decoded.type == PQ_orderby_frame_type::FINISH) {
+      failed = decoded.record_image_len != 0 || decoded.row_id_len != 0 ||
+               decoded.sort_key_len != 0;
+      if (!failed) ++(*finishes_read);
+    } else if (decoded.type == PQ_orderby_frame_type::ERROR) {
+      failed = decoded.record_image_len != 0 || decoded.row_id_len != 0 ||
+               decoded.sort_key_len != 0;
+      if (!failed) ++(*errors_read);
+    }
+  }
+
+  PQ_orderby_frame_header invalid{};
+  invalid.magic = PQ_MQ_MESSAGE_MAGIC;
+  invalid.version = PQ_ORDERBY_FRAME_VERSION;
+  invalid.type = pq_orderby_frame_type_to_uint(PQ_orderby_frame_type::ROW);
+  invalid.record_image_len = sizeof(record0);
+  invalid.payload_len = sizeof(record0);
+  const PQ_orderby_frame_header *unused_header = nullptr;
+  const uchar *unused_payload = nullptr;
+  if (!pq_validate_orderby_frame(&invalid, sizeof(invalid), &unused_header,
+                                 &unused_payload)) {
+    failed = true;
+  }
+
+  handle.cleanup();
+  return failed || *rows_read != 2 || *finishes_read != 1 ||
+         *errors_read != 1;
 }

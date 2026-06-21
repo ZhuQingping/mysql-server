@@ -1,0 +1,45 @@
+# Verify M11-E5b-0 ORDER BY worker-frame contract smoke is observable.
+
+--source include/have_innodb_16k.inc
+
+CREATE TABLE pq_orderby_frame_t (
+  id INT PRIMARY KEY,
+  k INT NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO pq_orderby_frame_t VALUES (1, 30), (2, 10), (3, 20);
+
+SET @frame_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_smoke_rows');
+SET @frame_finishes_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_smoke_finishes');
+SET @frame_errors_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_smoke_errors');
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+
+--sorted_result
+SELECT * FROM pq_orderby_frame_t;
+
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_smoke_rows') -
+  @frame_rows_before) >= 2 AS orderby_frame_rows_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_smoke_finishes') -
+  @frame_finishes_before) >= 1 AS orderby_frame_finishes_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_smoke_errors') -
+  @frame_errors_before) >= 1 AS orderby_frame_errors_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE pq_orderby_frame_t;

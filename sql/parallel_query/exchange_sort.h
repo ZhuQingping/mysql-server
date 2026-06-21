@@ -58,6 +58,43 @@ struct PQ_orderby_record_batch {
       PQ_orderby_batch_compare_state::NOT_EVALUATED};
 };
 
+enum class PQ_orderby_frame_type : uint16 {
+  ROW = 1,
+  FINISH = 2,
+  ERROR = 3,
+};
+
+struct PQ_orderby_frame_header {
+  uint32 magic;
+  uint16 version;
+  uint16 type;
+  uint32 flags;
+  uint32 record_image_len;
+  uint32 row_id_len;
+  uint32 sort_key_len;
+  uint32 payload_len;
+};
+
+struct PQ_orderby_decoded_frame {
+  PQ_orderby_frame_type type{PQ_orderby_frame_type::ERROR};
+  const uchar *record_image{nullptr};
+  uint32 record_image_len{0};
+  const uchar *row_id{nullptr};
+  uint32 row_id_len{0};
+  const uchar *sort_key{nullptr};
+  uint32 sort_key_len{0};
+};
+
+constexpr uint32 PQ_ORDERBY_FRAME_MAGIC = 0x50514f46;  // "PQOF"
+constexpr uint16 PQ_ORDERBY_FRAME_VERSION = 1;
+
+bool pq_validate_orderby_frame(const void *raw_data, uint32 raw_len,
+                               const PQ_orderby_frame_header **header,
+                               const uchar **payload);
+
+bool pq_decode_orderby_frame(const void *raw_data, uint32 raw_len,
+                             PQ_orderby_decoded_frame *decoded);
+
 class Exchange_sort final : public Exchange {
  public:
   Exchange_sort() = default;
@@ -70,6 +107,9 @@ class Exchange_sort final : public Exchange {
 
   bool run_synthetic_order_merge_smoke(uint32 *rows_read);
   bool run_cached_record_adapter_smoke(uint32 *rows_read);
+  bool run_orderby_frame_contract_smoke(uint32 *rows_read,
+                                        uint32 *finishes_read,
+                                        uint32 *errors_read);
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);
