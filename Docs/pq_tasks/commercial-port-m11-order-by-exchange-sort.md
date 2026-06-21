@@ -398,6 +398,101 @@ Review:
   InnoDB, optimizer, `table->record[0]` materialization, abort propagation, and
   full Filesort-compatible comparison semantics。
 
+## M11-E5c: User-visible ORDER BY Gate Design Review
+
+Status: design-only completed，Review Agent accepted，waiting for commit。
+
+Decision:
+
+- do not relax `HAS_ORDER_BY` in `pq_optimizer` in this step；
+- do not enable user-visible ORDER BY PQ before the commercial real path has a
+  reviewed leader Filesort/Sort_param contract, worker ORDER BY frame producer,
+  abort/error propagation, and result-order correctness tests；
+- keep `pq_commercial_order_by` as the negative serial-boundary guard for now。
+
+Commercial dependency summary:
+
+- `ParallelScanIterator::pq_make_filesort()` reconstructs leader `Filesort` /
+  order metadata, including saved order/group state and ordered-index fallback；
+- `ParallelScanIterator::pq_init_record_gather()` installs `MQ_record_gather`
+  and wires each worker MQ handle；
+- `MQ_record_gather::mq_scan_init()` selects `Exchange_sort` when sort metadata
+  exists；
+- commercial `Exchange_sort::store_mq_record()` deep-copies worker records and
+  rowid/ref data；
+- commercial `Exchange_sort::read_mq_record()` picks the minimum cached worker
+  record and writes it into leader `table->record[0]`；
+- comparator semantics depend on `Sort_param::make_sortkey()`, Filesort key
+  length, index-sort/reverse metadata, rowid/ref tie-break, and worker
+  completion/error semantics。
+
+Current branch readiness:
+
+- completed:
+  - independent ORDER BY frame contract；
+  - controlled ROW/FINISH/ERROR frame decode；
+  - controlled K-way merge with rowid tie-break；
+  - FINISH-only empty worker and ERROR fail-closed smoke；
+  - debug-only record-image materialization into `table->record[0]`；
+  - negative user-visible ORDER BY serial-boundary MTR。
+- not complete:
+  - real worker ORDER BY frame producer；
+  - `Filesort` / `Sort_param` construction and lifetime contract；
+  - full commercial comparison semantics for ASC/DESC/NULL/order expressions；
+  - abort cleanup from worker ERROR through `Exchange_sort` and iterator；
+  - result correctness for multi-worker ORDER BY with LIMIT；
+  - optimizer diagnostics for a reviewed visible ORDER BY candidate gate。
+
+Proposed minimum visible-gate prerequisites:
+
+1. E5d Filesort State Contract:
+   leader-only construction smoke for `Filesort` / `Sort_param` without mutating
+   normal executor state；must preserve `HAS_ORDER_BY` user-visible fallback。
+2. E5e Worker ORDER BY Frame Producer Smoke:
+   debug-only worker-side producer emits ORDER BY frames using current worker
+   record images；leader consumes via `Exchange_sort` frame path。
+3. E5f Abort/Error Cleanup Contract:
+   controlled ERROR and leader abort paths detach MQ and clean up cached
+   records without leaking worker/gather state。
+4. E5g Exact-shape Visible Gate Design:
+   only after E5d/E5e/E5f pass review, design a narrow gate such as
+   single-table InnoDB full scan, simple direct-field `ORDER BY`, no DISTINCT,
+   no GROUP/HAVING/window/subquery/order expressions, no DESC/NULL-sensitive
+   shape unless explicitly covered, and no optimizer state mutation outside the
+   PQ iterator lifecycle。
+
+Required tests before any visible gate:
+
+- keep `pq_commercial_order_by` negative serial-boundary assertions；
+- add dedicated debug MTR for `Filesort` state smoke；
+- add debug MTR for worker ORDER BY frame producer and leader materialization；
+- add ERROR/KILL cleanup MTR for ORDER BY frame path；
+- add future positive result-order MTR only after the visible-gate design is
+  separately accepted。
+
+Hard stop:
+
+- if opening `HAS_ORDER_BY` would route SQL into current debug-only
+  `run_exchange_sort_smoke()` path, stop；
+- if `Filesort` or `Sort_param` setup requires unreviewed JOIN/QEP_TAB state
+  mutation, stop；
+- if worker frame format cannot be kept distinct from existing PQWR frames,
+  stop；
+- if DESC, NULL ordering, LIMIT, rowid/ref tie-break, or abort cleanup cannot be
+  tested independently, keep user-visible ORDER BY serial。
+
+Design Review - M11-E5c:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed E5c keeps `HAS_ORDER_BY` as the user-visible serial boundary；
+- confirmed SQL ORDER BY is not routed into current debug-only
+  `run_exchange_sort_smoke()` or inert `Exchange_sort::read_mq_message()`；
+- suggested next phase: E5d Filesort State Contract, leader-only/debug-only,
+  verifying `Filesort` / `Sort_param` construction, lifetime, saved
+  ORDER/GROUP restoration, ordered-index/reverse metadata, and no normal
+  executor state mutation。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
