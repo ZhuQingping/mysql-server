@@ -23,25 +23,77 @@
 
 #include "sql/parallel_query/pq_resolver.h"
 
+#include <cstring>
+
+#include "sql/item.h"
 #include "sql/sql_array.h"
 
-bool find_order_in_list_for_pq(THD *, Ref_item_array &, ORDER *,
-                               mem_root_deque<Item *> *) {
-  return true;
+bool find_order_in_list_for_pq(THD *, Ref_item_array &ref_item_array,
+                               ORDER *order, mem_root_deque<Item *> *fields) {
+  if (order == nullptr || order->item == nullptr || *order->item == nullptr)
+    return true;
+
+  uint pos_in_ref = 0;
+  Item **resolved = find_item_in_base_items(ref_item_array, fields, *order->item,
+                                            pos_in_ref);
+  if (resolved == nullptr) return true;
+
+  order->item = resolved;
+  return false;
 }
 
-Item **resolve_item_in_base_ref_items(THD *, Ref_item_array,
-                                      mem_root_deque<Item *> *, uint &,
-                                      Item *) {
+Item **resolve_item_in_base_ref_items(THD *, Ref_item_array ref_item_array,
+                                      mem_root_deque<Item *> *fields,
+                                      uint &pos_in_ref, Item *item) {
+  return find_item_in_base_items(ref_item_array, fields, item, pos_in_ref);
+}
+
+Item **find_item_in_base_items(Ref_item_array ref_item_array,
+                               mem_root_deque<Item *> *fields, Item *item,
+                               uint &pos_in_ref) {
+  if (ref_item_array.is_null() || fields == nullptr || item == nullptr)
+    return nullptr;
+
+  uint field_pos = 0;
+  bool need_alias_item = true;
+  for (Item *candidate : *fields) {
+    if (candidate == nullptr) {
+      ++field_pos;
+      continue;
+    }
+
+    if (candidate->hidden || item->hidden) return nullptr;
+
+    need_alias_item = true;
+    if (items_equal_after_resolve(item, candidate, need_alias_item)) {
+      if (field_pos >= ref_item_array.size()) return nullptr;
+      if (ref_item_array[field_pos] == nullptr ||
+          ref_item_array[field_pos] != candidate)
+        return nullptr;
+      pos_in_ref = field_pos;
+      return &ref_item_array[pos_in_ref];
+    }
+    ++field_pos;
+  }
+
   return nullptr;
 }
 
-Item **find_item_in_base_items(Ref_item_array, mem_root_deque<Item *> *,
-                               Item *, uint &) {
-  return nullptr;
-}
+bool items_equal_after_resolve(Item *find, Item *item, bool &need_alias_item) {
+  need_alias_item = true;
+  if (find == nullptr || item == nullptr) return false;
+  if (!find->eq(item, false)) return false;
 
-bool items_equal_after_resolve(Item *, Item *, bool &need_alias_item) {
-  need_alias_item = false;
+  if (!find->item_name.is_set() || !item->item_name.is_set()) {
+    need_alias_item = false;
+    return true;
+  }
+
+  if (find->item_name.length() == item->item_name.length() &&
+      !strcmp(find->item_name.ptr(), item->item_name.ptr())) {
+    need_alias_item = false;
+    return true;
+  }
+
   return false;
 }

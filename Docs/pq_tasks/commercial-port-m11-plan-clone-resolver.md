@@ -7,6 +7,8 @@ M11-A1 Item base contract compile-only skeleton completed /
 Code-Docs-Test Review accepted。
 M11-A2 Query_block / JOIN clone-link skeleton completed /
 Code-Docs-Test Review accepted。
+M11-A3 Resolver helper compile-only subset completed /
+Code-Docs-Test Review accepted。
 
 ## 目标
 
@@ -136,6 +138,46 @@ Status: coding/validation completed / Code-Docs-Test Review accepted。
 - `sql/parallel_query/pq_resolver.*`；
 - `sql/parallel_query/pq_refix_fields_item.cc`；
 - `sql/parallel_query/pq_replace_base_item.cc`。
+
+Implementation notes:
+
+- implement only conservative lookup/compare helpers in `pq_resolver.cc`；
+- `items_equal_after_resolve()` uses current `Item::eq(item, false)` only；
+- `find_item_in_base_items()` scans current fields/base ref array and returns
+  an existing pointer when found；
+- hidden item mapping remains unsupported in A3 and returns fail-closed because
+  `fields` and `base_ref_items` may use different positions；
+- visible item lookup returns a pointer only when the matching `fields` entry
+  and `base_ref_items` slot are the same Item pointer；
+- `resolve_item_in_base_ref_items()` is lookup-only and does not call
+  `refix_fields()`；
+- `find_order_in_list_for_pq()` may replace `order->item` only when lookup
+  succeeds；
+- do not add `pq_try_clone_item` in A3；
+- keep `pq_refix_fields_item.cc` and `pq_replace_base_item.cc` as placeholders；
+- do not change `pq_make_join()` or clone probe success semantics。
+
+Status: coding/validation completed / Code-Docs-Test Review accepted。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_clone_diagnostics \
+  --parallel=1 --vardir=/tmp/pqv_m11a3_clone2 --tmpdir=/tmp/pqt_m11a3_clone2
+```
+
+Review:
+
+- First Code-Docs-Test Review returned `REVISE` because hidden
+  `fields` / `base_ref_items` positions may differ and linear index lookup
+  could map to the wrong base-ref item；
+- fix keeps hidden item mapping unsupported/fail-closed and requires visible
+  lookup to match the exact same `Item` pointer in `base_ref_items`；
+- final Code-Docs-Test Review returned `ACCEPT` after build and
+  `pq_clone_diagnostics` validation passed。
 
 ### M11-A4: Clone Contract Preflight Probe
 
