@@ -23,8 +23,9 @@ scalar handoff completed，Code/Doc/Test Review Agent accepted，full
 `parallel_query` suite passed，committed as `4dc34748200`；M11-E5d-5 real
 `Exchange_sort` init / MQ / Read boundary design completed and committed；
 M11-E5d-5a `Exchange_sort` real-init state owner shape completed and
-committed；M11-E5d-5b sort-key buffer / record-group allocation smoke completed,
-reviewed, and ready to commit。
+committed；M11-E5d-5b sort-key buffer / record-group allocation smoke completed
+and committed；M11-E5d-5c controlled ORDER BY MQ-to-record-group loader design
+accepted。
 
 ## 背景
 
@@ -3173,7 +3174,7 @@ Design Review - M11-E5d-4c:
 
 Status: coding completed；Code/Doc/Test Review Agent accepted；`git diff
 --check`, `mysqld` build, targeted MTR, and full `parallel_query` suite passed；
-waiting for commit。
+committed as `45c1b4efd30`。
 
 Goal:
 
@@ -3623,6 +3624,117 @@ Code/Doc/Test Review - M11-E5d-5b:
 - confirmed no MTR/result update is needed because existing
   `pq_commercial_order_by_frames` toggles the DBUG entry and detailed buffer
   assertions live inside the C++ smoke。
+
+### M11-E5d-5c: Controlled ORDER BY MQ-to-record-group Loader Design
+
+Status: design completed；Design Review Agent accepted；waiting for commit。
+
+Goal:
+
+- introduce the next boundary after 5b allocation: controlled loader from
+  dedicated `PQOF` ORDER BY frames into `Exchange_sort` owned record groups；
+- keep the loader local/debug-only and disconnected from normal worker MQ
+  production；
+- prove frame decode, deep-copy, per-worker FINISH, ERROR, and WOULD_BLOCK
+  handling before any ordered `Read()` bridge。
+
+Design constraints:
+
+- use only existing `PQ_orderby_frame_header` / `PQ_orderby_decoded_frame`
+  format；
+- do not mix or reinterpret `PQWR` worker-result frames；
+- loader may read only from controlled local `MQueue_handle` instances created
+  inside a smoke；
+- loader output is `m_record_groups[worker_id].records`, using owned
+  `std::vector` storage already present in `PQ_orderby_cached_record`；
+- record image, rowid, and sort key must be deep-copied；
+- FINISH marks only that worker's group complete；
+- ERROR returns fail-closed and leaves default SQL unaffected；
+- WOULD_BLOCK must be observable as a loader status, not converted to EOF；
+- no user-visible result is materialized in this phase。
+
+Proposed implementation shape:
+
+- add an internal loader status enum scoped to `Exchange_sort`, for example:
+  `ROW`, `FINISH`, `WOULD_BLOCK`, `ERROR`；
+- add a helper that reads one controlled ORDER BY frame from a specific
+  `MQueue_handle` and updates one `PQ_orderby_record_batch`；
+- add a smoke that:
+  - initializes 5a/5b owned state for 3 workers；
+  - sends controlled `PQOF` ROW/FINISH frames through local MQ handles；
+  - verifies row image, rowid, and sort key bytes are deep-copied into the
+    expected worker record groups；
+  - verifies one empty/FINISH worker；
+  - verifies an ERROR frame fails closed；
+  - verifies a no-message read returns WOULD_BLOCK without mutating groups；
+  - verifies cleanup clears groups and buffers。
+
+Allowed files for future coding:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Forbidden files/actions:
+
+- no `Query_result_mq` frame format changes；
+- no `PQWR` frame reuse；
+- no `sql/filesort.*` or `sql/sort_param.*` changes；
+- no `Sort_param` construction, use, or integration from `Exchange_sort` or any
+  other 5c code path；
+- no optimizer, executor, AccessPath, handler, or InnoDB changes；
+- no persistent raw optimizer/executor/storage pointers；
+- no real `Filesort::make_sortorder()` visibility or execution；
+- no default worker MQ ORDER BY consumption；
+- no default `ParallelScanIterator::Read()` ordered path；
+- no user-visible `HAS_ORDER_BY` acceptance；
+- no visible row materialization from this loader。
+
+Validation for future coding:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5c_target --tmpdir=/tmp/pqt_m11e5d5c_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5c_full --tmpdir=/tmp/pqt_m11e5d5c_full
+```
+
+Required validation expectations:
+
+- real ORDER BY SQL still reports `Not parallel HAS_ORDER_BY`；
+- `Parallel_queries_executed`, `Parallel_workers_launched`, and
+  `Parallel_ranges_dispatched` must not increase for ORDER BY negative tests；
+- no default ordered `ParallelScanIterator::Read()` path is selected；
+- controlled loader smoke must be observable only through the dedicated DBUG
+  path and existing ORDER BY frame smoke counters。
+
+Design review request:
+
+- confirm this phase may read controlled local `PQOF` frames but must not
+  consume default worker MQ；
+- confirm `PQWR` and `PQOF` frame formats must remain separate；
+- confirm WOULD_BLOCK needs an explicit status before any `Read()` bridge；
+- confirm visible row materialization and ordered `Read()` stay deferred to
+  later phases。
+
+Design Review - M11-E5d-5c:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none after requested changes；
+- confirmed 5c is small and codable: controlled local `PQOF` only, deep-copy
+  into owned record groups, and ROW/FINISH/ERROR/WOULD_BLOCK covered；
+- confirmed `PQWR` / `Query_result_mq` separation is clear；
+- confirmed `Sort_param` construction/use/integration is explicitly forbidden；
+- confirmed validation requires `Not parallel HAS_ORDER_BY`, no
+  executed/workers/ranges growth, no default ordered
+  `ParallelScanIterator::Read()`, and loader observability only through DBUG /
+  frame-smoke counters。
 
 ## Risk Areas
 
