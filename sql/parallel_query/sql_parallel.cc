@@ -842,11 +842,15 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd
   if (sort_exchange.run_synthetic_order_merge_smoke(&rows_read)) {
     return true;
   }
+  uint32 cached_rows_read = 0;
+  if (sort_exchange.run_cached_record_adapter_smoke(&cached_rows_read)) {
+    return true;
+  }
 
   pq_global_stats.exchange_sort_smoke_runs.fetch_add(
       1, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_smoke_rows.fetch_add(
-      rows_read, std::memory_order_relaxed);
+      rows_read + cached_rows_read, std::memory_order_relaxed);
   return false;
 }
 

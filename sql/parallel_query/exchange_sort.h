@@ -69,6 +69,7 @@ class Exchange_sort final : public Exchange {
   ExchangeType get_exchange_type() const override { return EXCHANGE_SORT; }
 
   bool run_synthetic_order_merge_smoke(uint32 *rows_read);
+  bool run_cached_record_adapter_smoke(uint32 *rows_read);
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);

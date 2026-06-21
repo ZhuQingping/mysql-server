@@ -112,8 +112,9 @@ DOP=1、无 worker thread、无 clone/JOIN、无默认 AccessPath 行为变化�
 依赖 B/D。当前 `Exchange_sort` 只有 synthetic smoke，真实 ORDER BY 仍
 `HAS_ORDER_BY` fallback。E 不得早于 worker result adapter。E0 已完成
 design-only taskbook；E1 已完成 `Exchange_sort` commercial shape compile-only
-和 ORDER BY negative boundary hardening，未改变默认 SQL 行为。下一步进入
-E2 sorted row-frame adapter smoke 设计。
+和 ORDER BY negative boundary hardening；E2 已完成 cached row-frame adapter
+smoke，未改变默认 SQL 行为。下一步进入 E3 `ParallelScanIterator` order gather
+debug path 设计。
 
 ### M11-F: Ref / ICP Worker Path Continuation
 
@@ -134,9 +135,10 @@ leader-local gate。F 后续需要单独 taskbook/review，不与 E 混合。
 
 ## 当前推荐下一步
 
-1. 提交 M11-E1 compile-only shape；
-2. 生成并 review M11-E2 sorted row-frame adapter smoke taskbook；
-3. M11-F ref/ICP worker path 继续保持独立 taskbook，避免与 E2 混合。
+1. 提交 M11-E2 cached row-frame adapter smoke；
+2. 生成并 review M11-E3 `ParallelScanIterator` order gather debug path
+   taskbook；
+3. M11-F ref/ICP worker path 继续保持独立 taskbook，避免与 E3 混合。
 
 ## Review
 

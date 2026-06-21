@@ -427,3 +427,160 @@ Code-Docs-Test Review:
   deltas and preserves `Not parallel HAS_ORDER_BY`；
 - confirmed no optimizer, AccessPath, handler, InnoDB, worker launch,
   `query_result_mq`, clone, or resolver files were modified。
+
+## M11-E2: Sorted Row-frame Adapter Smoke
+
+Status: coding, validation, and Code-Docs-Test Review completed；ready to
+commit。
+
+Goal:
+
+- add a DBUG-only or smoke-only adapter path inside `Exchange_sort` that
+  consumes controlled sorted row-frame-like records through the E1 cached record
+  shape；
+- prove the commercial-shape cached record/batch structures can drive a
+  deterministic K-way merge；
+- keep real MQ row consumption disabled；
+- keep real ORDER BY SQL rejected by `HAS_ORDER_BY`；
+- do not modify optimizer, AccessPath, handler, InnoDB, worker launch,
+  `Query_result_mq`, clone, resolver, or `ParallelScanIterator` path。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `sql/parallel_query/sql_parallel.h` / `.cc` only if a dedicated smoke helper
+  or counters are needed；
+- `sql/mysqld.cc` and `pq_stats.result` only if new SHOW STATUS counters are
+  added；
+- focused MTR under `mysql-test/suite/parallel_query/` if the smoke becomes
+  SQL-observable；
+- this taskbook and progress docs。
+
+Forbidden files:
+
+- `sql/parallel_query/pq_optimizer.*`；
+- `sql/sql_optimizer.*`；
+- `sql/sql_executor.*`；
+- `sql/sql_select.*`；
+- `sql/join_optimizer/access_path.*`；
+- `storage/innobase/**`；
+- `sql/handler.*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`；
+- `sql/parallel_query/pq_iterators.*` unless a later review explicitly moves
+  E3 into scope。
+
+Required implementation direction:
+
+1. Use E1 `PQ_orderby_cached_record` / `PQ_orderby_record_batch` as the only
+   row-frame adapter storage；
+2. add a helper such as `run_cached_record_adapter_smoke(uint32 *rows_read)`；
+3. helper builds controlled per-worker sorted record batches with:
+   - sort key；
+   - row id tie-break；
+   - worker id；
+   - row image payload placeholder；
+4. helper performs a K-way merge through `binary_heap` and validates expected
+   output order；
+5. validate at least ASC and DESC/tie-break cases；
+6. helper must not call `read_mq_message()` or consume real MQ handles；
+7. `read_mq_message()` remains inert；
+8. no SQL-visible ORDER BY path changes；
+9. if counters are added, use E2-specific names and keep existing M8
+   `Parallel_exchange_sort_smoke_*` stable unless intentionally extended。
+
+Required negative assertions:
+
+- `pq_commercial_order_by` still shows `Not parallel HAS_ORDER_BY`；
+- real ORDER BY SQL still has zero delta for `Parallel_queries_executed`,
+  `Parallel_workers_launched`, and `Parallel_ranges_dispatched`；
+- no new worker-result, handler, or range counters grow from real ORDER BY SQL。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11e2_target --tmpdir=/tmp/pqt_m11e2_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e2_full --tmpdir=/tmp/pqt_m11e2_full
+```
+
+Agent Task Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Code Agent。
+主控 Agent 是 Codex。
+当前任务是 M11-E2 Sorted Row-frame Adapter Smoke。
+
+请阅读：
+- Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md；
+- sql/parallel_query/exchange_sort.h；
+- sql/parallel_query/exchange_sort.cc；
+- sql/parallel_query/exchange.h；
+- sql/parallel_query/sql_parallel.cc；
+- mysql-test/suite/parallel_query/t/pq_commercial_order_by.test。
+
+任务目标：
+1. 使用 E1 cached record/batch shape 增加 controlled sorted row-frame adapter
+   smoke；
+2. 通过 binary_heap 验证 ASC、DESC/tie-break 输出顺序；
+3. 不读取真实 MQ，不打开真实 ORDER BY SQL，不修改 optimizer/AccessPath/
+   handler/InnoDB/worker launch；
+4. 保持 `pq_commercial_order_by` 的 HAS_ORDER_BY serial boundary 断言。
+
+完成后不要自行 commit。
+```
+
+Docs-Design Review:
+
+- Verdict: `ACCEPT`；
+- confirmed E2 remains smoke-only；
+- confirmed it uses E1 cached record/batch shape and `binary_heap`；
+- confirmed allowed/forbidden files are narrow enough；
+- confirmed negative assertions protect the `HAS_ORDER_BY` serial boundary。
+
+Implementation:
+
+- added `Exchange_sort::run_cached_record_adapter_smoke()`；
+- added controlled cached-record K-way merge using E1
+  `PQ_orderby_cached_record` / `PQ_orderby_record_batch` storage；
+- validated ASC and DESC/tie-break ordering through `binary_heap`；
+- did not call `read_mq_message()` or consume real MQ handles；
+- kept `read_mq_message()` inert；
+- reused existing `Gather_operator::run_exchange_sort_smoke()` and existing
+  `Parallel_exchange_sort_smoke_*` counters by adding cached adapter rows to
+  the smoke row total；
+- did not modify optimizer, AccessPath, handler, InnoDB, worker launch,
+  `Query_result_mq`, clone, resolver, or `ParallelScanIterator` files。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR `pq_commercial_order_by pq_stats` passed, 3/3；
+- full `parallel_query` suite passed, 86/86。
+
+Code-Docs-Test Review:
+
+- Verdict: `ACCEPT`；
+- findings: none；
+- required fixes: none；
+- confirmed the cached adapter smoke uses only controlled E1 cached
+  record/batch inputs and local `binary_heap` merge；
+- confirmed it does not call `read_mq_message()` or consume MQ handles；
+- confirmed `read_mq_message()` remains inert；
+- confirmed `Gather_operator::run_exchange_sort_smoke()` only extends existing
+  smoke counters；
+- confirmed no optimizer, AccessPath, handler, InnoDB, worker launch,
+  `Query_result_mq`, clone/resolver, or `ParallelScanIterator` files were
+  modified；
+- residual risk: real filesort key encoding, collation, NULL handling, and live
+  worker/MQ row frames remain deferred beyond E2。
