@@ -5,6 +5,8 @@
 M10-A manifest diff completed / Docs-Test Review accepted。
 M10-B1 sysvars/fullscan edge small rewrite completed / Code-Docs-Test Review
 accepted。
+M10-B2 EXPLAIN JSON/TREE and fallback counter minimal tests completed /
+Code-Docs-Test Review accepted。
 
 ## 目标
 
@@ -343,3 +345,58 @@ M10-B1:
 - Code-Docs-Test Review Agent returned `ACCEPT`；
 - review confirmed `pq_vars` sysvar boundary behavior and
   `pq_commercial_fullscan_edges` stable commercial narrow subset coverage。
+
+## M10-B2: EXPLAIN JSON/TREE And Fallback Counter Minimal Tests
+
+Status: completed / Code-Docs-Test Review accepted。
+
+目标：
+
+- 对齐商用 `pq_explain_tree` / `pq_explain_json` 的当前稳定注解子集；
+- 对齐商用 `pq_fallback` 的最小 counter contract；
+- 不迁移完整商用 EXPLAIN result、hint、subquery、derived、hash join、
+  semijoin 或 debug 注入内容。
+
+实现：
+
+- 新增 `pq_explain_json_tree_minimal`：
+  - eligible TREE 显示 `parallel query eligible, execution disabled,
+    serial fallback (dop=2)`；
+  - eligible JSON 显示 `parallel_query_state=eligible` 和 dop=2 注解；
+  - ORDER BY TREE 显示 `not parallel (HAS_ORDER_BY)`；
+  - EXPLAIN 不增加 `Parallel_queries_executed` 或
+    `Parallel_queries_fallback`。
+- 新增 `pq_fallback_counters_minimal`：
+  - eligible full scan 当前 safe fallback，`fullscan_fallback_delta=1`；
+  - GROUP BY 与 locking read 属 ineligible，不增加 fallback counter；
+  - `executed_delta=0`、`rows_delta=0`、`workers_delta=0`。
+
+验证：
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record \
+  pq_explain_json_tree_minimal pq_fallback_counters_minimal
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query \
+  pq_explain_json_tree_minimal pq_fallback_counters_minimal
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+结果：
+
+- targeted record/replay passed；
+- full `parallel_query` suite passed: 77/77；
+- no source edits, no build required。
+
+Completion:
+
+- changed MTR tests plus task docs；
+- Code-Docs-Test Review Agent first returned `REVISE` for fragile EXPLAIN
+  cost/row output and unsorted `FOR UPDATE` output；
+- fixed TREE/JSON cost/row/data-read masking and added `--sorted_result` for
+  `FOR UPDATE`；
+- targeted record/replay passed after fixes；
+- full `parallel_query` suite passed: 77/77；
+- Code-Docs-Test Review Agent returned `ACCEPT`。
