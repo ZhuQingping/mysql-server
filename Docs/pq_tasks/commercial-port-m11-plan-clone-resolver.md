@@ -11,6 +11,8 @@ M11-A3 Resolver helper compile-only subset completed /
 Code-Docs-Test Review accepted。
 M11-A4 Clone contract preflight probe completed /
 Code-Docs-Test Review accepted。
+M11-A5 Clone preflight MTR smoke doc-only closure completed /
+Docs-Test Review accepted。
 
 ## 目标
 
@@ -237,6 +239,49 @@ Review:
 - clone preflight counters 增长；
 - `Parallel_workers_launched` 不增长；
 - 不声明 cloned JOIN positive execution。
+
+Decision:
+
+- A5 is closed as doc-only because A4 already extended
+  `pq_clone_diagnostics` with the full A5 smoke boundary；
+- no new MTR is added to avoid duplicating the same simple SELECT /
+  preflight-counter / no-worker assertions；
+- `pq_stats` already covers the new status variable visibility and numeric
+  value contract。
+
+Covered by:
+
+- `pq_clone_diagnostics`:
+  - simple SELECT result remains correct；
+  - `Parallel_clone_preflight_attempts` delta >= 1；
+  - `Parallel_clone_preflight_unsupported` delta >= 1；
+  - `Parallel_clone_probe_success` delta = 0；
+  - `Parallel_workers_launched` delta = 0；
+  - clone probe fallback/unsupported delta >= 1；
+- `pq_stats`:
+  - `Parallel_clone_preflight_attempts` and
+    `Parallel_clone_preflight_unsupported` are visible as numeric
+    `Parallel%` status variables。
+
+Validation:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11a4_target --tmpdir=/tmp/pqt_m11a4_target
+
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11a4_full --tmpdir=/tmp/pqt_m11a4_full
+```
+
+Status: doc-only closure completed / Docs-Test Review accepted。
+
+Review:
+
+- Docs-Test Review returned `ACCEPT`；
+- no extra MTR is needed because A4 already covers the A5 smoke boundary；
+- docs do not claim cloned JOIN positive execution or worker path activation。
 
 ## M11-A 总禁止范围
 
