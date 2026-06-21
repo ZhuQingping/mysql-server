@@ -1,5 +1,5 @@
 # Test: pq_saved_order_group_contract
-# M11-E5d-S1/S2/S3/E5d-1/E5d-2a: saved ORDER/GROUP helper contract remains fail-closed.
+# M11-E5d-S1/S2/S3/E5d-1/E5d-2a/E5d-2b: saved ORDER/GROUP helper contract remains fail-closed.
 
 --source include/have_innodb_16k.inc
 --source include/have_debug.inc
@@ -73,6 +73,18 @@ SET @pq_order_chain_copy_unsupported_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_saved_order_chain_copy_smoke_unsupported');
+SET @pq_order_chain_flags_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_attempts');
+SET @pq_order_chain_flags_success_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_success');
+SET @pq_order_chain_flags_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_unsupported');
 SET @pq_executed_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -143,7 +155,21 @@ SELECT
      WHERE variable_name = 'Parallel_saved_order_chain_copy_smoke_unsupported') -
       @pq_order_chain_copy_unsupported_before AS order_chain_copy_unsupported_without_debug;
 
-SET SESSION debug="d,pq_saved_order_group_contract_smoke,pq_saved_order_group_restore_smoke,pq_saved_order_group_clone_copy_smoke,pq_orderby_filesort_contract_smoke,pq_saved_order_chain_copy_smoke";
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_attempts') -
+      @pq_order_chain_flags_attempts_before AS order_chain_flags_attempts_without_debug,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_success') -
+      @pq_order_chain_flags_success_before AS order_chain_flags_success_without_debug,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_unsupported') -
+      @pq_order_chain_flags_unsupported_before AS order_chain_flags_unsupported_without_debug;
+
+SET SESSION debug="d,pq_saved_order_group_contract_smoke,pq_saved_order_group_restore_smoke,pq_saved_order_group_clone_copy_smoke,pq_orderby_filesort_contract_smoke,pq_saved_order_chain_copy_smoke,pq_saved_order_chain_flags_smoke";
 
 EXPLAIN SELECT id, k FROM t1 ORDER BY k ASC, id ASC LIMIT 2;
 
@@ -218,6 +244,20 @@ SELECT
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_saved_order_chain_copy_smoke_unsupported') -
       @pq_order_chain_copy_unsupported_before AS order_chain_copy_unsupported_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_attempts') -
+      @pq_order_chain_flags_attempts_before AS order_chain_flags_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_success') -
+      @pq_order_chain_flags_success_before AS order_chain_flags_success_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_saved_order_chain_flags_smoke_unsupported') -
+      @pq_order_chain_flags_unsupported_before AS order_chain_flags_unsupported_delta;
 
 SELECT
   (SELECT CAST(variable_value AS UNSIGNED)

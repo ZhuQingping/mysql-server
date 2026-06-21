@@ -178,11 +178,15 @@ bool pq_build_orderby_filesort_contract(
 
 struct PQ_owned_order_chain_sidecar {
   std::vector<ORDER> nodes;
+  std::vector<const ORDER *> source_nodes;
+  std::vector<bool> optimized_flags;
   Explain_sort_clause src{ESC_none};
   bool const_optimized{false};
 
   void reset() {
     nodes.clear();
+    source_nodes.clear();
+    optimized_flags.clear();
     src = ESC_none;
     const_optimized = false;
   }
@@ -212,13 +216,17 @@ static bool pq_copy_order_chain(const ORDER_with_src &src,
   if (count == 0) return true;
 
   dst->nodes.reserve(count);
+  dst->source_nodes.reserve(count);
   uint copied_count = 0;
   for (const ORDER *cur = src.order; cur != nullptr && copied_count < count;
        cur = cur->next, ++copied_count) {
     dst->nodes.push_back(*cur);
+    dst->source_nodes.push_back(cur);
   }
 
-  if (dst->nodes.size() != count) return false;
+  if (dst->nodes.size() != count || dst->source_nodes.size() != count) {
+    return false;
+  }
   for (uint i = 0; i < dst->nodes.size(); ++i) {
     dst->nodes[i].next =
         (i + 1 < dst->nodes.size()) ? &dst->nodes[i + 1] : nullptr;
@@ -258,6 +266,31 @@ static bool pq_order_chain_copy_matches(
 
   return source == nullptr && copied == nullptr &&
          count == copy.nodes.size();
+}
+
+static bool pq_order_chain_contains_source(const ORDER *head,
+                                           const ORDER *needle) {
+  uint count = 0;
+  for (const ORDER *cur = head; cur != nullptr && count < 1024;
+       cur = cur->next, ++count) {
+    if (cur == needle) return true;
+  }
+  return false;
+}
+
+static bool pq_record_order_chain_optimized_flags(
+    const ORDER_with_src &optimized, PQ_owned_order_chain_sidecar *sidecar) {
+  if (sidecar == nullptr || sidecar->nodes.size() != sidecar->source_nodes.size()) {
+    return false;
+  }
+
+  sidecar->optimized_flags.clear();
+  sidecar->optimized_flags.reserve(sidecar->source_nodes.size());
+  for (const ORDER *source_node : sidecar->source_nodes) {
+    sidecar->optimized_flags.push_back(
+        pq_order_chain_contains_source(optimized.order, source_node));
+  }
+  return sidecar->optimized_flags.size() == sidecar->source_nodes.size();
 }
 
 struct PQ_copied_key_endpoint {
@@ -602,6 +635,41 @@ static void pq_maybe_run_saved_order_chain_copy_smoke(
       !copied.nodes.empty() &&
       pq_order_chain_copy_matches(join->order, copied)) {
     pq_global_stats.saved_order_chain_copy_smoke_success.fetch_add(
+        1, std::memory_order_relaxed);
+  } else {
+    mark_unsupported();
+  }
+}
+
+static void pq_maybe_run_saved_order_chain_flags_smoke(
+    Query_block *query_block [[maybe_unused]], JOIN *join) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_saved_order_chain_flags_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.saved_order_chain_flags_smoke_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  auto mark_unsupported = []() {
+    pq_global_stats.saved_order_chain_flags_smoke_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  if (join == nullptr || join->order.empty() || join->order.order->next == nullptr) {
+    mark_unsupported();
+    return;
+  }
+
+  PQ_owned_order_chain_sidecar copied;
+  ORDER_with_src optimized_without_first(join->order.order->next,
+                                         join->order.src,
+                                         join->order.is_const_optimized());
+  if (pq_copy_order_chain(join->order, &copied) &&
+      pq_order_chain_copy_matches(join->order, copied) &&
+      pq_record_order_chain_optimized_flags(optimized_without_first, &copied) &&
+      copied.optimized_flags.size() >= 2 && !copied.optimized_flags[0] &&
+      copied.optimized_flags[1]) {
+    pq_global_stats.saved_order_chain_flags_smoke_success.fetch_add(
         1, std::memory_order_relaxed);
   } else {
     mark_unsupported();
@@ -1317,6 +1385,7 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
     pq_maybe_run_saved_order_group_clone_copy_smoke(query_block, join);
     pq_maybe_run_orderby_filesort_contract_smoke(query_block, join);
     pq_maybe_run_saved_order_chain_copy_smoke(query_block, join);
+    pq_maybe_run_saved_order_chain_flags_smoke(query_block, join);
     return pq_reject(info, PQUnsuiteReason::HAS_ORDER_BY,
                      "query has ORDER BY");
   }

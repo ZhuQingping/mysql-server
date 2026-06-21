@@ -6,7 +6,8 @@ Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
 completed and committed；M11-E5d-S0/S1/S2/S3 completed and committed；
 M11-E5d-1 fail-closed Filesort contract shape completed and committed；
 M11-E5d-2 design completed and committed；M11-E5d-2a owned ORDER chain copy
-smoke completed，waiting for commit。
+smoke completed and committed；M11-E5d-2b optimized flag contract smoke
+completed，waiting for commit。
 
 ## 背景
 
@@ -1799,6 +1800,80 @@ Code/Doc/Test Review - M11-E5d-2a:
   - 1024-node chain cap remains fail-closed and debug-only；
   - future E5d-2b/2c/2d must still prove optimized flags, restored sidecar
     chain isolation, and clone-copy lifetime before any Filesort path opens。
+
+Commit:
+
+- `bc55cff554f` Add PQ M11E owned order chain smoke。
+
+### M11-E5d-2b: Optimized ORDER Flag Contract Smoke
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；full
+`parallel_query` suite passed；waiting for commit。
+
+Goal:
+
+- add source-vs-optimized membership flags to the owned ORDER sidecar；
+- cover cleaned-list semantics with a controlled debug-only optimized chain；
+- continue avoiding live `JOIN::order` mutation, real GROUP restoration,
+  optimizer hooks, clone lifecycle, Filesort, and user-visible ORDER BY PQ。
+
+Implementation:
+
+- extended internal `PQ_owned_order_chain_sidecar` with:
+  - `source_nodes`: original source `ORDER*` addresses for mapping only；
+  - `optimized_flags`: per-source-node membership bits；
+- added `pq_record_order_chain_optimized_flags()` to record whether each
+  original source node appears in a supplied optimized chain；
+- added `pq_saved_order_chain_flags_smoke` on the existing ORDER BY reject
+  path；
+- smoke builds a controlled optimized view from `join->order.order->next` to
+  simulate the first source ORDER node being removed by `remove_const()` or
+  cleanup；
+- smoke verifies copied chain integrity plus expected flags:
+  first source node false, second source node true；
+- added counters:
+  `Parallel_saved_order_chain_flags_smoke_attempts`,
+  `Parallel_saved_order_chain_flags_smoke_success`,
+  `Parallel_saved_order_chain_flags_smoke_unsupported`；
+- extended `pq_saved_order_group_contract` to verify no-DBUG zero counters,
+  DBUG attempts/success, unsupported zero, serial ORDER BY boundary, and zero
+  executed/workers/ranges；
+- updated `pq_stats` Parallel status variable count from 121 to 124。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4
+  including `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Scope notes:
+
+- no `sql/sql_optimizer.*` hook or live optimizer list mutation；
+- no GROUP chain restore, no `calc_group_buffer()`；
+- no real `Filesort`, `Sort_param`, or `Filesort::make_sortorder()`；
+- no `exchange_sort.*`, clone lifecycle, worker, handler, MQ, AccessPath,
+  `Read()`, or `HAS_ORDER_BY` eligibility relaxation；
+- this proves membership flags only. Restored sidecar chain construction
+  remains E5d-2c。
+
+Code/Doc/Test Review - M11-E5d-2b:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed `source_nodes` and `optimized_flags` only record mapping data and
+  do not own or modify source `ORDER`, `Item`, `Field`, or `JOIN::order`；
+- confirmed optimized flag recording is membership-only；
+- confirmed controlled optimized chain uses `join->order.order->next` without
+  relinking the live chain；
+- confirmed smoke is DBUG-gated and called only from the existing ORDER BY
+  reject path；
+- confirmed no forbidden files/actions are touched；
+- confirmed stats and MTR coverage are complete；
+- remaining risk: E5d-2b proves pointer-membership flags only. Restored
+  sidecar chain construction remains E5d-2c。
 
 ## Risk Areas
 
