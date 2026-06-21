@@ -1496,6 +1496,226 @@ Code-Docs-Test Review:
   deltas, and D4a/D4c counters remain 0；
 - non-blocking note: new MTR test/result files must be explicitly staged。
 
+### M11-D6: ParallelScanIterator Debug Positive Path Contract
+
+Status: design-only taskbook created；waiting for Docs-Design Review。
+
+Decision:
+
+- D4a-D5 prove the required pieces in `PQTableScanIterator` debug hooks:
+  worker attach, leader row stream consumption, post-commit ERROR cleanup, and
+  row-value correctness；
+- D6 should start moving that minimum positive path toward commercial
+  `ParallelScanIterator`；
+- D6 must remain debug-only and must not create a normal user-visible
+  `AccessPath::PARALLEL_SCAN` path；
+- D6 must not start worker threads, cloned JOIN, `Query_result_mq`, ORDER/GROUP,
+  ref/range/ICP, or default commercial worker execution。
+
+Goal:
+
+- add a debug-only `ParallelScanIterator` positive path smoke that reuses the
+  D5-validated DOP=1 bounded row stream；
+- exercise `ParallelScanIterator::Init()` and `ParallelScanIterator::Read()`
+  with actual visible row values；
+- keep the existing D3 lifecycle fail-closed smoke intact；
+- keep default `ParallelScanIterator::Init()` fail-closed unless the D6 DBUG
+  hook is enabled and the shape is the narrow D5 shape；
+- define ownership so the commercial iterator owns its D6 `Gather_operator`
+  and cleanup remains idempotent。
+
+Scope:
+
+- DOP fixed at 1；
+- single InnoDB table；
+- fixed-width integer columns only；
+- no primary or secondary index in the focused MTR table；
+- no BLOB, varlen, generated, hidden, virtual, nullable, partitioned, reverse,
+  ORDER BY, GROUP BY, secondary/ref/range/ICP；
+- D6 uses exactly one bridge pattern: a DBUG-only hook in
+  `PQTableScanIterator::Init()` constructs and stores an owned/delegated
+  `ParallelScanIterator`, then `PQTableScanIterator::Read()` delegates to
+  `ParallelScanIterator::Read()`；
+- helper-internal `Init()`/`Read()` draining is forbidden because visible rows
+  must be executor-driven；
+- D6 must not change normal AccessPath factory behavior；
+- D6 may reuse `Gather_operator::prepare_leader_row_stream_smoke()` and D5's
+  bounded producer contract；
+- D6 must not modify `exchange.*` or handler/InnoDB。
+
+Allowed files:
+
+- `sql/parallel_query/pq_iterators.h`；
+- `sql/parallel_query/pq_iterators.cc`；
+- `sql/parallel_query/pq_iterator.h` only for a debug-only delegated
+  `ParallelScanIterator` member in `PQTableScanIterator`；
+- `sql/parallel_query/pq_iterator.cc` only if a DBUG-only bridge hook is needed
+  to construct/exercise `ParallelScanIterator` without changing AccessPath；
+- `sql/parallel_query/sql_parallel.h` / `.cc` only if a tiny helper declaration
+  is needed for reuse of existing D5 row stream helper；
+- `sql/mysqld.cc` only if new SHOW STATUS counters are required；
+- one focused MTR test/result under `mysql-test/suite/parallel_query/`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result` if status variable count
+  changes；
+- this taskbook；
+- `Docs/pq_tasks/README.md` / M11 main taskbook only for progress status。
+
+Forbidden files:
+
+- `storage/innobase/**`；
+- `sql/handler.*`；
+- `sql/sql_executor.*`；
+- `sql/sql_optimizer.*`；
+- `sql/join_optimizer/access_path.*`；
+- `sql/parallel_query/exchange.*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`；
+- ORDER/GROUP/ref/ICP related expansion；
+- default AccessPath/factory hook behavior。
+
+Required implementation direction:
+
+1. Add an explicit DBUG-only path such as
+   `pq_parallel_scan_iterator_row_value_smoke`；
+2. path must construct/exercise `ParallelScanIterator` through executor calls:
+   `PQTableScanIterator::Init()` creates the delegate and returns success,
+   while `PQTableScanIterator::Read()` delegates to
+   `ParallelScanIterator::Read()`；
+3. `ParallelScanIterator::Init()` may only enter the D6 positive path when the
+   DBUG flag is active and the table shape passes the D5 fixed integer checks；
+4. D6 positive path obtains handler leader `EXECUTE`, creates an owned
+   `Gather_operator`, prepares bounded DOP=1 row stream, sets no-fallback
+   commit state, and returns success；
+5. `ParallelScanIterator::Read()` consumes rows through existing
+   `Exchange_nosort::materialize_next_record_image_status()`；
+6. `ParallelScanIterator` must add owned `PQ_Leader_context *m_leader_ctx`
+   state before any EXECUTE-positive path；
+7. `cleanup_lifecycle()` must end owned leader context exactly once and destroy
+   owned gather exactly once；D6 cleanup order follows current
+   `PQTableScanIterator::cleanup_pq_resources()` unless code review finds a
+   concrete reason to revise it: abort/destroy gather first, then
+   `pq_leader_scan_end()`；
+8. EOF/error cleanup must use `cleanup_lifecycle()` and be idempotent；
+9. any failure before D6 commit point remains fail-closed for the debug smoke,
+   not serial fallback；
+10. do not modify `CreateIteratorFromAccessPath()` or produce normal
+   `PARALLEL_SCAN` from optimizer。
+
+Required counters:
+
+- D6-specific counters are mandatory so the MTR proves the commercial iterator
+  path was exercised, not the older D4b hook:
+  - `Parallel_scan_iterator_row_value_attempts`；
+  - `Parallel_scan_iterator_row_value_selected`；
+  - `Parallel_scan_iterator_row_value_rows`；
+- `Parallel_queries_executed` delta must be 1；
+- `Parallel_rows_scanned` delta must equal visible returned row count；
+- `Parallel_workers_launched` delta must remain 0；
+- `Parallel_probe_attempts` delta must remain 0；
+- `Parallel_queries_fallback` delta must remain 0 after selected/commit point；
+- D4b leader row stream counters must remain 0 for the D6 statement window。
+
+Required MTR assertions:
+
+- use focused MTR name `pq_parallel_scan_iterator_row_values`；
+- create a two-row InnoDB table with fixed integer columns and no PRIMARY KEY
+  or secondary index；
+- visible SELECT output must contain actual expected values:
+  `SELECT id, v FROM pq_parallel_scan_row_value_t` returns `(1,10)` and
+  `(2,20)`；
+- result log must stay enabled for the SELECT；
+- D6 attempts/selected deltas = 1；
+- D6 rows delta = 2；
+- `Parallel_queries_executed` delta = 1；
+- `Parallel_rows_scanned` delta = 2；
+- `Parallel_workers_launched` delta = 0；
+- `Parallel_probe_attempts` delta = 0；
+- `Parallel_queries_fallback` delta = 0；
+- D4a attach, D4b row stream, and D4c error counters must not grow unless a
+  design-approved coupling is documented；current D6 design requires D4b row
+  stream counter deltas to remain 0。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_parallel_scan_iterator_row_values pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11d6_target --tmpdir=/tmp/pqt_m11d6_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11d6_full --tmpdir=/tmp/pqt_m11d6_full
+```
+
+Agent Task Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Code Agent。
+主控 Agent 是 Codex。
+当前任务是 M11-D6 ParallelScanIterator Debug Positive Path。
+
+请阅读：
+- Docs/pq_tasks/README.md；
+- Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md；
+- Docs/pq_tasks/commercial-port-m11-parallel-scan-lifecycle.md；
+- sql/parallel_query/pq_iterators.h；
+- sql/parallel_query/pq_iterators.cc；
+- sql/parallel_query/pq_iterator.h；
+- sql/parallel_query/pq_iterator.cc；
+- sql/parallel_query/sql_parallel.h；
+- sql/parallel_query/sql_parallel.cc。
+
+任务目标：
+1. 在 debug-only 条件下让 commercial `ParallelScanIterator` skeleton 进入
+   DOP=1 row-value positive path；
+2. 返回可见固定整数行值 `(1,10)`、`(2,20)`；
+3. 不改变默认 AccessPath / optimizer / executor 行为；
+4. 不启动 worker thread，不接 clone/JOIN，不使用 `Query_result_mq`。
+
+允许修改：
+- 见 M11-D6 Allowed files。
+
+禁止修改：
+- 见 M11-D6 Forbidden files。
+
+硬停止条件：
+- 需要修改 handler/InnoDB、`exchange.*`、`Query_result_mq`、clone/JOIN、
+  AccessPath/factory、worker thread 才能让 D6 通过；
+- SELECT 输出只能隐藏或只能断言行数；
+- post-commit fallback counter 增长；
+- 无法证明走的是 `ParallelScanIterator` 而不是 `PQTableScanIterator`。
+- visible rows require serial fallback or helper-internal drain rather than
+  executor calls to `ParallelScanIterator::Read()`。
+
+验证：
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR: `pq_parallel_scan_iterator_row_values pq_stats`；
+- full `parallel_query` suite。
+
+完成后不要自行 commit。
+```
+
+Docs-Design Review:
+
+- first review returned `REVISE` with no critical findings；
+- review required exactly one executor-driven bridge pattern and forbade
+  helper-internal draining；
+- review required allowing `pq_iterator.h` for a debug-only delegated
+  `ParallelScanIterator` member；
+- review required `ParallelScanIterator` to add owned `PQ_Leader_context`
+  state and cleanup before any EXECUTE-positive path；
+- review required D6-specific counters to be mandatory and D4b row stream
+  counters to remain 0；
+- requested revisions were applied；
+- re-review returned `ACCEPT`；
+- non-blocking suggestion to include `pq_iterator.h` in the agent read list was
+  applied。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；
