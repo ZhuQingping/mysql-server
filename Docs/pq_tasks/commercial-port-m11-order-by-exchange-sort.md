@@ -7675,6 +7675,151 @@ Code/Doc/Test Review - M11-E5s:
   `kill_detach_error_diagnostics_ready=false`；
 - full `parallel_query` suite passed after review: 89/89。
 
+### M11-E5r-1: Handler Ref Ownership Contract Inventory
+
+Status: Design/Source Review accepted；ready to commit。
+
+Goal:
+
+- document the ownership contract for handler `ref` bytes before any
+  `cmp_ref()` tie-break coding；
+- compare current controlled `PQOF` row_id bytes with commercial worker
+  `file->position(record)` / `file->ref` semantics；
+- identify whether the current branch has a safe leader handler object for
+  `handler::cmp_ref()`；
+- keep `rowid_tiebreak_ready=false` and visible ORDER BY PQ blocked。
+
+Current branch inventory:
+
+- `PQ_orderby_frame_header` carries `row_id_len` but does not encode whether
+  bytes are handler ref bytes or synthetic smoke row ids；
+- `PQ_orderby_cached_record::row_id` is an owned byte-vector copied from
+  `PQOF` frames；
+- `pq_send_orderby_frame()` accepts caller-provided `row_id` / `row_id_len`
+  and deep-copies the payload into MQ；
+- `pq_orderby_worker_frame_producer_owner_emit_row()` emits caller-provided
+  rowid bytes and only enforces producer-local sort-key monotonicity；
+- current ORDER BY smokes pass small `uint32` row ids, not handler
+  `file->ref` bytes；
+- current `PQblockScanIterator::Read()` is still a skeleton returning `1` and
+  does not call `table()->file->position(record)`；
+- `PQblockScanIterator` stores `m_need_rowid`, but there is no current
+  ORDER BY worker path that converts it into handler ref bytes；
+- current `Query_result_mq` has stable-output shape, but its current
+  `send_data()` path does not send `file->ref` / `file->ref_length` for ORDER
+  BY stable output；
+- default `Gather_operator` still creates `Exchange_nosort`; ORDER BY
+  `Exchange_sort` evidence comes from local smoke objects and controlled
+  helpers；
+- current `Exchange_sort` comparator still orders duplicate scalar keys by
+  byte-vector row_id and worker id, not `handler::cmp_ref()`；
+- current runtime-owner shapes track `ref_length`, `stable_output`, and
+  `rowid_required`, but do not bind a real handler pointer for comparator use。
+
+Commercial reference inventory:
+
+- commercial `PQblockScanIterator::Read()` calls
+  `table()->file->position(m_record)` when `m_need_rowid` is true；
+- commercial `Query_result_mq` sends `file->ref` with length
+  `file->ref_length` for stable output；
+- commercial `Exchange_sort::init()` validates stable output with
+  `ref_length == m_file->ref_length`；
+- commercial `Exchange_sort` stores MQ records carrying handler ref bytes in
+  `m_row_id`；
+- commercial `heap_compare_records()` compares real Filesort keys first and
+  uses `m_file->cmp_ref(row_id_0, row_id_1) < 0` for equal-key stable output；
+- InnoDB `position(record)` writes either generated row id bytes or primary-key
+  bytes into `handler::ref` depending on table shape；
+- InnoDB `cmp_ref()` is type-aware for primary-key refs and byte-comparison for
+  generated row ids。
+
+Risk conclusions:
+
+- synthetic `uint32` row ids are not interchangeable with handler ref bytes；
+- byte-vector row-id order is not equivalent to `handler::cmp_ref()` for
+  primary-key refs；
+- the leader-side comparator must use a handler associated with the same table
+  shape and `ref_length` as the worker-produced refs；
+- worker and leader handler instances may differ, so the contract must be
+  expressed in terms of stable table metadata and `cmp_ref()` compatibility,
+  not pointer identity；
+- handler ref bytes must be deep-copied before the worker advances or reuses
+  handler buffers；
+- partitioned InnoDB refs include partition bytes, so `ref_length` validation
+  is mandatory before any comparator coding。
+
+Decision draft:
+
+- keep M11-E5r-1 design-only/read-only；
+- do not add a `cmp_ref()` comparator in E5r-1；
+- do not attempt fail-closed comparator coding until worker `position(record)`,
+  MQ ref deep-copy format, leader handler ownership, `ref_length` validation,
+  and handler instance compatibility are separately reviewed；
+- do not set `rowid_tiebreak_ready=true`；
+- require a later E5r-2 coding task to use a private comparator contract only,
+  with explicit handler/ref-length inputs and no default ORDER BY path。
+
+Allowed files for E5r-1:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Allowed files for a later reviewed E5r-2 coding task:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- docs；
+- optional focused MTR only if a DBUG smoke counter or visible test guard is
+  added after review。
+
+Forbidden:
+
+- `pq_optimizer.*` readiness changes；
+- `HAS_ORDER_BY` serial boundary changes；
+- default `Exchange_sort::read_mq_message()` changes；
+- default ordered `ParallelScanIterator::Read()` changes；
+- worker launch, `Query_result_mq`, PQWR, handler/InnoDB, AccessPath,
+  executor, sysvar, or public counter changes；
+- claiming current `uint32` rowid smokes prove real handler ref ordering。
+
+Hard gates:
+
+- `rowid_tiebreak_ready=false`；
+- `default_ordered_read_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`；
+- normal ORDER BY SQL must not increase executed / worker / range counters。
+
+Minimum validation for E5r-1:
+
+- docs-only；
+- `git diff --check` before commit；
+- no build/MTR required unless source or test files change。
+
+Design/Source Review - M11-E5r-1:
+
+- Review Agent verdict: `ACCEPT` for design-only/read-only inventory；
+- Review Agent verdict: `BLOCKED` for any current fail-closed comparator
+  coding；
+- confirmed current `Exchange_sort` has no handler ownership field and only
+  stores controlled `PQOF` row_id byte-vectors；
+- confirmed current `Query_result_mq` does not send handler `file->ref` /
+  `file->ref_length` for ORDER BY stable output；
+- confirmed current worker ORDER BY producer smokes use synthetic `uint32`
+  rowids；
+- confirmed current `PQblockScanIterator::Read()` does not call
+  `position(record)`；
+- confirmed default Gather still uses `Exchange_nosort`, not default
+  `Exchange_sort`；
+- confirmed leader `TABLE::file` / InnoDB `cmp_ref()` exist, but the branch has
+  not proven worker ref bytes come from the same table/ref-length contract；
+- required next split before `cmp_ref()` coding:
+  - worker `position(record)` call point；
+  - MQ ref deep-copy format；
+  - leader handler ownership；
+  - `ref_length` validation；
+  - handler instance compatibility。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
