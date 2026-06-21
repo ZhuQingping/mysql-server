@@ -463,6 +463,36 @@ void Exchange_sort::cleanup_sort_state_shape() {
   m_sort_state_shape = PQ_orderby_sort_state_shape{};
 }
 
+bool Exchange_sort::init_real_init_state_owner_shape(
+    uint32 workers, bool stable_output, bool index_sort,
+    uint32 sort_order_length, uint32 max_record_length, uint32 ref_length) {
+  cleanup_real_init_state_owner_shape();
+  if (workers == 0 || sort_order_length == 0 || max_record_length == 0) {
+    return true;
+  }
+  if (stable_output && ref_length == 0) return true;
+  if (max_record_length == UINT32_MAX) return true;
+
+  m_real_init_state_shape.workers = workers;
+  m_real_init_state_shape.sort_order_length = sort_order_length;
+  m_real_init_state_shape.max_record_length = max_record_length;
+  m_real_init_state_shape.ref_length = ref_length;
+  m_real_init_state_shape.compare_key_buffer_length = max_record_length + 1;
+  m_real_init_state_shape.tmp_key_buffer_length =
+      stable_output ? ref_length : 0;
+  m_real_init_state_shape.min_record_slots = workers;
+  m_real_init_state_shape.record_group_slots = workers;
+  m_real_init_state_shape.stable_output = stable_output;
+  m_real_init_state_shape.index_sort = index_sort;
+  m_real_init_state_shape.rowid_required = stable_output;
+  m_real_init_state_shape.initialized = true;
+  return false;
+}
+
+void Exchange_sort::cleanup_real_init_state_owner_shape() {
+  m_real_init_state_shape = PQ_orderby_real_init_state_shape{};
+}
+
 void Exchange_sort::cleanup_order_gather_shape() {
   m_min_records.clear();
   m_record_groups.clear();
@@ -472,6 +502,7 @@ void Exchange_sort::cleanup_order_gather_shape() {
   m_order_shape_stable_output = false;
   m_order_shape_index_sort = false;
   cleanup_sort_state_shape();
+  cleanup_real_init_state_owner_shape();
 }
 
 bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
@@ -480,9 +511,13 @@ bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
   constexpr uint32 kMaxRecordLength = 64;
   constexpr uint32 kRefLength = 8;
 
-  return run_orderby_sort_state_shape_handoff_smoke(
+  if (run_orderby_sort_state_shape_handoff_smoke(
       kWorkers, /*stable_output=*/true, /*index_sort=*/false, kSortOrderLength,
-      kMaxRecordLength, kRefLength);
+      kMaxRecordLength, kRefLength)) {
+    return true;
+  }
+
+  return run_orderby_real_init_state_owner_smoke();
 }
 
 bool Exchange_sort::run_orderby_sort_state_shape_handoff_smoke(
@@ -504,6 +539,44 @@ bool Exchange_sort::run_orderby_sort_state_shape_handoff_smoke(
       m_sort_state_shape.rowid_required == stable_output;
   cleanup_sort_state_shape();
   return !valid;
+}
+
+bool Exchange_sort::run_orderby_real_init_state_owner_smoke() {
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+
+  if (init_real_init_state_owner_shape(
+          kWorkers, /*stable_output=*/true, /*index_sort=*/false,
+          kSortOrderLength, kMaxRecordLength, kRefLength)) {
+    cleanup_real_init_state_owner_shape();
+    return true;
+  }
+
+  const bool valid =
+      m_real_init_state_shape.initialized &&
+      m_real_init_state_shape.workers == kWorkers &&
+      m_real_init_state_shape.sort_order_length == kSortOrderLength &&
+      m_real_init_state_shape.max_record_length == kMaxRecordLength &&
+      m_real_init_state_shape.ref_length == kRefLength &&
+      m_real_init_state_shape.compare_key_buffer_length ==
+          kMaxRecordLength + 1 &&
+      m_real_init_state_shape.tmp_key_buffer_length == kRefLength &&
+      m_real_init_state_shape.min_record_slots == kWorkers &&
+      m_real_init_state_shape.record_group_slots == kWorkers &&
+      m_real_init_state_shape.stable_output &&
+      !m_real_init_state_shape.index_sort &&
+      m_real_init_state_shape.rowid_required;
+
+  cleanup_real_init_state_owner_shape();
+  if (!valid || m_real_init_state_shape.initialized ||
+      m_real_init_state_shape.workers != 0 ||
+      m_real_init_state_shape.compare_key_buffer_length != 0 ||
+      m_real_init_state_shape.tmp_key_buffer_length != 0) {
+    return true;
+  }
+  return false;
 }
 
 bool Exchange_sort::run_synthetic_order_merge_smoke(uint32 *rows_read) {

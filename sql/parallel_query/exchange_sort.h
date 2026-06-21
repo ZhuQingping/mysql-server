@@ -98,6 +98,21 @@ struct PQ_orderby_sort_state_shape {
   bool initialized{false};
 };
 
+struct PQ_orderby_real_init_state_shape {
+  uint32 workers{0};
+  uint32 sort_order_length{0};
+  uint32 max_record_length{0};
+  uint32 ref_length{0};
+  uint32 compare_key_buffer_length{0};
+  uint32 tmp_key_buffer_length{0};
+  uint32 min_record_slots{0};
+  uint32 record_group_slots{0};
+  bool stable_output{false};
+  bool index_sort{false};
+  bool rowid_required{false};
+  bool initialized{false};
+};
+
 constexpr uint32 PQ_ORDERBY_FRAME_MAGIC = 0x50514f46;  // "PQOF"
 constexpr uint16 PQ_ORDERBY_FRAME_VERSION = 1;
 
@@ -138,6 +153,7 @@ class Exchange_sort final : public Exchange {
                                                   uint32 sort_order_length,
                                                   uint32 max_record_length,
                                                   uint32 ref_length);
+  bool run_orderby_real_init_state_owner_smoke();
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);
@@ -167,11 +183,18 @@ class Exchange_sort final : public Exchange {
   bool m_order_shape_stable_output{false};
   bool m_order_shape_index_sort{false};
   PQ_orderby_sort_state_shape m_sort_state_shape;
+  PQ_orderby_real_init_state_shape m_real_init_state_shape;
 
   bool init_sort_state_shape(uint32 workers, bool stable_output,
                              bool index_sort, uint32 sort_order_length,
                              uint32 max_record_length, uint32 ref_length);
   void cleanup_sort_state_shape();
+  bool init_real_init_state_owner_shape(uint32 workers, bool stable_output,
+                                        bool index_sort,
+                                        uint32 sort_order_length,
+                                        uint32 max_record_length,
+                                        uint32 ref_length);
+  void cleanup_real_init_state_owner_shape();
 };
 
 #endif  // SQL_PARALLEL_QUERY_EXCHANGE_SORT_INCLUDED

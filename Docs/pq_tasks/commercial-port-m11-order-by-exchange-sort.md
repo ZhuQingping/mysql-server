@@ -21,9 +21,8 @@ shape completed and committed；M11-E5d-4c optimizer-side scalar handoff design
 completed and committed；M11-E5d-4c-1 debug-only optimizer-to-Exchange_sort
 scalar handoff completed，Code/Doc/Test Review Agent accepted，full
 `parallel_query` suite passed，committed as `4dc34748200`；M11-E5d-5 real
-`Exchange_sort` init / MQ / Read boundary design drafted，waiting for
-independent design review；after accepted review, next step is M11-E5d-5a
-`Exchange_sort` real-init state owner shape。
+`Exchange_sort` init / MQ / Read boundary design completed and committed；
+M11-E5d-5a `Exchange_sort` real-init state owner shape coding in progress。
 
 ## 背景
 
@@ -3259,7 +3258,8 @@ Code/Doc/Test Review - M11-E5d-4c-1:
 
 ### M11-E5d-5: Real Exchange_sort Init / MQ / Read Boundary Design
 
-Status: design drafted；waiting for independent design review。
+Status: design completed；Design Review Agent accepted；committed as
+`89dbb6143a5`。
 
 Goal:
 
@@ -3421,6 +3421,82 @@ Design review request:
   `ParallelScanIterator::Read()` behavior；
 - confirm user-visible ORDER BY eligibility should remain blocked until 5e
   design review。
+
+Design Review - M11-E5d-5:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none after status refresh；
+- confirmed the 5a-5e split is safe and serializes risky ownership/lifetime
+  boundaries；
+- confirmed 5a must avoid persistent raw optimizer/executor pointers；
+- confirmed 5b/5c should prove allocation and controlled MQ consumption before
+  any `Read()` bridge；
+- confirmed 5d must remain DBUG-only and must not change default
+  `ParallelScanIterator::Read()` behavior；
+- confirmed user-visible ORDER BY eligibility remains blocked until a later
+  gate design review。
+
+### M11-E5d-5a: Exchange_sort Real-init State Owner Shape
+
+Status: coding completed locally；`git diff --check`, `mysqld` build,
+targeted MTR, and full `parallel_query` suite passed；Code/Doc/Test Review
+pending。
+
+Goal:
+
+- add a compile/debug-only owned state shape inside `Exchange_sort` for the
+  future commercial init path；
+- keep the state scalar-only and cleanup-scoped；
+- do not persist raw `ORDER *`, `Filesort *`, `Sort_param *`, `TABLE *`, or
+  handler pointers；
+- do not change real `Filesort::make_sortorder()`, MQ consumption,
+  `ParallelScanIterator::Read()`, or ORDER BY eligibility。
+
+Implementation summary:
+
+- added `PQ_orderby_real_init_state_shape` with scalar fields for workers,
+  sort-order length, record/ref lengths, planned compare-key/tmp-key buffer
+  lengths, min-record slots, record-group slots, stable-output, index-sort, and
+  rowid-required flags；
+- added `Exchange_sort::init_real_init_state_owner_shape()` and
+  `cleanup_real_init_state_owner_shape()`；
+- extended `Exchange_sort::run_orderby_sort_state_shape_smoke()` to also run
+  `run_orderby_real_init_state_owner_smoke()` under the existing
+  `pq_exchange_sort_state_shape_smoke` DBUG entry；
+- reused existing
+  `Parallel_exchange_sort_state_shape_smoke_attempts/success/unsupported`
+  counters, so no new status variables are introduced。
+
+Scope confirmation:
+
+- touched only `sql/parallel_query/exchange_sort.h`,
+  `sql/parallel_query/exchange_sort.cc`, this taskbook, and README；
+- no optimizer, executor, AccessPath, handler, InnoDB, `filesort.*`, or
+  `sort_param.*` changes；
+- no persistent raw optimizer/executor/storage pointers；
+- no default worker MQ ORDER BY consumption；
+- no default ordered `ParallelScanIterator::Read()` path；
+- no user-visible `HAS_ORDER_BY` acceptance；
+- no `filesort()` execution。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d5a_target --tmpdir=/tmp/pqt_m11e5d5a_target
+```
+
+Result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed，4/4 including `shutdown_report`:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`。
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
 
 ## Risk Areas
 
