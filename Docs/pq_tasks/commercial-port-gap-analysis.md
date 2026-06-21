@@ -23,6 +23,8 @@ M10-C2 GROUP BY supported subset adapted test 已完成编码、targeted/full
 suite 验证，并通过 Code-Docs-Test Review。
 M10-C3 GROUP BY deferred boundary adapted test 已完成编码、targeted/full
 suite 验证，并通过 Code-Docs-Test Review。
+M10-D final `parallel_query` suite clean run 已完成，79/79 通过，
+并通过 Docs-Test Review。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -846,6 +848,15 @@ M9-B3a-2 clustered lookup for visibility helper implemented:
   `Parallel_groupby_temp_shape_unsupported` 可观测增长；
 - 完整当前 `parallel_query` suite 79/79 通过，其中包含 78 个 suite
   tests 和 MTR `shutdown_report`。
+
+**M10-D current result:**
+
+- 当前 `parallel_query/t/*.test`: 78；
+- 当前 `parallel_query/r/*.result`: 78；
+- 商用参考 `t/*.test`: 98；
+- 商用 E/A/D matrix: enabled 1、adapted 33、deferred 64；
+- final clean run：79/79 pass，其中包含 78 个 suite tests 和 MTR
+  `shutdown_report`。
 
 **Validation:**
 

@@ -13,6 +13,8 @@ M10-C2 GROUP BY supported subset adapted test completed /
 Code-Docs-Test Review accepted。
 M10-C3 GROUP BY deferred boundary adapted test completed /
 Code-Docs-Test Review accepted。
+M10-D final `parallel_query` suite clean run completed /
+Docs-Test Review accepted。
 
 ## 目标
 
@@ -262,11 +264,50 @@ M10-C candidates:
 - `pq_depend_ref` leader-local dependent ref 子集；
 - `pq_range_clust` / `pq_coverage_index` 先做 fallback 或窄正例。
 
-M10-D:
+## M10-D: Final Parallel Query Suite Clean Run
 
-- 完整 `parallel_query` suite clean run；
-- 记录最终 enabled/adapted/deferred 数量；
-- 若新增测试导致当前 suite 数量变化，更新 README 和本任务书。
+Status: completed / Docs-Test Review accepted。
+
+目标：
+
+- 对 M10-A/B/C 后当前 `parallel_query` suite 做最终 clean run；
+- 固定当前 suite 数量和 commercial E/A/D 口径；
+- 明确 M10 完成的是当前分支可支持子集的 adapted guards，不是商用
+  98 个测试逐文件原样迁移。
+
+Final counts:
+
+| Item | Count |
+|---|---:|
+| Current `mysql-test/suite/parallel_query/t/*.test` | 78 |
+| Current `mysql-test/suite/parallel_query/r/*.result` | 78 |
+| Commercial reference `t/*.test` | 98 |
+| Commercial E/A/D matrix entries | 98 |
+| Commercial enabled | 1 |
+| Commercial adapted | 33 |
+| Commercial deferred | 64 |
+
+Final validation:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m10d_full --tmpdir=/tmp/pqt_m10d_full
+```
+
+Result:
+
+- 79/79 pass；
+- 78 suite tests + MTR `shutdown_report`；
+- no server restarts；
+- no reinitialization。
+
+Review:
+
+- Docs-Test Review Agent returned `ACCEPT`；
+- confirmed final counts, E/A/D matrix, validation command/result, and
+  non-overclaiming boundary are accurate；
+- confirmed commit should include only the three M10-D documentation files。
 
 ## M10-C3: GROUP BY Deferred Boundary Adapted Test
 
