@@ -4351,8 +4351,8 @@ Code/Doc/Test Review - M11-E5d-5f:
 
 ### M11-E5g-0: Worker ORDER BY Frame Producer and Streaming Heap Read Boundary Design
 
-Status: design completed；Design Review Agent accepted；waiting for commit；no
-code edits in this subtask。
+Status: design completed；Design Review Agent accepted；committed as
+`9de0ae25fa8`；no code edits in this subtask。
 
 Goal:
 
@@ -4501,6 +4501,122 @@ Design Review - M11-E5g-0:
   leader materialization, and default ordered `Read()`；
 - confirmed 5g-1 / 5g-2 / 5g-3 are DBUG/controlled smokes only and cannot be
   interpreted as Filesort/Sort_param default runtime owner readiness。
+
+Commit:
+
+- `9de0ae25fa8` Plan PQ M11E order by streaming boundary。
+
+### M11-E5g-1: DBUG-only Worker ORDER BY PQOF Producer Smoke
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；build,
+targeted MTR, and full `parallel_query` suite passed；committed。
+
+Goal:
+
+- prove a worker-like ORDER BY producer can emit `PQOF` ROW / FINISH / ERROR
+  frames without using or changing the existing `PQWR` worker-result protocol；
+- prove producer-side fail-closed checks for local sort-key order, finished
+  worker state, non-null row image, and non-null rowid/ref bytes；
+- keep default ORDER BY execution, default worker MQ consumption, and default
+  ordered `ParallelScanIterator::Read()` disabled。
+
+Implementation:
+
+- added `PQ_orderby_worker_frame_producer_shape` as a local
+  `exchange_sort.cc` smoke-only producer shape；
+- added producer helpers:
+  - `pq_worker_orderby_producer_emit_row()`；
+  - `pq_worker_orderby_producer_finish()`；
+  - `pq_worker_orderby_producer_error()`；
+- added `Exchange_sort::run_orderby_worker_frame_producer_smoke()`:
+  - emits ordered ROW frames for two workers；
+  - emits per-worker FINISH frames；
+  - emits an ERROR frame for a separate worker；
+  - decodes and validates only `PQOF` frames；
+  - verifies worker id through frame flags, payload lengths, row image, rowid,
+    sort key, and per-worker nondecreasing sort order；
+  - verifies fail-closed behavior after FINISH and on decreasing sort key；
+- wired the smoke behind DBUG flag
+  `pq_orderby_worker_frame_producer_smoke` in `Gather_operator::
+  run_exchange_sort_smoke()`；
+- added producer-specific status variables:
+  - `Parallel_orderby_worker_frame_producer_smoke_attempts`；
+  - `Parallel_orderby_worker_frame_producer_smoke_success`；
+  - `Parallel_orderby_worker_frame_producer_smoke_unsupported`；
+  - `Parallel_exchange_sort_worker_frame_smoke_rows`；
+  - `Parallel_exchange_sort_worker_frame_smoke_finishes`；
+  - `Parallel_exchange_sort_worker_frame_smoke_errors`；
+- extended `pq_commercial_order_by_frames` to verify:
+  - no-DBUG ordinary SELECT does not increment producer counters；
+  - DBUG smoke increments attempts/success/rows/finishes/errors；
+  - unsupported remains zero；
+- updated `pq_stats` Parallel status variable count from 159 to 165。
+
+Scope notes:
+
+- no `Query_result_mq` or `PQWR` wire-format changes；
+- no `Exchange_sort::read_mq_message()` default consumption change；
+- no `ParallelScanIterator::Read()` ordered path change；
+- no optimizer `HAS_ORDER_BY` eligibility relaxation；
+- no AccessPath, handler, InnoDB, worker thread, real `Read()`, Filesort, or
+  Sort_param execution change；
+- no preflight readiness flag is set true。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g1_target --tmpdir=/tmp/pqt_m11e5g1_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g1_full --tmpdir=/tmp/pqt_m11e5g1_full
+```
+
+Results:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed: 4/4 including `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Initial Review Agent guidance applied:
+
+- made producer smoke DBUG/controlled instead of ordinary SELECT-visible；
+- added attempt/success/unsupported counters in addition to frame counts；
+- kept `PQOF` and `PQWR` separate；
+- kept default ORDER BY PQ execution disabled；
+- added no-DBUG zero-delta MTR assertions。
+
+Code/Doc/Test Review - M11-E5g-1:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed `PQOF` / `PQWR` separation is preserved and `Query_result_mq` /
+  `PQ_WORKER_RESULT_FRAME_MAGIC` are untouched；
+- confirmed producer smoke runs only under DBUG flag
+  `pq_orderby_worker_frame_producer_smoke`；
+- confirmed no `HAS_ORDER_BY` relaxation, no default
+  `Exchange_sort::read_mq_message()` behavior change, no
+  `ParallelScanIterator::Read()`, AccessPath, handler, or InnoDB change；
+- confirmed producer smoke covers FINISH-after-send fail-closed, decreasing
+  sort-key fail-closed, ROW / FINISH / ERROR decode, per-worker local order,
+  worker id flags, and row image / rowid / sort-key length checks；
+- confirmed status variables, reset path, `SHOW STATUS`, `pq_stats`, and
+  `pq_commercial_order_by_frames` are consistent；
+- confirmed docs match the DBUG-only controlled scope and do not claim default
+  ORDER BY execution readiness。
+
+Next recommended action:
+
+- enter M11-E5g-2 streaming `Exchange_sort` heap-read state-machine smoke。
+
+Commit:
+
+- Add PQ M11E order by worker frame producer smoke。
 
 ## Risk Areas
 

@@ -19,6 +19,24 @@ SET @frame_finishes_before = (
 SET @frame_errors_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_smoke_errors');
+SET @worker_frame_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_worker_frame_smoke_rows');
+SET @worker_frame_finishes_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_worker_frame_smoke_finishes');
+SET @worker_frame_errors_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_worker_frame_smoke_errors');
+SET @worker_frame_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_attempts');
+SET @worker_frame_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_success');
+SET @worker_frame_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_unsupported');
 SET @frame_merge_rows_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_smoke_rows');
@@ -70,8 +88,16 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_unsupported') -
   @sort_state_shape_unsupported_before) = 0 AS sort_state_shape_unsupported_without_debug;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_attempts') -
+  @worker_frame_attempts_before) = 0 AS orderby_worker_frame_attempts_without_debug;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_worker_frame_smoke_rows') -
+  @worker_frame_rows_before) = 0 AS orderby_worker_frame_rows_without_debug;
 
-SET SESSION debug="d,pq_exchange_sort_state_shape_smoke";
+SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke";
 
 --sorted_result
 SELECT * FROM pq_orderby_frame_t;
@@ -90,6 +116,18 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_unsupported') -
   @sort_state_shape_unsupported_before) = 0 AS sort_state_shape_unsupported_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_attempts') -
+  @worker_frame_attempts_before) = 1 AS orderby_worker_frame_attempts_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_success') -
+  @worker_frame_success_before) = 1 AS orderby_worker_frame_success_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_unsupported') -
+  @worker_frame_unsupported_before) = 0 AS orderby_worker_frame_unsupported_delta;
 
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
@@ -103,6 +141,18 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_smoke_errors') -
   @frame_errors_before) >= 1 AS orderby_frame_errors_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_worker_frame_smoke_rows') -
+  @worker_frame_rows_before) >= 3 AS orderby_worker_frame_rows_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_worker_frame_smoke_finishes') -
+  @worker_frame_finishes_before) >= 2 AS orderby_worker_frame_finishes_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_worker_frame_smoke_errors') -
+  @worker_frame_errors_before) >= 1 AS orderby_worker_frame_errors_delta;
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_smoke_rows') -

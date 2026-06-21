@@ -853,6 +853,25 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
           &frame_rows_read, &frame_finishes_read, &frame_errors_read)) {
     return true;
   }
+  bool worker_frame_producer_enabled = false;
+  uint32 worker_frame_rows_read = 0;
+  uint32 worker_frame_finishes_read = 0;
+  uint32 worker_frame_errors_read = 0;
+  DBUG_EXECUTE_IF("pq_orderby_worker_frame_producer_smoke",
+                  worker_frame_producer_enabled = true;);
+  if (worker_frame_producer_enabled) {
+    pq_global_stats.orderby_worker_frame_producer_smoke_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    if (sort_exchange.run_orderby_worker_frame_producer_smoke(
+            &worker_frame_rows_read, &worker_frame_finishes_read,
+            &worker_frame_errors_read)) {
+      pq_global_stats.orderby_worker_frame_producer_smoke_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+    pq_global_stats.orderby_worker_frame_producer_smoke_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
   uint32 frame_merge_rows_read = 0;
   uint32 frame_merge_finishes_read = 0;
   if (sort_exchange.run_orderby_frame_merge_smoke(
@@ -899,6 +918,12 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
       frame_finishes_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_smoke_errors.fetch_add(
       frame_errors_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_worker_frame_smoke_rows.fetch_add(
+      worker_frame_rows_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_worker_frame_smoke_finishes.fetch_add(
+      worker_frame_finishes_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_worker_frame_smoke_errors.fetch_add(
+      worker_frame_errors_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_rows.fetch_add(
       frame_merge_rows_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_finishes.fetch_add(

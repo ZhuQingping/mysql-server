@@ -304,6 +304,12 @@ struct PQ_global_stats {
   std::atomic<uint64> exchange_sort_frame_smoke_rows{0};  ///< ORDER frames
   std::atomic<uint64> exchange_sort_frame_smoke_finishes{0};  ///< FINISH
   std::atomic<uint64> exchange_sort_frame_smoke_errors{0};  ///< ERROR
+  std::atomic<uint64> orderby_worker_frame_producer_smoke_attempts{0};  ///< 5g
+  std::atomic<uint64> orderby_worker_frame_producer_smoke_success{0};  ///< 5g
+  std::atomic<uint64> orderby_worker_frame_producer_smoke_unsupported{0};
+  std::atomic<uint64> exchange_sort_worker_frame_smoke_rows{0};  ///< Rows
+  std::atomic<uint64> exchange_sort_worker_frame_smoke_finishes{0};  ///< EOF
+  std::atomic<uint64> exchange_sort_worker_frame_smoke_errors{0};  ///< ERROR
   std::atomic<uint64> exchange_sort_frame_merge_smoke_rows{0};  ///< Merge rows
   std::atomic<uint64> exchange_sort_frame_merge_smoke_finishes{0};  ///< FINISH
   std::atomic<uint64> exchange_sort_frame_merge_edge_smoke_rows{0};  ///< Rows
@@ -511,6 +517,17 @@ struct PQ_global_stats {
     exchange_sort_frame_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_sort_frame_smoke_finishes.store(0, std::memory_order_relaxed);
     exchange_sort_frame_smoke_errors.store(0, std::memory_order_relaxed);
+    orderby_worker_frame_producer_smoke_attempts.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_frame_producer_smoke_success.store(
+        0, std::memory_order_relaxed);
+    orderby_worker_frame_producer_smoke_unsupported.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_worker_frame_smoke_rows.store(0, std::memory_order_relaxed);
+    exchange_sort_worker_frame_smoke_finishes.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_worker_frame_smoke_errors.store(0,
+                                                  std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_finishes.store(0,
                                                    std::memory_order_relaxed);
