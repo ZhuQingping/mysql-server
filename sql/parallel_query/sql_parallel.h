@@ -200,6 +200,9 @@ struct PQ_global_stats {
   std::atomic<uint64> saved_order_group_clone_copy_smoke_unsupported{0};  ///< S3
   std::atomic<uint64> orderby_filesort_contract_attempts{0};  ///< E5d-1
   std::atomic<uint64> orderby_filesort_contract_unsupported{0};  ///< E5d-1
+  std::atomic<uint64> orderby_filesort_construct_smoke_attempts{0};  ///< E5d-3c
+  std::atomic<uint64> orderby_filesort_construct_smoke_success{0};  ///< E5d-3c
+  std::atomic<uint64> orderby_filesort_construct_smoke_unsupported{0};  ///< E5d-3c
   std::atomic<uint64> orderby_filesort_restored_order_contract_attempts{0};  ///< E5d-3a
   std::atomic<uint64> orderby_filesort_restored_order_contract_success{0};  ///< E5d-3a
   std::atomic<uint64> orderby_filesort_restored_order_contract_unsupported{0};  ///< E5d-3a
@@ -343,6 +346,12 @@ struct PQ_global_stats {
         0, std::memory_order_relaxed);
     orderby_filesort_contract_attempts.store(0, std::memory_order_relaxed);
     orderby_filesort_contract_unsupported.store(0, std::memory_order_relaxed);
+    orderby_filesort_construct_smoke_attempts.store(
+        0, std::memory_order_relaxed);
+    orderby_filesort_construct_smoke_success.store(0,
+                                                   std::memory_order_relaxed);
+    orderby_filesort_construct_smoke_unsupported.store(
+        0, std::memory_order_relaxed);
     orderby_filesort_restored_order_contract_attempts.store(
         0, std::memory_order_relaxed);
     orderby_filesort_restored_order_contract_success.store(

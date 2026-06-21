@@ -9719,6 +9719,12 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_contract_attempts,
                                 orderby_filesort_contract_attempts)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_contract_unsupported,
                                 orderby_filesort_contract_unsupported)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_construct_smoke_attempts,
+                                orderby_filesort_construct_smoke_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_construct_smoke_success,
+                                orderby_filesort_construct_smoke_success)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_filesort_construct_smoke_unsupported,
+                                orderby_filesort_construct_smoke_unsupported)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
     orderby_filesort_restored_order_contract_attempts,
     orderby_filesort_restored_order_contract_attempts)
@@ -10778,6 +10784,15 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_filesort_contract_unsupported",
      (char *)&show_pq_orderby_filesort_contract_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_filesort_construct_smoke_attempts",
+     (char *)&show_pq_orderby_filesort_construct_smoke_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_filesort_construct_smoke_success",
+     (char *)&show_pq_orderby_filesort_construct_smoke_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_filesort_construct_smoke_unsupported",
+     (char *)&show_pq_orderby_filesort_construct_smoke_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_filesort_restored_order_contract_attempts",
      (char *)&show_pq_orderby_filesort_restored_order_contract_attempts,

@@ -11,7 +11,9 @@ completed and committed；M11-E5d-2c restore-to-sidecar contract smoke
 completed and committed；M11-E5d-2d clone-copy contract smoke completed and
 committed；M11-E5d-3 design completed and committed；M11-E5d-3a restored
 ORDER Filesort contract completed and committed；M11-E5d-3b Filesort
-constructor risk design in progress。
+constructor risk design completed and committed；M11-E5d-3c debug-only
+Filesort construction smoke coding completed，waiting for review/full
+validation/commit。
 
 ## 背景
 
@@ -1561,8 +1563,8 @@ Commit:
 
 ### M11-E5d-2: Owned Saved ORDER/GROUP Helper State Design
 
-Status: design-only taskbook completed；Design Review Agent accepted；waiting
-for commit。
+Status: design-only taskbook completed；Design Review Agent accepted；
+committed。
 
 Goal:
 
@@ -2427,6 +2429,90 @@ Design Review - M11-E5d-3b:
   relaxation should be introduced；
 - confirmed E5d-3c must keep the restored sidecar ORDER chain alive through
   the constructor call and treat zero length or failed contract as unsupported。
+
+Commit:
+
+- `1020b3b5c2b` Plan PQ M11E filesort construction smoke。
+
+### M11-E5d-3c: Debug-only Filesort Construction Smoke
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；full
+`parallel_query` suite passed；waiting for commit。
+
+Goal:
+
+- prove a restored sidecar ORDER chain can be consumed by the MySQL 8.0.46
+  `Filesort` constructor under a dedicated DBUG flag；
+- verify constructor-visible `make_sortorder()` consumes the restored ORDER
+  chain by checking `sort_order_length()`；
+- keep the constructed `Filesort` debug-only and detached from normal
+  execution cleanup/state。
+
+Implementation:
+
+- included `sql/filesort.h` in `pq_optimizer.cc` only for this DBUG-only
+  smoke；
+- added `pq_find_orderby_filesort_smoke_table()` to conservatively find the
+  single leader table from `best_ref`, `qep_tab`, or `Query_block` table list；
+- added `pq_run_orderby_filesort_construct_smoke()`:
+  - builds and verifies the owned ORDER sidecar；
+  - restores the optimized sidecar ORDER chain；
+  - clone-copies the sidecar and verifies clone-owned `next` links；
+  - constructs `Filesort` on current `THD::mem_root` while the clone sidecar
+    remains alive；
+  - verifies `filesort->sort_order_length() == restored_order_count`；
+  - does not store or attach the `Filesort *` anywhere；
+- added DBUG smoke `pq_orderby_filesort_construct_smoke` on the existing
+  `HAS_ORDER_BY` reject path；
+- added counters:
+  `Parallel_orderby_filesort_construct_smoke_attempts`,
+  `Parallel_orderby_filesort_construct_smoke_success`,
+  `Parallel_orderby_filesort_construct_smoke_unsupported`；
+- extended `pq_saved_order_group_contract` to verify no-DBUG zero counters,
+  DBUG attempts/success, unsupported zero, serial ORDER BY boundary, and zero
+  executed/workers/ranges；
+- updated `pq_stats` Parallel status variable count from 133 to 136。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_saved_order_group_contract pq_commercial_order_by pq_stats` 4/4
+  including `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Scope notes:
+
+- no `sql/filesort.*` edits；
+- no `JOIN::filesorts_to_cleanup`, QEP_TAB, AccessPath, iterator, or PQ state
+  attachment；
+- no `Filesort::using_addon_fields()`；
+- no `Sort_param` allocation or initialization；
+- no `filesort()` execution；
+- no `sql/iterators/sorting_iterator.*`, `exchange_sort.*`, `pq_iterators.*`,
+  `pq_clone.*`, or `sql_optimizer.*` changes；
+- no worker thread, MQ, handler/InnoDB, `Read()`, AccessPath, or
+  `HAS_ORDER_BY` eligibility relaxation。
+
+Code/Doc/Test Review - M11-E5d-3c:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed `pq_orderby_filesort_construct_smoke` is dedicated DBUG-only and
+  called only inside the existing `HAS_ORDER_BY` reject path；
+- confirmed restored clone sidecar stays alive through `Filesort`
+  construction and `sort_order_length()` check；
+- confirmed the `Filesort *` is local only and not attached to cleanup,
+  execution, or PQ state；
+- confirmed scope is narrow: constructor plus
+  `sort_order_length() == restored_count` only；
+- confirmed no `Sort_param`, `using_addon_fields()`, `filesort()`,
+  `Exchange_sort`, worker/MQ, `Read()`, or eligibility relaxation；
+- confirmed table selection is conservative and returns unsupported when no
+  table is available；
+- confirmed status counters, reset, MTR expectations, and `pq_stats` count/order
+  are consistent。
 
 ## Risk Areas
 
