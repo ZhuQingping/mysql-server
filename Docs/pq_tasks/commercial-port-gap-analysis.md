@@ -12,7 +12,9 @@
 
 ## 状态
 
-M0/M1/M2/M3/M4a/M4b 已完成，M5-M8 已完成，M9-M10 任务书已启动。
+M0/M1/M2/M3/M4a/M4b 已完成，M5-M8 已完成，M9 已完成首轮
+secondary/ref/ICP 与 edge backlog 收敛，M10-A commercial test manifest
+diff 已完成并通过 Docs-Test Review。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -789,15 +791,27 @@ M9-B3a-2 clustered lookup for visibility helper implemented:
 
 - Modify/Create: `mysql-test/suite/parallel_query/t/*`
 - Modify/Create: `mysql-test/suite/parallel_query/r/*`
-- Modify: `Docs/pq_tasks/parallel_query_suite_manifest.md`
+- Modify: `Docs/pq_tasks/commercial-port-m10-test-suite-gap-closure.md`
 - Modify: `Docs/pq_tasks/commercial-port-gap-analysis.md`
 
 **Rules:**
 
 - 每个商用测试必须分类为 enabled / adapted / deferred；
 - deferred 必须写明对应缺失能力；
+- `parallel_query_suite_manifest.md` 保留为 Phase 9 / V1 历史分类材料；
+  M10 使用 `commercial-port-m10-test-suite-gap-closure.md` 作为权威任务书；
 - 不因当前未迁移能力而删除测试意图；
 - 完整 suite 是最终验收。
+
+**M10-A current result:**
+
+- 当前仓 `t/*.test`: 73；
+- 商用参考 `t/*.test`: 98；
+- 同名重合: 1（`pq_not_support`）；
+- 当前 73 个测试继续作为 enabled local guards；
+- 商用独有 97 个测试已按 capability 分类，E/A/D 明细见 M10 任务书；
+- 后续 M10-B 先做 sysvars/fullscan/fallback/explain 小型改写；
+- M10-C 再处理 aggregation、ORDER BY、ref/ICP/secondary range 的已支持子集。
 
 **Validation:**
 
