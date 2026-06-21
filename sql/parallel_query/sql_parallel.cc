@@ -872,6 +872,32 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
     pq_global_stats.orderby_worker_frame_producer_smoke_success.fetch_add(
         1, std::memory_order_relaxed);
   }
+  bool stream_heap_enabled = false;
+  uint32 stream_heap_rows_read = 0;
+  uint32 stream_heap_finishes_read = 0;
+  uint32 stream_heap_would_blocks_read = 0;
+  uint32 stream_heap_errors_read = 0;
+  uint32 stream_heap_detaches_read = 0;
+  uint32 stream_heap_refills_read = 0;
+  uint32 stream_heap_replaces_read = 0;
+  uint32 stream_heap_removes_read = 0;
+  DBUG_EXECUTE_IF("pq_exchange_sort_stream_heap_smoke",
+                  stream_heap_enabled = true;);
+  if (stream_heap_enabled) {
+    pq_global_stats.exchange_sort_stream_heap_smoke_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    if (sort_exchange.run_orderby_streaming_heap_read_smoke(
+            &stream_heap_rows_read, &stream_heap_finishes_read,
+            &stream_heap_would_blocks_read, &stream_heap_errors_read,
+            &stream_heap_detaches_read, &stream_heap_refills_read,
+            &stream_heap_replaces_read, &stream_heap_removes_read)) {
+      pq_global_stats.exchange_sort_stream_heap_smoke_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+    pq_global_stats.exchange_sort_stream_heap_smoke_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
   uint32 frame_merge_rows_read = 0;
   uint32 frame_merge_finishes_read = 0;
   if (sort_exchange.run_orderby_frame_merge_smoke(
@@ -924,6 +950,22 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
       worker_frame_finishes_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_worker_frame_smoke_errors.fetch_add(
       worker_frame_errors_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_heap_smoke_rows.fetch_add(
+      stream_heap_rows_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_heap_smoke_finishes.fetch_add(
+      stream_heap_finishes_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_heap_smoke_would_blocks.fetch_add(
+      stream_heap_would_blocks_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_heap_smoke_errors.fetch_add(
+      stream_heap_errors_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_heap_smoke_detaches.fetch_add(
+      stream_heap_detaches_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_heap_smoke_refills.fetch_add(
+      stream_heap_refills_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_heap_smoke_heap_replaces.fetch_add(
+      stream_heap_replaces_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_stream_heap_smoke_heap_removes.fetch_add(
+      stream_heap_removes_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_rows.fetch_add(
       frame_merge_rows_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_finishes.fetch_add(

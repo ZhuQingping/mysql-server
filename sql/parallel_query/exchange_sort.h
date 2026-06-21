@@ -70,12 +70,21 @@ enum class PQ_orderby_loader_status : uint8 {
   ROW = 1,
   FINISH,
   WOULD_BLOCK,
+  DETACHED,
   ERROR,
 };
 
 enum class PQ_orderby_shadow_read_status : uint8 {
   ROW = 1,
   EOF_REACHED,
+  ERROR,
+};
+
+enum class PQ_orderby_stream_read_status : uint8 {
+  ROW = 1,
+  EOF_REACHED,
+  WOULD_BLOCK,
+  DETACHED,
   ERROR,
 };
 
@@ -173,6 +182,14 @@ class Exchange_sort final : public Exchange {
   bool run_orderby_real_init_allocation_smoke();
   bool run_orderby_frame_loader_smoke();
   bool run_orderby_shadow_read_smoke();
+  bool run_orderby_streaming_heap_read_smoke(uint32 *rows_read,
+                                             uint32 *finishes_read,
+                                             uint32 *would_blocks_read,
+                                             uint32 *errors_read,
+                                             uint32 *detaches_read,
+                                             uint32 *refills_read,
+                                             uint32 *heap_replaces_read,
+                                             uint32 *heap_removes_read);
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);
@@ -222,6 +239,13 @@ class Exchange_sort final : public Exchange {
   bool read_ordered_record_shadow_shape(
       std::vector<uchar> *row_image,
       PQ_orderby_shadow_read_status *status);
+  bool read_ordered_record_stream_shape(
+      binary_heap *heap, std::vector<bool> *in_heap,
+      std::vector<bool> *terminal_workers, std::vector<uchar> *row_image,
+      PQ_orderby_stream_read_status *status, uint32 *finishes_read,
+      uint32 *would_blocks_read, uint32 *errors_read, uint32 *detaches_read,
+      uint32 *refills_read, uint32 *heap_replaces_read,
+      uint32 *heap_removes_read);
   void cleanup_real_init_state_owner_shape();
 };
 

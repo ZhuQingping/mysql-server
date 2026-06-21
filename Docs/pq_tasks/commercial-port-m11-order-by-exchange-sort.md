@@ -4618,6 +4618,116 @@ Commit:
 
 - Add PQ M11E order by worker frame producer smoke。
 
+### M11-E5g-2: Streaming Exchange_sort Heap-read State-machine Smoke
+
+Status: coding completed；Code/Doc/Test Review Agent accepted；build,
+targeted MTR, and full `parallel_query` suite passed；waiting for commit。
+
+Goal:
+
+- prove a controlled streaming ORDER BY reader can refill per-worker `PQOF`
+  batches, maintain heap membership, and distinguish ROW / WOULD_BLOCK /
+  FINISH / ERROR / DETACHED；
+- prove `WOULD_BLOCK` is not treated as EOF and blocks output when a
+  non-terminal worker has no comparable head row；
+- keep the default `Exchange_sort::read_mq_message()`,
+  `ParallelScanIterator::Read()`, optimizer eligibility, and real ORDER BY
+  execution unchanged。
+
+Implementation:
+
+- added `PQ_orderby_stream_read_status` with ROW, EOF_REACHED, WOULD_BLOCK,
+  DETACHED, and ERROR states；
+- added `PQ_orderby_loader_status::DETACHED` so MQ detach is no longer folded
+  into generic ERROR inside the controlled loader；
+- added `Exchange_sort::read_ordered_record_stream_shape()`:
+  - refills each non-terminal worker from controlled `PQOF` handles；
+  - reads available ROW batches until FINISH / WOULD_BLOCK / ERROR / DETACHED；
+  - returns WOULD_BLOCK before emitting any row if a non-terminal worker lacks
+    a head row；
+  - adds workers with row heads into the heap；
+  - uses `replace_first()` when a selected batch still has rows；
+  - removes heap entries when a selected batch is drained；
+  - returns ERROR and DETACHED as separate observable states；
+- added `Exchange_sort::run_orderby_streaming_heap_read_smoke()`:
+  - builds three controlled worker queues；
+  - verifies initial WOULD_BLOCK does not output a row；
+  - then supplies the blocked worker row and verifies ordered output
+    `100, 200, 300, 400`；
+  - verifies FINISH/EOF after all workers complete；
+  - verifies ERROR frame fail-closed；
+  - verifies producer detach is observable as DETACHED；
+- wired the smoke behind DBUG flag `pq_exchange_sort_stream_heap_smoke`；
+- added status variables:
+  - `Parallel_exchange_sort_stream_heap_smoke_attempts`；
+  - `Parallel_exchange_sort_stream_heap_smoke_success`；
+  - `Parallel_exchange_sort_stream_heap_smoke_unsupported`；
+  - `Parallel_exchange_sort_stream_heap_smoke_rows`；
+  - `Parallel_exchange_sort_stream_heap_smoke_would_blocks`；
+  - `Parallel_exchange_sort_stream_heap_smoke_finishes`；
+  - `Parallel_exchange_sort_stream_heap_smoke_errors`；
+  - `Parallel_exchange_sort_stream_heap_smoke_detaches`；
+  - `Parallel_exchange_sort_stream_heap_smoke_refills`；
+  - `Parallel_exchange_sort_stream_heap_smoke_heap_replaces`；
+  - `Parallel_exchange_sort_stream_heap_smoke_heap_removes`；
+- extended `pq_commercial_order_by_frames` and `pq_stats`。
+
+Scope notes:
+
+- no `Exchange_sort::read_mq_message()` default behavior change；
+- no default `ParallelScanIterator::Read()` ordered path；
+- no optimizer `HAS_ORDER_BY` relaxation；
+- no `PQWR` / `Query_result_mq` change；
+- no AccessPath, handler, InnoDB, worker launch, Filesort, or Sort_param
+  runtime-owner change；
+- no preflight readiness flag is set true。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g2_target --tmpdir=/tmp/pqt_m11e5g2_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g2_full --tmpdir=/tmp/pqt_m11e5g2_full
+```
+
+Results:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed: 4/4 including `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Code/Doc/Test Review - M11-E5g-2:
+
+- Review Agent first verdict: `REQUEST_CHANGES` for stale README state；
+- fixed README current-phase summary so 5g-1 is marked committed and 5g-2 is
+  marked completed / waiting final review；
+- Review Agent final verdict: `ACCEPT`；
+- confirmed 5g-2 is controlled by DBUG flag
+  `pq_exchange_sort_stream_heap_smoke`；
+- confirmed no optimizer eligibility / `HAS_ORDER_BY`, default
+  `Exchange_sort::read_mq_message()`, `ParallelScanIterator::Read()`,
+  `PQWR` / `Query_result_mq`, AccessPath, handler, or InnoDB change；
+- confirmed WOULD_BLOCK handling is conservative and does not output rows when
+  a non-terminal worker lacks a head row；
+- confirmed ROW / FINISH / ERROR / DETACHED states are observable；
+- confirmed heap refill / replace / remove have smoke and status coverage；
+- confirmed status variables, reset, `SHOW STATUS`, MTR, `pq_stats`, and docs
+  are aligned；
+- confirmed no preflight ready path is made true。
+
+Next recommended action:
+
+- commit 5g-2；
+- then enter M11-E5g-3 ordered leader materialization smoke from streaming
+  reader。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

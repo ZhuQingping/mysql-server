@@ -10265,6 +10265,123 @@ static int show_pq_exchange_sort_worker_frame_smoke_errors(THD *,
   return 0;
 }
 
+static int show_pq_exchange_sort_stream_heap_smoke_attempts(THD *,
+                                                            SHOW_VAR *var,
+                                                            char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_attempts.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_success(THD *,
+                                                           SHOW_VAR *var,
+                                                           char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_success.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_unsupported(THD *,
+                                                               SHOW_VAR *var,
+                                                               char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_unsupported.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_rows(THD *, SHOW_VAR *var,
+                                                        char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_rows.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_would_blocks(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_would_blocks.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_finishes(THD *,
+                                                            SHOW_VAR *var,
+                                                            char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_finishes.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_errors(THD *,
+                                                          SHOW_VAR *var,
+                                                          char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_errors.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_detaches(THD *,
+                                                            SHOW_VAR *var,
+                                                            char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_detaches.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_refills(THD *,
+                                                           SHOW_VAR *var,
+                                                           char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_refills.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_heap_replaces(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_heap_replaces.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_stream_heap_smoke_heap_removes(
+    THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_stream_heap_smoke_heap_removes.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_exchange_sort_frame_merge_smoke_rows(THD *, SHOW_VAR *var,
                                                         char *buf) {
   var->type = SHOW_LONGLONG;
@@ -11149,6 +11266,39 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_worker_frame_smoke_rows",
      (char *)&show_pq_exchange_sort_worker_frame_smoke_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_attempts",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_detaches",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_detaches, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_errors",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_errors, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_finishes",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_finishes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_heap_removes",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_heap_removes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_heap_replaces",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_heap_replaces, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_refills",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_refills, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_rows",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_success",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_unsupported",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_stream_heap_smoke_would_blocks",
+     (char *)&show_pq_exchange_sort_stream_heap_smoke_would_blocks, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_smoke_runs",
      (char *)&show_pq_exchange_sort_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},

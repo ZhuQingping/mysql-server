@@ -37,6 +37,39 @@ SET @worker_frame_success_before = (
 SET @worker_frame_unsupported_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_unsupported');
+SET @stream_heap_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_attempts');
+SET @stream_heap_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_success');
+SET @stream_heap_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_unsupported');
+SET @stream_heap_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_rows');
+SET @stream_heap_would_blocks_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_would_blocks');
+SET @stream_heap_finishes_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_finishes');
+SET @stream_heap_errors_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_errors');
+SET @stream_heap_detaches_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_detaches');
+SET @stream_heap_refills_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_refills');
+SET @stream_heap_replaces_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_heap_replaces');
+SET @stream_heap_removes_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_heap_removes');
 SET @frame_merge_rows_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_smoke_rows');
@@ -96,8 +129,16 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_worker_frame_smoke_rows') -
   @worker_frame_rows_before) = 0 AS orderby_worker_frame_rows_without_debug;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_attempts') -
+  @stream_heap_attempts_before) = 0 AS orderby_stream_heap_attempts_without_debug;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_rows') -
+  @stream_heap_rows_before) = 0 AS orderby_stream_heap_rows_without_debug;
 
-SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke";
+SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_exchange_sort_stream_heap_smoke";
 
 --sorted_result
 SELECT * FROM pq_orderby_frame_t;
@@ -128,6 +169,18 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_orderby_worker_frame_producer_smoke_unsupported') -
   @worker_frame_unsupported_before) = 0 AS orderby_worker_frame_unsupported_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_attempts') -
+  @stream_heap_attempts_before) = 1 AS orderby_stream_heap_attempts_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_success') -
+  @stream_heap_success_before) = 1 AS orderby_stream_heap_success_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_unsupported') -
+  @stream_heap_unsupported_before) = 0 AS orderby_stream_heap_unsupported_delta;
 
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
@@ -153,6 +206,38 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_worker_frame_smoke_errors') -
   @worker_frame_errors_before) >= 1 AS orderby_worker_frame_errors_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_rows') -
+  @stream_heap_rows_before) >= 4 AS orderby_stream_heap_rows_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_would_blocks') -
+  @stream_heap_would_blocks_before) >= 1 AS orderby_stream_heap_would_blocks_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_finishes') -
+  @stream_heap_finishes_before) >= 3 AS orderby_stream_heap_finishes_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_errors') -
+  @stream_heap_errors_before) >= 1 AS orderby_stream_heap_errors_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_detaches') -
+  @stream_heap_detaches_before) >= 1 AS orderby_stream_heap_detaches_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_refills') -
+  @stream_heap_refills_before) >= 6 AS orderby_stream_heap_refills_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_heap_replaces') -
+  @stream_heap_replaces_before) >= 1 AS orderby_stream_heap_replaces_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_stream_heap_smoke_heap_removes') -
+  @stream_heap_removes_before) >= 3 AS orderby_stream_heap_removes_delta;
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_smoke_rows') -
