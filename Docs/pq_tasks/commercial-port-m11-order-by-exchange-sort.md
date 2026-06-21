@@ -2,9 +2,8 @@
 
 ## 状态
 
-Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2 completed and committed；
-M11-E5b-3 debug-only row materialization smoke coding completed，waiting for
-review/commit。
+Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
+completed and committed；M11-E5d-S0 saved ORDER/GROUP helper design accepted。
 
 ## 背景
 
@@ -495,8 +494,8 @@ Design Review - M11-E5c:
 
 ## M11-E5d: Filesort State Contract
 
-Status: design taskbook completed，Review Agent accepted，waiting for commit；
-no source code change yet。
+Status: design taskbook completed，Review Agent accepted and committed；no
+source code change。
 
 Goal:
 
@@ -612,8 +611,8 @@ Design Review - M11-E5d:
 
 ### M11-E5d-0: Read-only Helper Inventory
 
-Status: read-only inventory completed，Review Agent accepted，waiting for
-commit；no source code change。
+Status: read-only inventory completed，Review Agent accepted and committed；no
+source code change。
 
 Inventory commands:
 
@@ -682,6 +681,141 @@ Inventory Review - M11-E5d-0:
 - E5d-1 fail-closed contract shape remains reasonable only if it reports
   unsupported when saved helper state is absent；
 - do not proceed to E5d-2 Filesort construction yet。
+
+### M11-E5d-S0: Saved ORDER/GROUP Helper Design
+
+Status: design-only taskbook completed，Review Agent accepted；no source code
+change。
+
+Goal:
+
+- define the smallest current-branch equivalent for the commercial saved
+  ORDER/GROUP helper layer required by `pq_make_filesort()`；
+- avoid directly constructing `Filesort` / `Sort_param` until saved optimizer
+  state ownership and restore semantics are reviewed；
+- keep `HAS_ORDER_BY` as a user-visible serial boundary while helper state is
+  introduced and smoke-tested。
+
+Commercial reference:
+
+- commercial `JOIN::save_optimized_vars()` records:
+  `grouped`, `group_optimized_away`, `implicit_grouping`,
+  `need_tmp_before_win`, `simple_group`, `simple_order`,
+  `streaming_aggregation`, `m_ordered_index_usage`, `skip_sort_order`,
+  `select_distinct`, and `having_cond`；
+- commercial helper state also tracks `saved_join_order`,
+  `saved_join_group_list`, `optimized_order_flags`,
+  `optimized_group_flags`, and `pq_saved_having_cond`；
+- commercial helper APIs include `record_optimized_group_order()`,
+  `restore_optimized_group_order()`, `restore_list()`, and key-order helpers
+  used by the ORDER BY path；
+- current branch already has `Group_list_ptrs`, `ORDER_with_src`,
+  `JOIN::m_ordered_index_usage`, `QEP_TAB::range_scan()`, range reverse
+  metadata, and PQ clone hooks, but not the saved helper layer itself。
+
+Design decision:
+
+- do not add `Filesort` construction in this step；
+- first add an explicit saved ORDER/GROUP state contract, then code it as a
+  fail-closed helper；
+- prefer a PQ-local sidecar state object for the first coding step unless
+  review proves direct `JOIN` fields are needed for commercial compatibility；
+- direct `JOIN` field additions remain allowed only after the helper API and
+  clone/restore ownership are documented, because optimizer-owned state is
+  shared across normal serial execution and PQ clone paths。
+
+Proposed saved state contract:
+
+- captured scalar optimizer flags:
+  `grouped`, `group_optimized_away`, `implicit_grouping`,
+  `need_tmp_before_win`, `simple_group`, `simple_order`,
+  `streaming_aggregation`, `m_ordered_index_usage`, `skip_sort_order`,
+  `select_distinct`, and `having_cond`；
+- captured ORDER/GROUP list metadata:
+  `Query_block::saved_order_list_ptrs`, `Query_block::saved_group_list_ptrs`
+  or their current-branch equivalents, plus local optimized ORDER/GROUP flags；
+- restore helpers must rebuild local `SQL_I_List<ORDER>` / `ORDER_with_src`
+  views without mutating optimizer-owned ORDER nodes unexpectedly；
+- clone interaction must be explicit: a worker/clone JOIN can copy saved helper
+  state only after source JOIN state is known complete and immutable for the
+  query execution window；
+- unsupported/missing state must return a clear fail-closed result and must not
+  silently fall through into `Filesort::make_sortorder()`。
+
+Allowed files for the later coding step:
+
+- `sql/parallel_query/pq_optimizer.h`；
+- `sql/parallel_query/pq_optimizer.cc`；
+- `sql/sql_optimizer.h` only if direct `JOIN` fields are approved by review；
+- `sql/sql_optimizer.cc` only for save/restore hook wiring approved by review；
+- focused MTR under `mysql-test/suite/parallel_query/` for diagnostics；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden until a later reviewed step:
+
+- relaxing `HAS_ORDER_BY` eligibility；
+- constructing `Filesort` / `Sort_param`；
+- invoking `Filesort::make_sortorder()`；
+- changing `ParallelScanIterator::Read()` user-visible ORDER BY behavior；
+- starting worker threads or wiring real worker ORDER BY producers；
+- importing commercial key-order helpers that depend on unresolved
+  `REF_SLICE_PQ_TMP` / `Ref_item_array` semantics。
+
+Proposed task split:
+
+1. E5d-S1 Saved State Contract Shape:
+   add compile-only saved ORDER/GROUP state container and helper API that
+   reports unsupported until all required current-branch pointers are present。
+2. E5d-S2 Leader Save/Restore Smoke:
+   debug-only smoke saves scalar flags and ORDER/GROUP pointer metadata, then
+   restores into local lists and verifies original serial optimizer state is
+   unchanged。
+3. E5d-S3 Clone Copy Contract:
+   verify PQ clone copy can carry saved state without taking ownership of
+   optimizer ORDER nodes or `Item` objects。
+4. E5d-1 Filesort Contract Shape:
+   only after S1-S3 pass review, create fail-closed `pq_make_filesort()`
+   contract shape that refuses unsupported saved state。
+5. E5d-2 Leader-only Filesort Smoke:
+   only after E5d-1 review, evaluate a debug-only `Filesort` construction smoke
+   for a single-table exact ORDER BY shape。
+
+Required validation for design-only S0:
+
+- no build/test required；
+- independent design/task Review Agent must confirm scope, ownership, and hard
+  stops before coding S1。
+
+Acceptance checklist:
+
+- no source edits in S0；
+- design names the missing commercial fields/helpers；
+- design chooses sidecar-first unless direct `JOIN` fields are explicitly
+  justified；
+- design forbids `Filesort` construction and user-visible ORDER BY PQ；
+- next coding step is small enough to review independently。
+
+Review request:
+
+- confirm sidecar-first saved state contract is a safe first step；
+- confirm whether direct `JOIN` fields should be delayed until S1 review；
+- confirm S1-S3 must precede E5d-1/E5d-2；
+- check that the allowed/forbidden file boundary prevents accidental optimizer
+  or execution-path activation。
+
+Design/Task Review - M11-E5d-S0:
+
+- Review Agent verdict: `ACCEPT`；
+- agreed S0 is design-only and S1-S3 must precede E5d-1/E5d-2；
+- agreed sidecar-first is the safe first step, with direct `JOIN` fields
+  delayed unless S1/S2 prove capture timing must bind to `JOIN::optimize()`
+  lifecycle；
+- confirmed hard stops are sufficient: no `HAS_ORDER_BY` relaxation, no
+  `Filesort` / `Sort_param` construction, no `make_sortorder()`, no
+  `ParallelScanIterator::Read()` user-visible change, no worker-thread ORDER BY
+  producer；
+- next step: E5d-S1 compile-only saved state contract shape, fail-closed and
+  without user-visible ORDER BY activation。
 
 ## Risk Areas
 
