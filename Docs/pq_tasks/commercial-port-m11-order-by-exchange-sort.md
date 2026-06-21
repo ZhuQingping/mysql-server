@@ -12,8 +12,8 @@ completed and committed；M11-E5d-2d clone-copy contract smoke completed and
 committed；M11-E5d-3 design completed and committed；M11-E5d-3a restored
 ORDER Filesort contract completed and committed；M11-E5d-3b Filesort
 constructor risk design completed and committed；M11-E5d-3c debug-only
-Filesort construction smoke coding completed，waiting for review/full
-validation/commit。
+Filesort construction smoke completed and committed。Next: design Sort_param /
+Exchange_sort initialization boundary before any further coding。
 
 ## 背景
 
@@ -2437,7 +2437,7 @@ Commit:
 ### M11-E5d-3c: Debug-only Filesort Construction Smoke
 
 Status: coding completed；Code/Doc/Test Review Agent accepted；full
-`parallel_query` suite passed；waiting for commit。
+`parallel_query` suite passed；committed。
 
 Goal:
 
@@ -2513,6 +2513,32 @@ Code/Doc/Test Review - M11-E5d-3c:
   table is available；
 - confirmed status counters, reset, MTR expectations, and `pq_stats` count/order
   are consistent。
+
+Commit:
+
+- `c4b7a7953e1` Add PQ M11E filesort construction smoke。
+
+### M11-E5d-4: Sort_param / Exchange_sort Initialization Boundary Design
+
+Status: design-only taskbook in progress。
+
+Goal:
+
+- decide the next safe boundary after debug-only `Filesort` construction；
+- evaluate whether `Sort_param::init_for_filesort()` and `Exchange_sort::init()`
+  can be tested without entering worker MQ or real ORDER BY execution；
+- keep user-visible ORDER BY PQ disabled until `Sort_param`, frame format, MQ
+  ownership, and `Read()` consumption are reviewed together。
+
+Initial constraints:
+
+- no coding before design review；
+- no default path `Sort_param` initialization；
+- no `Exchange_sort::init()` on real SQL path；
+- no worker MQ, `Query_result_mq`, `ParallelScanIterator::Read()`, handler,
+  InnoDB, AccessPath, or optimizer eligibility changes；
+- any future coding must be DBUG-only and must preserve `HAS_ORDER_BY`
+  rejection。
 
 ## Risk Areas
 
