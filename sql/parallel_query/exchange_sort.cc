@@ -587,6 +587,58 @@ bool Exchange_sort::load_orderby_frame_to_record_group(
   return false;
 }
 
+bool Exchange_sort::read_ordered_record_shadow_shape(
+    std::vector<uchar> *row_image, PQ_orderby_shadow_read_status *status) {
+  if (row_image == nullptr || status == nullptr) return true;
+  row_image->clear();
+  *status = PQ_orderby_shadow_read_status::ERROR;
+  if (m_record_groups.empty()) return true;
+
+  bool has_candidate = false;
+  size_t candidate_group = 0;
+  int64 candidate_key = 0;
+
+  for (size_t group_index = 0; group_index < m_record_groups.size();
+       ++group_index) {
+    PQ_orderby_record_batch &batch = m_record_groups[group_index];
+    if (!batch.completed) {
+      *status = PQ_orderby_shadow_read_status::ERROR;
+      return false;
+    }
+    if (batch.next_pos >= batch.records.size()) {
+      continue;
+    }
+
+    const PQ_orderby_cached_record &record = batch.records[batch.next_pos];
+    if (!record.has_sort_key || record.sort_key.size() != sizeof(int64)) {
+      *status = PQ_orderby_shadow_read_status::ERROR;
+      return false;
+    }
+
+    int64 key = 0;
+    memcpy(&key, record.sort_key.data(), sizeof(key));
+    if (!has_candidate || key < candidate_key ||
+        (key == candidate_key && group_index < candidate_group)) {
+      has_candidate = true;
+      candidate_group = group_index;
+      candidate_key = key;
+    }
+  }
+
+  if (!has_candidate) {
+    *status = PQ_orderby_shadow_read_status::EOF_REACHED;
+    return false;
+  }
+
+  PQ_orderby_record_batch &batch = m_record_groups[candidate_group];
+  const PQ_orderby_cached_record &record = batch.records[batch.next_pos];
+  *row_image = record.row_image;
+  ++batch.next_pos;
+  batch.compare_state = PQ_orderby_batch_compare_state::NOT_EVALUATED;
+  *status = PQ_orderby_shadow_read_status::ROW;
+  return false;
+}
+
 void Exchange_sort::cleanup_real_init_state_owner_shape() {
   m_compare_key_buffers[0].clear();
   m_compare_key_buffers[1].clear();
@@ -626,7 +678,11 @@ bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
     return true;
   }
 
-  return run_orderby_frame_loader_smoke();
+  if (run_orderby_frame_loader_smoke()) {
+    return true;
+  }
+
+  return run_orderby_shadow_read_smoke();
 }
 
 bool Exchange_sort::run_orderby_sort_state_shape_handoff_smoke(
@@ -836,6 +892,159 @@ bool Exchange_sort::run_orderby_frame_loader_smoke() {
              status != PQ_orderby_loader_status::ERROR ||
              m_record_groups[1].completed ||
              !m_record_groups[1].records.empty();
+  }
+
+  cleanup_order_gather_shape();
+  failed = failed || !m_min_records.empty() || !m_record_groups.empty() ||
+           !m_compare_key_buffers[0].empty() ||
+           !m_compare_key_buffers[1].empty() || !m_tmp_key_buffer.empty();
+
+  if (initialized_here) cleanup();
+  return failed;
+}
+
+bool Exchange_sort::run_orderby_shadow_read_smoke() {
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+
+  bool initialized_here = false;
+  if (m_mq_handles == nullptr) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+  if (m_nqueues != kWorkers) {
+    if (initialized_here) cleanup();
+    return true;
+  }
+
+  bool failed =
+      init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                       /*index_sort=*/false, kSortOrderLength,
+                                       kMaxRecordLength, kRefLength) ||
+      allocate_real_init_buffers_shape();
+
+  const int64 record_low = 100;
+  const int64 record_mid = 200;
+  const int64 record_high = 300;
+  const uint32 rowid = 1;
+  const int64 key_low = 1;
+  const int64 key_mid = 2;
+  const int64 key_high = 3;
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                                   &record_mid, sizeof(record_mid), &rowid,
+                                   sizeof(rowid), &key_mid, sizeof(key_mid)) ||
+             pq_send_orderby_frame(get_mq_handle(0),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             pq_send_orderby_frame(get_mq_handle(1), PQ_orderby_frame_type::ROW,
+                                   &record_low, sizeof(record_low), &rowid,
+                                   sizeof(rowid), &key_low, sizeof(key_low)) ||
+             pq_send_orderby_frame(get_mq_handle(1),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0) ||
+             pq_send_orderby_frame(get_mq_handle(2), PQ_orderby_frame_type::ROW,
+                                   &record_high, sizeof(record_high), &rowid,
+                                   sizeof(rowid), &key_high,
+                                   sizeof(key_high)) ||
+             pq_send_orderby_frame(get_mq_handle(2),
+                                   PQ_orderby_frame_type::FINISH, nullptr, 0,
+                                   nullptr, 0, nullptr, 0);
+  }
+
+  PQ_orderby_loader_status loader_status = PQ_orderby_loader_status::ERROR;
+  for (uint32 worker = 0; !failed && worker < kWorkers; ++worker) {
+    failed =
+        load_orderby_frame_to_record_group(get_mq_handle(worker), worker,
+                                           &loader_status) ||
+        loader_status != PQ_orderby_loader_status::ROW ||
+        load_orderby_frame_to_record_group(get_mq_handle(worker), worker,
+                                           &loader_status) ||
+        loader_status != PQ_orderby_loader_status::FINISH;
+  }
+
+  PQ_orderby_shadow_read_status read_status =
+      PQ_orderby_shadow_read_status::ERROR;
+  std::vector<uchar> row_image;
+  const int64 expected_rows[] = {record_low, record_mid, record_high};
+  for (const int64 expected_row : expected_rows) {
+    if (failed) break;
+    int64 actual_row = 0;
+    failed = read_ordered_record_shadow_shape(&row_image, &read_status) ||
+             read_status != PQ_orderby_shadow_read_status::ROW ||
+             row_image.size() != sizeof(actual_row);
+    if (!failed) {
+      memcpy(&actual_row, row_image.data(), sizeof(actual_row));
+      failed = actual_row != expected_row;
+    }
+  }
+  if (!failed) {
+    failed = read_ordered_record_shadow_shape(&row_image, &read_status) ||
+             read_status != PQ_orderby_shadow_read_status::EOF_REACHED ||
+             !row_image.empty();
+  }
+
+  cleanup_order_gather_shape();
+  if (!failed) {
+    failed = init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                             /*index_sort=*/false,
+                                             kSortOrderLength, kMaxRecordLength,
+                                             kRefLength) ||
+             allocate_real_init_buffers_shape();
+  }
+  if (!failed) {
+    m_record_groups[0].completed = false;
+    failed = read_ordered_record_shadow_shape(&row_image, &read_status) ||
+             read_status != PQ_orderby_shadow_read_status::ERROR ||
+             !row_image.empty();
+  }
+
+  cleanup_order_gather_shape();
+  if (!failed) {
+    failed = init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                             /*index_sort=*/false,
+                                             kSortOrderLength, kMaxRecordLength,
+                                             kRefLength) ||
+             allocate_real_init_buffers_shape();
+  }
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                                   &record_low, sizeof(record_low), &rowid,
+                                   sizeof(rowid), &key_low, sizeof(key_low));
+  }
+  if (!failed) {
+    failed = load_orderby_frame_to_record_group(get_mq_handle(0), 0,
+                                                &loader_status) ||
+             loader_status != PQ_orderby_loader_status::ROW ||
+             read_ordered_record_shadow_shape(&row_image, &read_status) ||
+             read_status != PQ_orderby_shadow_read_status::ERROR ||
+             !row_image.empty();
+  }
+
+  cleanup_order_gather_shape();
+  if (!failed) {
+    failed = init_real_init_state_owner_shape(kWorkers, /*stable_output=*/true,
+                                             /*index_sort=*/false,
+                                             kSortOrderLength, kMaxRecordLength,
+                                             kRefLength) ||
+             allocate_real_init_buffers_shape();
+  }
+  if (!failed) {
+    PQ_orderby_cached_record invalid_record;
+    invalid_record.row_image.assign(
+        reinterpret_cast<const uchar *>(&record_low),
+        reinterpret_cast<const uchar *>(&record_low) + sizeof(record_low));
+    invalid_record.sort_key.push_back(0);
+    invalid_record.has_sort_key = true;
+    m_record_groups[0].records.push_back(std::move(invalid_record));
+    m_record_groups[0].completed = true;
+    m_record_groups[1].completed = true;
+    m_record_groups[2].completed = true;
+    failed = read_ordered_record_shadow_shape(&row_image, &read_status) ||
+             read_status != PQ_orderby_shadow_read_status::ERROR ||
+             !row_image.empty();
   }
 
   cleanup_order_gather_shape();

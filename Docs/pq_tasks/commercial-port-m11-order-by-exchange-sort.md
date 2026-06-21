@@ -3781,7 +3781,9 @@ Code/Doc/Test Review - M11-E5d-5c:
 
 ### M11-E5d-5d: Debug-only Ordered Leader Read Shadow Path Design
 
-Status: design completed；Design Review Agent accepted；waiting for commit。
+Status: coding completed；`git diff --check`, `mysqld` build, targeted MTR,
+and full `parallel_query` suite passed；Code/Doc/Test Review Agent accepted；
+waiting for commit。
 
 Goal:
 
@@ -3915,6 +3917,46 @@ Design Review - M11-E5d-5d:
 - accepted kill/WOULD_BLOCK residual risk because the first coding step is
   constrained to fully completed controlled groups and any blocked state must be
   explicit and tested。
+
+Implementation summary:
+
+- added `PQ_orderby_shadow_read_status` with `ROW`, `EOF_REACHED`, and `ERROR`
+  states；
+- added `Exchange_sort::read_ordered_record_shadow_shape()`；
+- added `Exchange_sort::run_orderby_shadow_read_smoke()` and chained it after
+  the 5a/5b/5c state-shape, allocation, and frame-loader smokes；
+- the shadow helper drains already-loaded owned `m_record_groups`, chooses the
+  next debug row by int64 sort-key with worker-id tie break, and copies only the
+  row image into a caller-owned `std::vector<uchar>`；
+- the helper does not write `TABLE::record[0]`, does not call
+  `Exchange_sort::read_mq_message()`, does not consume default worker MQ, and
+  does not touch `Exchange_nosort`, `PQRM`, or `PQWR`；
+- the smoke verifies deterministic ROW order, EOF after all completed groups are
+  drained, ERROR for empty incomplete group state, ERROR for loaded ROW without
+  FINISH, ERROR for invalid sort-key shape, and cleanup reset。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed，4/4 including `shutdown_report`:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`；
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-5d:
+
+- Review Agent verdict: `ACCEPT` after one required fix；
+- first review found that a group with loaded ROW but no FINISH could be emitted
+  because incomplete state was checked only after `next_pos >= records.size()`；
+- fixed by making `read_ordered_record_shadow_shape()` reject any
+  `!batch.completed` before considering rows；
+- added loaded ROW without FINISH smoke coverage, in addition to empty
+  incomplete group coverage；
+- confirmed the helper copies only into a caller-owned buffer and does not write
+  `TABLE::record[0]`；
+- confirmed scope remains contained to `Exchange_sort` plus docs, with no
+  `Exchange_nosort`, `Query_result_mq`, `PQWR`, `PQRM`, optimizer eligibility,
+  AccessPath, handler, or InnoDB changes。
 
 ## Risk Areas
 

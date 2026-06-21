@@ -73,6 +73,12 @@ enum class PQ_orderby_loader_status : uint8 {
   ERROR,
 };
 
+enum class PQ_orderby_shadow_read_status : uint8 {
+  ROW = 1,
+  EOF_REACHED,
+  ERROR,
+};
+
 struct PQ_orderby_frame_header {
   uint32 magic;
   uint16 version;
@@ -163,6 +169,7 @@ class Exchange_sort final : public Exchange {
   bool run_orderby_real_init_state_owner_smoke();
   bool run_orderby_real_init_allocation_smoke();
   bool run_orderby_frame_loader_smoke();
+  bool run_orderby_shadow_read_smoke();
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);
@@ -209,6 +216,9 @@ class Exchange_sort final : public Exchange {
   bool load_orderby_frame_to_record_group(MQueue_handle *handle,
                                           uint32 worker_id,
                                           PQ_orderby_loader_status *status);
+  bool read_ordered_record_shadow_shape(
+      std::vector<uchar> *row_image,
+      PQ_orderby_shadow_read_status *status);
   void cleanup_real_init_state_owner_shape();
 };
 
