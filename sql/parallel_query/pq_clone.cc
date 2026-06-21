@@ -39,6 +39,18 @@ bool pq_dup_tabs(JOIN *, JOIN *, bool) { return true; }
 
 JOIN *pq_make_join(THD *, JOIN *) { return nullptr; }
 
+void Query_block::pq_backup() {}
+
+void Query_block::pq_restore() {}
+
+bool JOIN::pq_copy_from(JOIN *) { return true; }
+
+bool JOIN::setup_tmp_table_info(JOIN *) { return true; }
+
+bool JOIN::restore_optimized_vars() { return true; }
+
+void JOIN::pq_restore() {}
+
 bool pq_clone_activation_probe(THD *thd, JOIN *join) {
   pq_global_stats.clone_probe_attempts.fetch_add(1,
                                                  std::memory_order_relaxed);

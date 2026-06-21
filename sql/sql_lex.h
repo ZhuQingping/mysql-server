@@ -2211,6 +2211,38 @@ class Query_block : public Query_term {
   /// Opaque pointer to PQUnsuiteInfo (reasons for PQ disqualification)
   struct PQUnsuiteInfo *pq_unsuite_info{nullptr};
 
+  Query_block *pq_last_clone() const {
+    assert(!m_pq_last_clone || m_pq_last_clone->m_pq_is_clone_of == this);
+    return m_pq_last_clone;
+  }
+
+  Query_block *pq_is_clone_of() const {
+    assert(!m_pq_is_clone_of || m_pq_is_clone_of->m_pq_last_clone == this);
+    return m_pq_is_clone_of;
+  }
+
+  void pq_link_clone(Query_block *clone) {
+    assert(m_pq_last_clone == nullptr);
+    assert(clone != nullptr && clone->m_pq_is_clone_of == nullptr);
+    m_pq_last_clone = clone;
+    clone->m_pq_is_clone_of = this;
+  }
+
+  void pq_unlink_clone() {
+    assert(m_pq_is_clone_of != nullptr &&
+           m_pq_is_clone_of->m_pq_last_clone == this);
+    m_pq_is_clone_of->m_pq_last_clone = nullptr;
+    m_pq_is_clone_of = nullptr;
+  }
+
+  bool pq_is_clone() const {
+    assert(!m_pq_is_clone_of || m_pq_is_clone_of->m_pq_last_clone == this);
+    return m_pq_is_clone_of != nullptr;
+  }
+
+  void pq_backup();
+  void pq_restore();
+
  private:
   friend class Query_expression;
   friend class Condition_context;
@@ -2362,6 +2394,9 @@ class Query_block : public Query_term {
 
   /// Result of this query block
   Query_result *m_query_result{nullptr};
+
+  Query_block *m_pq_last_clone{nullptr};
+  Query_block *m_pq_is_clone_of{nullptr};
 
   /**
     Options assigned from parsing and throughout resolving,

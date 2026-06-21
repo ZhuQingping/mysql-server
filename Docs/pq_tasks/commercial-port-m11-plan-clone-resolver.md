@@ -5,6 +5,8 @@
 M11-A0 design-only completed / Docs-Design Review accepted。
 M11-A1 Item base contract compile-only skeleton completed /
 Code-Docs-Test Review accepted。
+M11-A2 Query_block / JOIN clone-link skeleton completed /
+Code-Docs-Test Review accepted。
 
 ## 目标
 
@@ -106,6 +108,21 @@ Status: coding/validation completed / Code-Docs-Test Review accepted。
 - AccessPath rewrite；
 - worker launch。
 
+Implementation notes:
+
+- add only `Query_block` clone-link accessors and no-op backup/restore shell；
+- add only `JOIN` clone/restore shell declarations and fail-closed/no-op
+  definitions；
+- `JOIN::pq_copy_from()` / `JOIN::setup_tmp_table_info()` /
+  `JOIN::restore_optimized_vars()` return `true`；
+- `Query_block::pq_backup()` / `Query_block::pq_restore()` /
+  `JOIN::pq_restore()` are no-op；
+- `pq_make_join()` remains fail-closed and returns `nullptr`；
+- `pq_clone_activation_probe()` must not increment
+  `Parallel_clone_probe_success` or store an executable cloned JOIN。
+
+Status: coding/validation completed / Code-Docs-Test Review accepted。
+
 ### M11-A3: Resolver Helper Compile-only Subset
 
 目标：
@@ -186,3 +203,10 @@ skeleton. The accepted scope adds only `Item::pq_clone()` /
 commercial `origin_item` / `cloned_origin_item` state, does not add subclass
 overrides, and does not touch resolver/fix_fields/restore/`pq_make_join()` or
 worker paths.
+
+M11-A2 Code-Docs-Test Review Agent first returned REVISE because
+`pq_try_clone_item` exceeded the clone-link shell scope and belongs to later
+Item/resolver work. The revised diff removed that field. Re-review accepted the
+remaining `Query_block` clone-link shell and `Query_block` / `JOIN` no-op or
+fail-closed methods, with `pq_make_join()` still returning `nullptr` and clone
+probe success still not incremented.

@@ -863,6 +863,11 @@ class JOIN {
   /// Opaque pointer to PQ_optimized_var (saved optimizer state for PQ)
   void *pq_optimized_var{nullptr};
 
+  bool pq_copy_from(JOIN *orig);
+  bool setup_tmp_table_info(JOIN *orig);
+  bool restore_optimized_vars();
+  void pq_restore();
+
  private:
   /**
     Create a temporary table to be used for processing DISTINCT/ORDER

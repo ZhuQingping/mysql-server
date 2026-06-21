@@ -31,6 +31,8 @@ adapter contract 已生成并通过 Docs-Design Review。M11-B1/B2 PQWR leader
 decode adapter coding/validation completed，并通过 Code-Docs-Test Review。
 M11-A1 Item base contract compile-only skeleton 已完成，并通过
 Code-Docs-Test Review。
+M11-A2 Query_block / JOIN clone-link skeleton 已完成，并通过
+Code-Docs-Test Review。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -288,7 +290,8 @@ M11-B explorer 结论：
 3. M11-B1/B2：`PQWR` leader decode adapter + synthetic smoke；
 4. M11-A1：`Item` base contract compile-only skeleton；
 5. M11-A2：Query_block / JOIN clone-link skeleton；
-6. 后续再进入 M11-B3 guarded worker result wiring probe 和
+6. M11-A3：Resolver helper compile-only subset；
+7. 后续再进入 M11-B3 guarded worker result wiring probe 和
    M11-D `ParallelScanIterator` lifecycle contract。
 
 **任务书入口：**
