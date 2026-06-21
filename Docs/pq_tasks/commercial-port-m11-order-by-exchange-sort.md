@@ -2950,9 +2950,10 @@ Design Review - M11-E5d-4b:
 
 ### M11-E5d-4b-1: Debug-only Exchange_sort Sort-state Adapter Shape
 
-Status: coding completed；Code/Doc/Test Review Agent requested documentation
-status corrections only；`git diff --check`, `mysqld` build, targeted MTR, and
-full `parallel_query` suite passed；waiting for re-review and commit。
+Status: coding completed；Code/Doc/Test Review Agent accepted after
+documentation status corrections；`git diff --check`, `mysqld` build,
+targeted MTR, and full `parallel_query` suite passed；committed as
+`7aaaba10777`。
 
 Goal:
 
@@ -3037,6 +3038,127 @@ Code/Doc/Test Review - M11-E5d-4b-1:
 - confirmed DBUG gate and MTR no-DBUG/DBUG assertions are correct；
 - confirmed cleanup is explicit；
 - confirmed counters, reset, `SHOW_VAR`, and `pq_stats` are consistent。
+- re-review verdict: `ACCEPT`；
+- commit: `7aaaba10777` Add PQ M11E exchange sort state shape。
+
+### M11-E5d-4c: Optimizer-side Filesort/Sort_param Scalar Handoff Design
+
+Status: design-only taskbook completed；Design Review Agent accepted；waiting
+for commit。
+
+Goal:
+
+- define the next safe boundary after E5d-4a and E5d-4b-1；
+- pass only scalar metadata derived from the optimizer-side debug
+  `Filesort` / stack-local `Sort_param` smoke into the `Exchange_sort`
+  sort-state shape；
+- keep the handoff debug-only and inside the existing `HAS_ORDER_BY`
+  rejection window；
+- do not persist `Filesort`, `Sort_param`, ORDER chain, TABLE, handler, or
+  any optimizer object in `Exchange_sort` or PQ runtime state。
+
+Design constraints:
+
+- this is still not real ORDER BY PQ execution；
+- `HAS_ORDER_BY` must continue to reject the query after the smoke；
+- no `Filesort::make_sortorder()` visibility change；
+- no real `Exchange_sort::init()`；
+- no worker MQ consumption；
+- no `ParallelScanIterator::Read()` integration；
+- no AccessPath, handler, InnoDB, or ORDER BY eligibility relaxation。
+
+Proposed data contract:
+
+- add a tiny scalar carrier, for example `PQ_orderby_sort_state_shape_input`,
+  with only:
+  - `workers`；
+  - `stable_output`；
+  - `index_sort`；
+  - `sort_order_length`；
+  - `max_record_length`；
+  - `ref_length`；
+- the producer may derive `sort_order_length` and `max_record_length` from the
+  E5d-4a debug `Filesort` / stack-local `Sort_param` smoke；
+- `workers` must be synthetic or derived from session DOP as a scalar only；
+- `ref_length` must be a conservative scalar, not a handler pointer；
+- `Exchange_sort` must copy the values and immediately cleanup/reset during
+  the smoke。
+
+Proposed next coding step:
+
+1. M11-E5d-4c-1 Debug-only Optimizer-to-Exchange_sort Scalar Handoff:
+   - allowed files:
+     - `sql/parallel_query/pq_optimizer.cc`；
+     - `sql/parallel_query/exchange_sort.h`；
+     - `sql/parallel_query/exchange_sort.cc`；
+     - `sql/parallel_query/sql_parallel.h` and `sql/mysqld.cc` only if new
+       counters are required；
+     - focused MTR under `mysql-test/suite/parallel_query/`；
+     - this task document and README；
+   - allowed action:
+     - under a dedicated DBUG flag, extend the existing E5d-4a restored
+       sidecar + debug `Filesort` + stack-local `Sort_param` smoke to fill a
+       scalar handoff input；
+     - call an `Exchange_sort` helper that validates and copies only scalar
+       metadata；
+     - increment dedicated attempt/success/unsupported counters；
+   - MTR must verify no-DBUG zero counters, DBUG success, `HAS_ORDER_BY`
+     rejection, and zero `Parallel_queries_executed` /
+     `Parallel_workers_launched` / `Parallel_ranges_dispatched` for the real
+     ORDER BY negative guard。
+
+Forbidden files / actions for E5d-4c-1:
+
+- no `sql/filesort.*` or `sql/sort_param.*` edits；
+- no `Filesort::make_sortorder()` visibility change；
+- no persisted raw `ORDER *`, `Filesort *`, `Sort_param *`, `TABLE *`, or
+  handler pointer；
+- no persisted real `Sort_param` object or snapshot；
+- no commercial `MQ_record_gather` import；
+- no `Exchange_sort::init()` real-path override；
+- no worker MQ consumption from default SQL；
+- no `ParallelScanIterator::Read()` change；
+- no AccessPath, handler, InnoDB, or ORDER BY eligibility change；
+- no `filesort()` execution。
+
+Required validation for E5d-4c-1:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by_frames pq_commercial_order_by pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11e5d4c1_target \
+  --tmpdir=/tmp/pqt_m11e5d4c1_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d4c1_full --tmpdir=/tmp/pqt_m11e5d4c1_full
+```
+
+Design review request:
+
+- confirm E5d-4c-1 may touch `pq_optimizer.cc` only for DBUG-only scalar
+  extraction from the existing E5d-4a smoke；
+- confirm the scalar handoff contract is sufficient and does not weaken
+  lifetime boundaries；
+- confirm `Exchange_sort` must still copy scalar values only and cleanup during
+  the smoke；
+- confirm real `Exchange_sort::init()`, MQ consumption, `Read()`, and ORDER BY
+  eligibility remain separate follow-ups。
+
+Design Review - M11-E5d-4c:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed `pq_optimizer.cc` may be touched only for DBUG-only scalar
+  extraction inside the `HAS_ORDER_BY` reject window；
+- confirmed scalar handoff contract is small enough and does not pass or
+  persist `ORDER *`, `Filesort *`, `Sort_param *`, `TABLE *`, or handler；
+- confirmed E5d-4b-1 `Exchange_sort` state remains scalar-only；
+- confirmed forbidden scope is complete；
+- confirmed validation commands and MTR negative guards are sufficient；
+- approved entering E5d-4c-1 coding after design commit。
 
 ## Risk Areas
 
