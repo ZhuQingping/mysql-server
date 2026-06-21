@@ -610,6 +610,79 @@ Design Review - M11-E5d:
 - keep `pq_commercial_order_by` as the negative guard for `HAS_ORDER_BY`, with
   zero executed/workers/ranges deltas before any later visible ORDER BY design。
 
+### M11-E5d-0: Read-only Helper Inventory
+
+Status: read-only inventory completed，Review Agent accepted，waiting for
+commit；no source code change。
+
+Inventory commands:
+
+```bash
+rg -n "saved_join_order|saved_join_group_list|saved_optimized_vars|\
+saved_order_list_ptrs|optimized_order_flags|optimized_group_flags|\
+restore_optimized_group_order|record_optimized_group_order|restore_list\\(" \
+  sql include
+rg -n "m_ordered_index_usage|ORDERED_INDEX_ORDER_BY|range_scan\\(\\)|\
+INDEX_RANGE_SCAN|reverse" \
+  sql/sql_optimizer.h sql/sql_optimizer.cc sql/parallel_query \
+  sql/join_optimizer sql/range_optimizer
+```
+
+Current branch findings:
+
+- missing commercial saved ORDER/GROUP state:
+  - no `saved_join_order`；
+  - no `saved_join_group_list`；
+  - no `saved_optimized_vars`；
+  - no `optimized_order_flags` / `optimized_group_flags`；
+  - no local `restore_list()` / `restore_optimized_group_order()` /
+    `record_optimized_group_order()` helper layer。
+- available current-branch metadata:
+  - `JOIN::m_ordered_index_usage` and `ORDERED_INDEX_ORDER_BY` exist；
+  - `QEP_TAB::range_scan()` and `AccessPath::INDEX_RANGE_SCAN` exist；
+  - range `reverse` metadata and helper APIs exist in range/join optimizer
+    code；
+  - current PQ optimizer already has conservative secondary/range gates that
+    reject reverse scans in user-visible PQ paths。
+
+Commercial helper gap:
+
+- commercial `pq_make_filesort()` depends on saved optimized ORDER/GROUP state
+  to rebuild order lists after optimizer transformations；
+- direct port without these helpers risks using stale/null `JOIN::order.order`
+  or mutating optimizer-owned ORDER structures；
+- commercial `set_key_order()` also depends on `REF_SLICE_PQ_TMP` and saved
+  `Ref_item_array` behavior not yet isolated in current branch。
+
+Conclusion:
+
+- do not start E5d-2 leader Filesort construction yet；
+- E5d coding, if any, must start with E5d-1 compile-only fail-closed contract
+  shape that reports missing saved ORDER/GROUP helpers as unsupported；
+- full commercial helper migration requires a separate optimizer-state
+  preservation task before any `Filesort` / `Sort_param` construction smoke；
+- `HAS_ORDER_BY` remains a hard serial boundary。
+
+Review request:
+
+- confirm E5d-0 inventory is accurate；
+- decide whether E5d-1 compile-only fail-closed shape is worthwhile now, or
+  whether the next task should be a dedicated saved ORDER/GROUP helper design；
+- confirm no coding should attempt `Filesort::make_sortorder()` until helper
+  state is available or a narrower already-present `QEP_TAB::filesort` case is
+  proven safe.
+
+Inventory Review - M11-E5d-0:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- required changes before commit: none；
+- suggested next phase: prefer a dedicated saved ORDER/GROUP helper design
+  before any `Filesort::make_sortorder()` work；
+- E5d-1 fail-closed contract shape remains reasonable only if it reports
+  unsupported when saved helper state is absent；
+- do not proceed to E5d-2 Filesort construction yet。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
