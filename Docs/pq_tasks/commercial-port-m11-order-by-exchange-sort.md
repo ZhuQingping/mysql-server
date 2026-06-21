@@ -5049,6 +5049,98 @@ Design Review - M11-E5g-4:
 - non-blocking review note requested an explicit `PQWR` / `Query_result_mq`
   forbidden bullet；added before commit。
 
+### M11-E5g-4a: ORDER BY Preflight Runtime-state Detail
+
+Status: coding completed；build, targeted MTR, and full `parallel_query` suite
+passed；waiting for Code/Doc/Test Review；default ORDER BY execution remains
+disabled。
+
+Goal:
+
+- add a fail-closed preflight detail for saved/restored ORDER/GROUP runtime
+  ownership；
+- keep all ORDER BY execution readiness flags false；
+- keep `execution_disabled=true` and `BLOCKED_EXECUTION_DISABLED` for future
+  ORDER BY candidates；
+- keep ordinary ORDER BY SQL rejected by `HAS_ORDER_BY` and out of PQ runtime。
+
+Implementation:
+
+- added `PQOrderByExecutionPreflight::saved_order_group_runtime_ready`；
+- reset and preflight builder keep the new flag false；
+- added `PQ_global_stats::orderby_execution_preflight_missing_saved_order_state`
+  and `SHOW STATUS` variable
+  `Parallel_orderby_preflight_missing_saved_order`；
+- extended the DBUG-only `pq_orderby_execution_preflight_smoke` path to count
+  the missing saved ORDER/GROUP runtime-state prerequisite；
+- extended `pq_commercial_order_by` to assert the new missing prerequisite
+  grows only during the DBUG preflight smoke and does not continue growing for
+  subsequent ordinary ORDER BY statements；
+- updated `pq_stats` expected `Parallel%` count and status variable list。
+
+Scope notes:
+
+- no `HAS_ORDER_BY` relaxation；
+- no `execution_disabled=false`；
+- no readiness flag is set true；
+- no `PQ_execution_state` change；
+- no `ParallelScanIterator::Read()` / `PQTableScanIterator` default ORDER BY
+  behavior change；
+- no `Exchange_sort::read_mq_message()` change；
+- no `PQWR` / `Query_result_mq`, AccessPath, handler, InnoDB, worker launch,
+  or MQ consumption change。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4a_target --tmpdir=/tmp/pqt_m11e5g4a_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5g4a_full --tmpdir=/tmp/pqt_m11e5g4a_full
+```
+
+Review status:
+
+- Preflight Contract Explorer completed read-only review and agreed the minimum
+  5g-4a change should be diagnostic-only；
+- Explorer confirmed no new `PQOrderByExecutionPreflightStatus` is needed；
+- Explorer confirmed `pq_commercial_order_by` should carry behavior assertions
+  and `pq_stats` should only cover the new status variable inventory。
+
+Results:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed: `pq_commercial_order_by pq_stats` 3/3 including
+  `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Code/Doc/Test Review - M11-E5g-4a:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none blocking；
+- confirmed tracked file scope is limited to `pq_optimizer.h/cc`,
+  `sql_parallel.h`, `mysqld.cc`, `pq_commercial_order_by`, `pq_stats`, and
+  task docs；
+- confirmed `saved_order_group_runtime_ready` is reset false and explicitly
+  kept false in preflight build；
+- confirmed no readiness flag is set true, no `execution_disabled=false`, and
+  no new `PQOrderByExecutionPreflightStatus`；
+- confirmed the new missing-saved-order counter increments only inside the
+  DBUG-gated `pq_orderby_execution_preflight_smoke` path；
+- confirmed ordinary ORDER BY still returns `HAS_ORDER_BY`, with
+  executed/workers/ranges deltas staying zero and final saved-order missing
+  delta still 1；
+- confirmed no tracked diff touches `pq_check_query` forbidden logic,
+  `PQ_execution_state`, iterators, `Exchange_sort`, `Query_result_mq` / `PQWR`,
+  AccessPath, handler, or InnoDB paths；
+- confirmed `pq_stats` status count/list is updated and docs accurately record
+  diagnostic-only scope and validation。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

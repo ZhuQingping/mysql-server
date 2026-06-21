@@ -293,6 +293,7 @@ bool pq_build_orderby_execution_preflight(
     prerequisite flags below intentionally stay false until their real runtime
     owners are wired into the default execution path.
   */
+  preflight->saved_order_group_runtime_ready = false;
   preflight->filesort_runtime_ready = false;
   preflight->sort_param_runtime_ready = false;
   preflight->worker_order_frame_producer_ready = false;
@@ -1144,6 +1145,10 @@ static void pq_maybe_run_orderby_execution_preflight_smoke(
   } else if (preflight.blocked_by_execution_disabled()) {
     pq_global_stats.orderby_execution_preflight_blocked.fetch_add(
         1, std::memory_order_relaxed);
+    if (!preflight.saved_order_group_runtime_ready) {
+      pq_global_stats.orderby_execution_preflight_missing_saved_order_state
+          .fetch_add(1, std::memory_order_relaxed);
+    }
     if (!preflight.filesort_runtime_ready) {
       pq_global_stats.orderby_execution_preflight_missing_filesort_runtime
           .fetch_add(1, std::memory_order_relaxed);

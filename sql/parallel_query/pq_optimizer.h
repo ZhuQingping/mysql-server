@@ -319,6 +319,7 @@ struct PQOrderByExecutionPreflight {
   PQOrderByEligibilityContract eligibility;
 
   bool eligibility_candidate_disabled{false};
+  bool saved_order_group_runtime_ready{false};
   bool filesort_runtime_ready{false};
   bool sort_param_runtime_ready{false};
   bool worker_order_frame_producer_ready{false};
@@ -334,6 +335,7 @@ struct PQOrderByExecutionPreflight {
     detail = nullptr;
     eligibility.reset();
     eligibility_candidate_disabled = false;
+    saved_order_group_runtime_ready = false;
     filesort_runtime_ready = false;
     sort_param_runtime_ready = false;
     worker_order_frame_producer_ready = false;

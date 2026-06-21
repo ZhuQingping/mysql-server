@@ -91,6 +91,10 @@ SET @pq_orderby_preflight_ready_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_orderby_execution_preflight_ready');
+SET @pq_orderby_preflight_missing_saved_order_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_saved_order');
 SET @pq_orderby_preflight_missing_filesort_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -162,6 +166,10 @@ SELECT
 SELECT
   (SELECT CAST(variable_value AS UNSIGNED)
      FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_saved_order') -
+      @pq_orderby_preflight_missing_saved_order_before AS missing_saved_order_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_orderby_preflight_missing_filesort') -
       @pq_orderby_preflight_missing_filesort_before AS missing_filesort_delta,
   (SELECT CAST(variable_value AS UNSIGNED)
@@ -220,6 +228,11 @@ SELECT
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_ranges_dispatched') -
       @pq_ranges_before_order AS orderby_ranges_dispatched_delta;
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_saved_order') -
+      @pq_orderby_preflight_missing_saved_order_before AS missing_saved_order_final_delta;
 
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query=OFF;

@@ -9733,6 +9733,9 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_blocked,
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_ready,
                                 orderby_execution_preflight_ready)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_missing_saved_order_state,
+    orderby_execution_preflight_missing_saved_order_state)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
     orderby_execution_preflight_missing_filesort_runtime,
     orderby_execution_preflight_missing_filesort_runtime)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
@@ -11116,6 +11119,9 @@ SHOW_VAR status_vars[] = {
     {"Parallel_orderby_execution_preflight_ready",
      (char *)&show_pq_orderby_execution_preflight_ready, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_preflight_missing_saved_order",
+     (char *)&show_pq_orderby_execution_preflight_missing_saved_order_state,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_preflight_missing_ordered_read",
      (char *)&show_pq_orderby_execution_preflight_missing_default_ordered_read,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},

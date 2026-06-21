@@ -206,6 +206,7 @@ struct PQ_global_stats {
   std::atomic<uint64> orderby_execution_preflight_attempts{0};  ///< 5e-2
   std::atomic<uint64> orderby_execution_preflight_blocked{0};
   std::atomic<uint64> orderby_execution_preflight_ready{0};
+  std::atomic<uint64> orderby_execution_preflight_missing_saved_order_state{0};  ///< 5g-4a
   std::atomic<uint64> orderby_execution_preflight_missing_filesort_runtime{0};  ///< 5f
   std::atomic<uint64> orderby_execution_preflight_missing_sort_param_runtime{0};
   std::atomic<uint64> orderby_execution_preflight_missing_worker_frame_producer{0};
@@ -399,6 +400,8 @@ struct PQ_global_stats {
     orderby_execution_preflight_attempts.store(0, std::memory_order_relaxed);
     orderby_execution_preflight_blocked.store(0, std::memory_order_relaxed);
     orderby_execution_preflight_ready.store(0, std::memory_order_relaxed);
+    orderby_execution_preflight_missing_saved_order_state.store(
+        0, std::memory_order_relaxed);
     orderby_execution_preflight_missing_filesort_runtime.store(
         0, std::memory_order_relaxed);
     orderby_execution_preflight_missing_sort_param_runtime.store(
