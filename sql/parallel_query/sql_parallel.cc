@@ -903,6 +903,89 @@ bool Gather_operator::run_worker_open_table_smoke(THD *leader_thd,
   return failed;
 }
 
+bool Gather_operator::run_worker_attach_contract_smoke(
+    THD *leader_thd, TABLE *leader_table, PQ_Leader_context *leader_ctx) {
+  pq_global_stats.worker_attach_smoke_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (leader_thd == nullptr || leader_table == nullptr || leader_ctx == nullptr ||
+      m_dop != 1) {
+    return true;
+  }
+
+  bool initialized_here = false;
+  bool cleanup_reached = false;
+  bool failed = true;
+  auto cleanup = [&]() {
+    if (cleanup_reached) return;
+    cleanup_reached = true;
+
+    if (auto *worker = get_worker(0)) {
+      if (worker->m_worker_ctx != nullptr &&
+          worker->m_open_ctx.worker_handler != nullptr) {
+        worker->m_open_ctx.worker_handler->pq_worker_scan_end(
+            worker->m_worker_ctx);
+        worker->m_worker_ctx = nullptr;
+      }
+      if (worker->m_open_ctx.worker_table != nullptr) {
+        pq_close_worker_table(&worker->m_open_ctx, failed);
+      }
+      if (worker->m_worker_thd != nullptr) {
+        pq_destroy_worker_thd(worker);
+        leader_thd->store_globals();
+      }
+    }
+
+    if (initialized_here) destroy();
+    pq_global_stats.worker_attach_smoke_cleanup_calls.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  if (!m_initialized) {
+    if (init()) {
+      cleanup();
+      return true;
+    }
+    initialized_here = true;
+  }
+
+  if (configure_worker_open_contexts(leader_table, leader_ctx, m_dop)) {
+    cleanup();
+    return true;
+  }
+
+  auto *worker = get_worker(0);
+  if (worker == nullptr) {
+    cleanup();
+    return true;
+  }
+
+  if (pq_create_worker_thd(worker, this) == nullptr) {
+    leader_thd->store_globals();
+    cleanup();
+    return true;
+  }
+
+  if (pq_open_worker_table(&worker->m_open_ctx)) {
+    cleanup();
+    return true;
+  }
+
+  if (worker->m_open_ctx.worker_handler == nullptr ||
+      worker->m_open_ctx.worker_handler->pq_worker_scan_init(
+          &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
+      worker->m_worker_ctx == nullptr) {
+    cleanup();
+    return true;
+  }
+
+  failed = false;
+  cleanup();
+  pq_global_stats.worker_attach_smoke_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
+
 bool Gather_operator::run_worker_callback_conversion_smoke(
     THD *leader_thd, TABLE *leader_table) {
   if (leader_thd == nullptr || leader_table == nullptr || m_dop != 1) {

@@ -732,6 +732,50 @@ Docs-Design Review:
 - taskbook now asserts both old worker open and worker handler smoke counters；
 - re-review returned `ACCEPT`。
 
+Implementation:
+
+- added `Gather_operator::run_worker_attach_contract_smoke()` as an isolated
+  D4a helper；
+- helper creates a worker THD, opens an independent worker TABLE/handler,
+  calls `pq_worker_scan_init()` and `pq_worker_scan_end()`, closes the worker
+  TABLE, destroys the worker THD, and destroys local gather state；
+- added a DBUG-only `pq_worker_attach_contract_smoke` hook in
+  `PQTableScanIterator::Init()` after the table/blob guard and before handler
+  PROBE accounting；
+- the hook creates a leader `EXECUTE` context, runs the helper, ends the leader
+  context, and returns existing serial fallback；
+- added status counters:
+  `Parallel_worker_attach_smoke_attempts`,
+  `Parallel_worker_attach_smoke_success`,
+  `Parallel_worker_attach_smoke_cleanup_calls`；
+- added focused MTR `pq_worker_attach_contract_smoke` and updated `pq_stats`。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `--record pq_worker_attach_contract_smoke` executed successfully but MTR
+  failed to copy the new result file with errno 1, so the result file was
+  synchronized from the generated test log and then verified by normal MTR；
+- targeted MTR passed:
+  `pq_worker_attach_contract_smoke` and `pq_stats`, 3/3 including
+  `shutdown_report`；
+- full `parallel_query` suite passed, 82/82。
+
+Code-Docs-Test Review:
+
+- Review Agent returned `ACCEPT`；
+- confirmed the D4a hook is after the table/blob guard and before handler
+  PROBE accounting；
+- confirmed the hook performs its own `EXECUTE` leader context setup, helper
+  call, leader end, and serial fallback return without falling through；
+- confirmed the helper only covers worker THD, worker TABLE open,
+  `pq_worker_scan_init/end`, close/destroy cleanup；
+- confirmed no worker thread, MQ/Exchange row path, clone/JOIN execution, or
+  forbidden file was touched；
+- confirmed cleanup uses a single guarded path and MTR covers attach counters,
+  old open/handler smoke counters, PROBE delta, and real execution counters。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；

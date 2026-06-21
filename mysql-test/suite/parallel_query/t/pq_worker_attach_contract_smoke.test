@@ -1,0 +1,97 @@
+# Verify the guarded worker attach contract smoke remains isolated.
+
+--source include/have_innodb_16k.inc
+--source include/have_debug.inc
+
+CREATE TABLE pq_worker_attach_t (
+  id INT PRIMARY KEY,
+  v INT
+) ENGINE=InnoDB;
+INSERT INTO pq_worker_attach_t VALUES (1,10),(2,20),(3,30);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+
+SET @attach_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_attempts');
+SET @attach_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_success');
+SET @attach_cleanup_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_cleanup_calls');
+SET @queries_executed_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_queries_executed');
+SET @workers_launched_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_workers_launched');
+SET @rows_scanned_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_rows_scanned');
+SET @worker_result_workers_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_workers');
+SET @worker_open_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_open_smoke_runs');
+SET @worker_handler_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_handler_smoke_runs');
+SET @probe_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_probe_attempts');
+
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_worker_attach_contract_smoke";
+SELECT id, v FROM pq_worker_attach_t WHERE v >= 0;
+SET SESSION debug=@old_debug;
+
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_attempts') -
+  @attach_attempts_before) >= 1 AS attach_attempt_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_success') -
+  @attach_success_before) >= 1 AS attach_success_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_cleanup_calls') -
+  @attach_cleanup_before) >= 1 AS attach_cleanup_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_queries_executed') -
+  @queries_executed_before) AS queries_executed_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
+  @workers_launched_before) AS workers_launched_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_rows_scanned') -
+  @rows_scanned_before) AS rows_scanned_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_workers') -
+  @worker_result_workers_before) AS worker_result_workers_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_open_smoke_runs') -
+  @worker_open_before) AS worker_open_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_handler_smoke_runs') -
+  @worker_handler_before) AS worker_handler_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_probe_attempts') -
+  @probe_attempts_before) AS probe_attempts_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE pq_worker_attach_t;

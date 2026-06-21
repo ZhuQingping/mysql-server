@@ -115,6 +115,31 @@ bool PQTableScanIterator::Init() {
     return init_serial_fallback();
   });
 
+  DBUG_EXECUTE_IF("pq_worker_attach_contract_smoke", {
+    uint execute_dop = 0;
+    PQ_Leader_context *execute_ctx = nullptr;
+    int execute_error = table()->file->pq_leader_scan_init(
+        thd(), &execute_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+        false);
+    if (execute_error == 0) {
+      Gather_operator attach_smoke(1);
+      const bool attach_failed =
+          attach_smoke.run_worker_attach_contract_smoke(thd(), table(),
+                                                        execute_ctx);
+      table()->file->pq_leader_scan_end(execute_ctx);
+      if (attach_failed) {
+        PrintError(HA_ERR_INTERNAL_ERROR);
+        return true;
+      }
+      return init_serial_fallback();
+    }
+    if (execute_error != HA_ERR_UNSUPPORTED) {
+      PrintError(execute_error);
+      return true;
+    }
+    return init_serial_fallback();
+  });
+
   // V2-2 bridge smoke: prove the handler can create and release a SQL-visible
   // leader context without starting workers or reading rows. Unsupported
   // engines/states still use the V2-1 serial fallback path; real handler

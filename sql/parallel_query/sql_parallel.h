@@ -225,6 +225,9 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_producer_smoke_runs{0};  ///< Producer loop smoke runs
   std::atomic<uint64> worker_open_smoke_runs{0};  ///< Worker THD/TABLE smoke runs
   std::atomic<uint64> worker_handler_smoke_runs{0};  ///< Handler init/end smoke runs
+  std::atomic<uint64> worker_attach_smoke_attempts{0};  ///< Attach smoke runs
+  std::atomic<uint64> worker_attach_smoke_success{0};  ///< Attach smoke ok
+  std::atomic<uint64> worker_attach_smoke_cleanup_calls{0};  ///< Attach cleanup
   std::atomic<uint64> worker_result_smoke_rows{0};  ///< Worker result frames
   std::atomic<uint64> worker_result_smoke_finishes{0};  ///< FINISH frames
   std::atomic<uint64> worker_result_smoke_errors{0};  ///< ERROR frames
@@ -312,6 +315,9 @@ struct PQ_global_stats {
     worker_producer_smoke_runs.store(0, std::memory_order_relaxed);
     worker_open_smoke_runs.store(0, std::memory_order_relaxed);
     worker_handler_smoke_runs.store(0, std::memory_order_relaxed);
+    worker_attach_smoke_attempts.store(0, std::memory_order_relaxed);
+    worker_attach_smoke_success.store(0, std::memory_order_relaxed);
+    worker_attach_smoke_cleanup_calls.store(0, std::memory_order_relaxed);
     worker_result_smoke_rows.store(0, std::memory_order_relaxed);
     worker_result_smoke_finishes.store(0, std::memory_order_relaxed);
     worker_result_smoke_errors.store(0, std::memory_order_relaxed);
@@ -861,6 +867,20 @@ class Gather_operator {
     @retval true   Smoke pass failed
   */
   bool run_worker_open_table_smoke(THD *leader_thd, TABLE *leader_table);
+
+  /**
+    Run an M11-D4a worker attach contract smoke.
+
+    This debug-only helper opens an independent worker TABLE, initializes and
+    ends a typed worker scan context, closes the worker TABLE, and destroys the
+    worker THD. It does not start a worker thread, produce rows, use
+    Query_result_mq, or materialize data into the leader result.
+
+    @retval false  Attach smoke completed
+    @retval true   Attach smoke failed
+  */
+  bool run_worker_attach_contract_smoke(THD *leader_thd, TABLE *leader_table,
+                                        PQ_Leader_context *leader_ctx);
 
   /**
     Run a V2-8G EXECUTE read-view callback conversion smoke pass.

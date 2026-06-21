@@ -9891,6 +9891,24 @@ static int show_pq_worker_handler_smoke_runs(THD *, SHOW_VAR *var, char *buf) {
   return 0;
 }
 
+#define DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(NAME, FIELD)                  \
+  static int show_pq_##NAME(THD *, SHOW_VAR *var, char *buf) {          \
+    var->type = SHOW_LONGLONG;                                          \
+    var->value = buf;                                                   \
+    *((longlong *)buf) =                                                \
+        (longlong)(pq_global_stats.FIELD.load(std::memory_order_relaxed)); \
+    return 0;                                                           \
+  }
+
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_attach_smoke_attempts,
+                                  worker_attach_smoke_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_attach_smoke_success,
+                                  worker_attach_smoke_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_attach_smoke_cleanup_calls,
+                                  worker_attach_smoke_cleanup_calls)
+
+#undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
+
 static int show_pq_worker_result_smoke_rows(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10742,6 +10760,15 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_visibility_unsupported",
      (char *)&show_pq_secondary_visibility_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_attach_smoke_attempts",
+     (char *)&show_pq_worker_attach_smoke_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_attach_smoke_cleanup_calls",
+     (char *)&show_pq_worker_attach_smoke_cleanup_calls, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_attach_smoke_success",
+     (char *)&show_pq_worker_attach_smoke_success, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_handler_smoke_runs",
      (char *)&show_pq_worker_handler_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
