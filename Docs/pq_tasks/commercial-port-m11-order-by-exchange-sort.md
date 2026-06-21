@@ -7103,6 +7103,115 @@ Code/Doc/Test Review - M11-E5o:
 - confirmed no AccessPath, executor, iterator, `Gather_operator`,
   `Query_result_mq`, handler/InnoDB, sysvar, or public counter changes。
 
+### M11-E5p: Worker ORDER BY PQOF Default Producer Owner Contract
+
+Status: Code/Doc/Test Review accepted；ready to commit。
+
+Goal:
+
+- promote the worker `PQOF` producer shape from a DBUG-only adapter skeleton to
+  a default-path-owned API / owner contract；
+- keep all callers DBUG / controlled-smoke only；
+- prove producer lifecycle for ROW, FINISH, ERROR, DETACH, after-finish reject,
+  local order reject, and idempotent cleanup；
+- keep `PQOF` separate from `PQWR` / `Query_result_mq`；
+- keep preflight `worker_order_frame_producer_ready` false and keep visible
+  ORDER BY PQ disabled。
+
+Design Explorer - M11-E5p:
+
+- verdict: coding allowed, but only fail-closed contract coding；
+- priority blocker is worker ORDER BY `PQOF` producer ownership；
+- default heap reader, rowid tie-break, kill/detach/error policy, and visible
+  gate must wait for this owner boundary；
+- producer evidence may grow via existing smoke counters, but readiness flags
+  must remain false。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden:
+
+- `HAS_ORDER_BY` rejection changes；
+- preflight readiness true flags；
+- AccessPath, handler, InnoDB, worker launch, iterator `Read()`,
+  `Query_result_mq`, default `Exchange_sort::read_mq_message()`, sysvar, or
+  public counter changes；
+- merging `PQOF` into `PQWR`；
+- DESC / nullable / expression ORDER BY or visible ORDER BY support。
+
+Implementation:
+
+- added `PQ_orderby_worker_frame_producer_owner` to the public exchange_sort
+  contract header；
+- replaced the anonymous producer adapter shape with the owner contract；
+- kept existing DBUG smoke entry points and counters；
+- extended producer owner lifecycle helpers to reject detached producers；
+- added detach and cleanup helpers；
+- extended worker frame producer smoke to validate MQ DETACHED observation,
+  post-detach emit rejection, cleanup flag, null handle, and idempotent cleanup；
+- did not alter frame format, preflight readiness, optimizer eligibility, or
+  default execution paths。
+
+Validation:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`；
+- full `parallel_query` suite。
+
+Completion Report - M11-E5p:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added `PQ_orderby_worker_frame_producer_owner` to `exchange_sort.h`；
+  - replaced the anonymous `.cc` producer adapter shape with the owner contract；
+  - kept existing DBUG smoke entry points and counters；
+  - added owner detach and cleanup helpers；
+  - extended ROW / FINISH / ERROR helpers to reject detached owners；
+  - extended worker frame producer smoke to validate MQ DETACHED observation,
+    post-detach emit rejection, cleanup flag, null handle, and idempotent
+    cleanup；
+  - did not alter `PQOF` frame format, `PQWR`, preflight readiness, optimizer
+    eligibility, or default execution paths。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`
+    plus `shutdown_report`；
+  - full `parallel_query` suite passed: 89/89。
+- residual risk:
+  - this is still a controlled producer owner contract；
+  - real worker row production, real sort-key generation, default worker launch,
+    default heap reader, rowid tie-break, wait/kill/detach policy, and visible
+    ORDER BY eligibility remain blocked。
+
+Code/Doc/Test Review - M11-E5p:
+
+- Review Agent verdict: `ACCEPT`；
+- no blocking findings；
+- confirmed `PQ_orderby_worker_frame_producer_owner` is now the shared owner
+  shape in `exchange_sort.h`；
+- confirmed ROW / FINISH / ERROR helpers reject null, finished, and detached
+  owners, and decreasing key rejection remains；
+- confirmed DETACH / CLEANUP smoke covers `MQ_DETACHED`, post-detach reject,
+  null handle, cleanup flag, and idempotent cleanup；
+- confirmed `PQOF` frame format is unchanged and remains separate from `PQWR` /
+  `Query_result_mq`；
+- confirmed `read_mq_message()`, `HAS_ORDER_BY`, and preflight readiness remain
+  fail-closed；
+- confirmed no public readiness counter, sysvar, optimizer, iterator, handler,
+  InnoDB, or default execution path changes。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

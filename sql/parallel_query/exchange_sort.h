@@ -134,6 +134,16 @@ struct PQ_orderby_decoded_frame {
   uint32 sort_key_len{0};
 };
 
+struct PQ_orderby_worker_frame_producer_owner {
+  MQueue_handle *handle{nullptr};
+  uint32 worker_id{0};
+  int64 last_sort_key{0};
+  bool has_last_sort_key{false};
+  bool finished{false};
+  bool detached{false};
+  bool cleanup_seen{false};
+};
+
 struct PQ_orderby_sort_state_shape {
   uint32 workers{0};
   uint32 sort_order_length{0};

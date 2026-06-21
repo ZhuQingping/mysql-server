@@ -46,19 +46,6 @@ struct PQ_orderby_smoke_merge_ctx {
   bool descending{false};
 };
 
-/*
-  Single controlled owner contract for future worker-local PQOF production.
-  Legacy producer smoke coverage below uses this shape too; it is not a second
-  runtime producer owner.
-*/
-struct PQ_orderby_worker_producer_adapter_shape {
-  MQueue_handle *handle{nullptr};
-  uint32 worker_id{0};
-  int64 last_sort_key{0};
-  bool has_last_sort_key{false};
-  bool finished{false};
-};
-
 bool pq_orderby_smoke_compare_records(const PQ_orderby_smoke_record &left,
                                       const PQ_orderby_smoke_record &right,
                                       bool descending) {
@@ -243,13 +230,13 @@ bool pq_send_orderby_frame(MQueue_handle *handle, PQ_orderby_frame_type type,
   return handle->send(message.data(), total_len) != MQ_SUCCESS;
 }
 
-bool pq_orderby_worker_producer_adapter_emit_row(
-    PQ_orderby_worker_producer_adapter_shape *producer,
+bool pq_orderby_worker_frame_producer_owner_emit_row(
+    PQ_orderby_worker_frame_producer_owner *producer,
     const void *record_image, uint32 record_image_len, const void *row_id,
     uint32 row_id_len, int64 sort_key) {
   if (producer == nullptr || producer->handle == nullptr ||
-      producer->finished || record_image == nullptr || record_image_len == 0 ||
-      row_id == nullptr || row_id_len == 0) {
+      producer->finished || producer->detached || record_image == nullptr ||
+      record_image_len == 0 || row_id == nullptr || row_id_len == 0) {
     return true;
   }
   if (producer->has_last_sort_key && sort_key < producer->last_sort_key) {
@@ -267,10 +254,10 @@ bool pq_orderby_worker_producer_adapter_emit_row(
   return false;
 }
 
-bool pq_orderby_worker_producer_adapter_finish(
-    PQ_orderby_worker_producer_adapter_shape *producer) {
+bool pq_orderby_worker_frame_producer_owner_finish(
+    PQ_orderby_worker_frame_producer_owner *producer) {
   if (producer == nullptr || producer->handle == nullptr ||
-      producer->finished) {
+      producer->finished || producer->detached) {
     return true;
   }
   if (pq_send_orderby_frame(producer->handle, PQ_orderby_frame_type::FINISH,
@@ -282,10 +269,10 @@ bool pq_orderby_worker_producer_adapter_finish(
   return false;
 }
 
-bool pq_orderby_worker_producer_adapter_error(
-    PQ_orderby_worker_producer_adapter_shape *producer) {
+bool pq_orderby_worker_frame_producer_owner_error(
+    PQ_orderby_worker_frame_producer_owner *producer) {
   if (producer == nullptr || producer->handle == nullptr ||
-      producer->finished) {
+      producer->finished || producer->detached) {
     return true;
   }
   if (pq_send_orderby_frame(producer->handle, PQ_orderby_frame_type::ERROR,
@@ -295,6 +282,27 @@ bool pq_orderby_worker_producer_adapter_error(
   }
   producer->finished = true;
   return false;
+}
+
+bool pq_orderby_worker_frame_producer_owner_detach(
+    PQ_orderby_worker_frame_producer_owner *producer) {
+  if (producer == nullptr || producer->handle == nullptr ||
+      producer->detached) {
+    return true;
+  }
+  producer->handle->close_producer();
+  producer->finished = true;
+  producer->detached = true;
+  return false;
+}
+
+void pq_orderby_worker_frame_producer_owner_cleanup(
+    PQ_orderby_worker_frame_producer_owner *producer) {
+  if (producer == nullptr) return;
+  producer->handle = nullptr;
+  producer->finished = true;
+  producer->detached = true;
+  producer->cleanup_seen = true;
 }
 
 bool pq_orderby_cached_merge(PQ_orderby_record_batch *batches, uint32 nbatches,
@@ -1757,9 +1765,9 @@ bool Exchange_sort::run_orderby_worker_frame_producer_smoke(
   MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
   if (handle.init()) return true;
 
-  PQ_orderby_worker_producer_adapter_shape worker0{&handle, 0};
-  PQ_orderby_worker_producer_adapter_shape worker1{&handle, 1};
-  PQ_orderby_worker_producer_adapter_shape worker2{&handle, 2};
+  PQ_orderby_worker_frame_producer_owner worker0{&handle, 0};
+  PQ_orderby_worker_frame_producer_owner worker1{&handle, 1};
+  PQ_orderby_worker_frame_producer_owner worker2{&handle, 2};
 
   const int64 record10 = 100;
   const int64 record30 = 300;
@@ -1769,21 +1777,21 @@ bool Exchange_sort::run_orderby_worker_frame_producer_smoke(
   const uint32 rowid20 = 20;
 
   bool failed =
-      pq_orderby_worker_producer_adapter_emit_row(
+      pq_orderby_worker_frame_producer_owner_emit_row(
           &worker0, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
           1) ||
-      pq_orderby_worker_producer_adapter_emit_row(
+      pq_orderby_worker_frame_producer_owner_emit_row(
           &worker0, &record30, sizeof(record30), &rowid30, sizeof(rowid30),
           3) ||
-      pq_orderby_worker_producer_adapter_finish(&worker0) ||
-      !pq_orderby_worker_producer_adapter_emit_row(
+      pq_orderby_worker_frame_producer_owner_finish(&worker0) ||
+      !pq_orderby_worker_frame_producer_owner_emit_row(
           &worker0, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
           4) ||
-      pq_orderby_worker_producer_adapter_emit_row(
+      pq_orderby_worker_frame_producer_owner_emit_row(
           &worker1, &record20, sizeof(record20), &rowid20, sizeof(rowid20),
           2) ||
-      pq_orderby_worker_producer_adapter_finish(&worker1) ||
-      pq_orderby_worker_producer_adapter_error(&worker2);
+      pq_orderby_worker_frame_producer_owner_finish(&worker1) ||
+      pq_orderby_worker_frame_producer_owner_error(&worker2);
 
   PQ_mq_event negative_sender_event;
   PQ_mq_event negative_receiver_event;
@@ -1792,12 +1800,12 @@ bool Exchange_sort::run_orderby_worker_frame_producer_smoke(
                         negative_ring, sizeof(negative_ring));
   MQueue_handle negative_handle(&negative_queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
   if (!failed && negative_handle.init()) failed = true;
-  PQ_orderby_worker_producer_adapter_shape negative_worker{&negative_handle, 9};
+  PQ_orderby_worker_frame_producer_owner negative_worker{&negative_handle, 9};
   if (!failed) {
-    failed = pq_orderby_worker_producer_adapter_emit_row(
+    failed = pq_orderby_worker_frame_producer_owner_emit_row(
                  &negative_worker, &record30, sizeof(record30), &rowid30,
                  sizeof(rowid30), 30) ||
-             !pq_orderby_worker_producer_adapter_emit_row(
+             !pq_orderby_worker_frame_producer_owner_emit_row(
                  &negative_worker, &record20, sizeof(record20), &rowid20,
                  sizeof(rowid20), 20);
   }
@@ -1859,6 +1867,37 @@ bool Exchange_sort::run_orderby_worker_frame_producer_smoke(
     }
   }
 
+  PQ_mq_event detach_sender_event;
+  PQ_mq_event detach_receiver_event;
+  char detach_ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue detach_queue(&detach_sender_event, &detach_receiver_event,
+                      detach_ring, sizeof(detach_ring));
+  MQueue_handle detach_handle(&detach_queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (!failed && detach_handle.init()) failed = true;
+  PQ_orderby_worker_frame_producer_owner detach_worker{&detach_handle, 7};
+  if (!failed) {
+    void *raw_data = nullptr;
+    uint32 raw_len = 0;
+    failed = pq_orderby_worker_frame_producer_owner_detach(&detach_worker) ||
+             detach_handle.receive(&raw_data, &raw_len) != MQ_DETACHED ||
+             !pq_orderby_worker_frame_producer_owner_emit_row(
+                 &detach_worker, &record10, sizeof(record10), &rowid10,
+                 sizeof(rowid10), 5);
+  }
+  if (!failed) {
+    pq_orderby_worker_frame_producer_owner_cleanup(&detach_worker);
+    failed = !detach_worker.cleanup_seen || detach_worker.handle != nullptr ||
+             !pq_orderby_worker_frame_producer_owner_emit_row(
+                 &detach_worker, &record10, sizeof(record10), &rowid10,
+                 sizeof(rowid10), 6);
+    pq_orderby_worker_frame_producer_owner_cleanup(&detach_worker);
+    failed = failed || !detach_worker.cleanup_seen ||
+             detach_worker.handle != nullptr;
+  }
+  detach_handle.cleanup();
+  negative_handle.cleanup();
+  handle.cleanup();
+
   return failed || *rows_read != 3 || *finishes_read != 2 ||
          *errors_read != 1;
 }
@@ -1884,9 +1923,9 @@ bool Exchange_sort::run_orderby_worker_producer_adapter_skeleton_smoke(
   MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
   if (handle.init()) return true;
 
-  PQ_orderby_worker_producer_adapter_shape worker0{&handle, 0};
-  PQ_orderby_worker_producer_adapter_shape worker1{&handle, 1};
-  PQ_orderby_worker_producer_adapter_shape worker2{&handle, 2};
+  PQ_orderby_worker_frame_producer_owner worker0{&handle, 0};
+  PQ_orderby_worker_frame_producer_owner worker1{&handle, 1};
+  PQ_orderby_worker_frame_producer_owner worker2{&handle, 2};
 
   const int64 record10 = 100;
   const int64 record30 = 300;
@@ -1896,16 +1935,16 @@ bool Exchange_sort::run_orderby_worker_producer_adapter_skeleton_smoke(
   const uint32 rowid20 = 20;
 
   bool failed =
-      pq_orderby_worker_producer_adapter_emit_row(
+      pq_orderby_worker_frame_producer_owner_emit_row(
           &worker0, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
           1) ||
-      pq_orderby_worker_producer_adapter_emit_row(
+      pq_orderby_worker_frame_producer_owner_emit_row(
           &worker0, &record30, sizeof(record30), &rowid30, sizeof(rowid30),
           3) ||
-      pq_orderby_worker_producer_adapter_finish(&worker0);
+      pq_orderby_worker_frame_producer_owner_finish(&worker0);
 
   if (!failed &&
-      pq_orderby_worker_producer_adapter_emit_row(
+      pq_orderby_worker_frame_producer_owner_emit_row(
           &worker0, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
           4)) {
     ++(*after_finish_rejects);
@@ -1914,11 +1953,11 @@ bool Exchange_sort::run_orderby_worker_producer_adapter_skeleton_smoke(
   }
 
   if (!failed) {
-    failed = pq_orderby_worker_producer_adapter_emit_row(
+    failed = pq_orderby_worker_frame_producer_owner_emit_row(
         &worker1, &record20, sizeof(record20), &rowid20, sizeof(rowid20), 2);
   }
   if (!failed &&
-      pq_orderby_worker_producer_adapter_emit_row(
+      pq_orderby_worker_frame_producer_owner_emit_row(
           &worker1, &record10, sizeof(record10), &rowid10, sizeof(rowid10),
           1)) {
     ++(*order_rejects);
@@ -1926,8 +1965,8 @@ bool Exchange_sort::run_orderby_worker_producer_adapter_skeleton_smoke(
     failed = true;
   }
   if (!failed) {
-    failed = pq_orderby_worker_producer_adapter_finish(&worker1) ||
-             pq_orderby_worker_producer_adapter_error(&worker2);
+    failed = pq_orderby_worker_frame_producer_owner_finish(&worker1) ||
+             pq_orderby_worker_frame_producer_owner_error(&worker2);
   }
 
   const PQ_orderby_frame_type expected_types[] = {
