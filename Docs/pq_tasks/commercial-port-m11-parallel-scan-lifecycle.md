@@ -1193,6 +1193,55 @@ Docs-Design Review:
   `pq_leader_row_stream_error_smoke`；
 - confirmed the failing SELECT uses `--error ER_GET_ERRNO`。
 
+Implementation:
+
+- added `Gather_operator::prepare_leader_row_stream_error_smoke()`；
+- helper initializes/configures the existing DOP=1 gather as needed, enqueues
+  one `Exchange_nosort::enqueue_error_smoke(0)` token, and leaves it for
+  `PQTableScanIterator::Read()`；
+- added DBUG-only `pq_leader_row_stream_error_smoke` hook in
+  `PQTableScanIterator::Init()` after the table/blob guard and before handler
+  PROBE accounting；
+- the hook creates a leader `EXECUTE` context, prepares the ERROR stream,
+  increments selected, calls `mark_pq_started()`, and returns `false`；
+- added DBUG-only ERROR and cleanup accounting around the existing
+  `Read()` ERROR cleanup path；
+- added status counters:
+  `Parallel_leader_row_stream_error_smoke_attempts`,
+  `Parallel_leader_row_stream_error_smoke_selected`,
+  `Parallel_leader_row_stream_error_smoke_errors`,
+  `Parallel_leader_row_stream_error_smoke_cleanup`；
+- added focused MTR `pq_leader_row_stream_error_smoke` and updated `pq_stats`。
+
+Validation result:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `--record pq_leader_row_stream_error_smoke` executed successfully but MTR
+  failed to copy the new result file with errno 1, so the result file was
+  synchronized from the generated test log；
+- targeted MTR passed:
+  `pq_leader_row_stream_error_smoke` and `pq_stats`, 3/3 including
+  `shutdown_report`；
+- full `parallel_query` suite passed, 84/84。
+
+Code-Docs-Test Review:
+
+- Review Agent returned `ACCEPT`；
+- confirmed the D4c hook is DBUG-only, after the table/blob guard and before
+  handler PROBE accounting；
+- confirmed the selected path enters DOP=1 `EXECUTE`, prepares one ERROR token,
+  increments selected, calls `mark_pq_started()`, and returns to executor
+  `Read()` with no post-commit serial fallback；
+- confirmed `prepare_leader_row_stream_error_smoke()` uses existing
+  `Exchange_nosort::enqueue_error_smoke(0)` and does not modify `exchange.*`,
+  drain rows, start worker threads, use `Query_result_mq`, or run cloned JOIN；
+- confirmed `Read()` ERROR accounting is scoped to the
+  `pq_leader_row_stream_error_smoke` DBUG gate around the existing ERROR
+  cleanup path, not generic cleanup/destructor cleanup；
+- confirmed status variables, reset, `pq_stats`, and focused MTR coverage；
+- non-blocking note: new MTR test/result files must be explicitly staged。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；

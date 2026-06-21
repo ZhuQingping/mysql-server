@@ -228,6 +228,10 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_attach_smoke_attempts{0};  ///< Attach smoke runs
   std::atomic<uint64> worker_attach_smoke_success{0};  ///< Attach smoke ok
   std::atomic<uint64> worker_attach_smoke_cleanup_calls{0};  ///< Attach cleanup
+  std::atomic<uint64> leader_row_stream_error_smoke_attempts{0};  ///< Error smoke
+  std::atomic<uint64> leader_row_stream_error_smoke_selected{0};  ///< Error selected
+  std::atomic<uint64> leader_row_stream_error_smoke_errors{0};  ///< Error seen
+  std::atomic<uint64> leader_row_stream_error_smoke_cleanup{0};  ///< Error cleanup
   std::atomic<uint64> leader_row_stream_smoke_attempts{0};  ///< Read smoke
   std::atomic<uint64> leader_row_stream_smoke_selected{0};  ///< Read selected
   std::atomic<uint64> leader_row_stream_smoke_rows{0};  ///< Read smoke rows
@@ -321,6 +325,12 @@ struct PQ_global_stats {
     worker_attach_smoke_attempts.store(0, std::memory_order_relaxed);
     worker_attach_smoke_success.store(0, std::memory_order_relaxed);
     worker_attach_smoke_cleanup_calls.store(0, std::memory_order_relaxed);
+    leader_row_stream_error_smoke_attempts.store(0,
+                                                 std::memory_order_relaxed);
+    leader_row_stream_error_smoke_selected.store(0,
+                                                 std::memory_order_relaxed);
+    leader_row_stream_error_smoke_errors.store(0, std::memory_order_relaxed);
+    leader_row_stream_error_smoke_cleanup.store(0, std::memory_order_relaxed);
     leader_row_stream_smoke_attempts.store(0, std::memory_order_relaxed);
     leader_row_stream_smoke_selected.store(0, std::memory_order_relaxed);
     leader_row_stream_smoke_rows.store(0, std::memory_order_relaxed);
@@ -1044,6 +1054,20 @@ class Gather_operator {
                                        PQ_Leader_context *leader_ctx,
                                        uint32 row_limit,
                                        uint32 *rows_enqueued);
+
+  /**
+    Prepare an M11-D4c leader row stream ERROR smoke.
+
+    This debug-only helper enqueues one ERROR token into this gather's Exchange.
+    It leaves the Exchange populated for PQTableScanIterator::Read() and does
+    not drain the ERROR token itself.
+
+    @retval false  ERROR stream prepared
+    @retval true   Failure
+  */
+  bool prepare_leader_row_stream_error_smoke(THD *leader_thd,
+                                             TABLE *leader_table,
+                                             PQ_Leader_context *leader_ctx);
 
   /**
     Start a worker-thread callback producer into this gather's Exchange.

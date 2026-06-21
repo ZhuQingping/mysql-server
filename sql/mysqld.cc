@@ -9918,6 +9918,16 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_attach_smoke_cleanup_calls,
     return 0;                                                           \
   }
 
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(
+    leader_row_stream_error_smoke_attempts,
+    leader_row_stream_error_smoke_attempts)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(
+    leader_row_stream_error_smoke_selected,
+    leader_row_stream_error_smoke_selected)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(leader_row_stream_error_smoke_errors,
+                                      leader_row_stream_error_smoke_errors)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(leader_row_stream_error_smoke_cleanup,
+                                      leader_row_stream_error_smoke_cleanup)
 DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(leader_row_stream_smoke_attempts,
                                       leader_row_stream_smoke_attempts)
 DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(leader_row_stream_smoke_selected,
@@ -10710,6 +10720,18 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_probe_init_unsupported, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_probe_thread_budget_unsupported",
      (char *)&show_pq_probe_thread_budget_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_leader_row_stream_error_smoke_attempts",
+     (char *)&show_pq_leader_row_stream_error_smoke_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_leader_row_stream_error_smoke_cleanup",
+     (char *)&show_pq_leader_row_stream_error_smoke_cleanup, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_leader_row_stream_error_smoke_errors",
+     (char *)&show_pq_leader_row_stream_error_smoke_errors, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_leader_row_stream_error_smoke_selected",
+     (char *)&show_pq_leader_row_stream_error_smoke_selected, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_leader_row_stream_smoke_attempts",
      (char *)&show_pq_leader_row_stream_smoke_attempts, SHOW_FUNC,

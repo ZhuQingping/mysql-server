@@ -1854,6 +1854,23 @@ bool Gather_operator::prepare_leader_row_stream_smoke(
                                               row_limit, rows_enqueued);
 }
 
+bool Gather_operator::prepare_leader_row_stream_error_smoke(
+    THD *leader_thd, TABLE *leader_table, PQ_Leader_context *leader_ctx) {
+  if (leader_thd == nullptr || leader_table == nullptr ||
+      leader_ctx == nullptr || m_dop != 1) {
+    return true;
+  }
+
+  if (!m_initialized && init()) return true;
+  if (configure_worker_open_contexts(leader_table, leader_ctx, m_dop)) {
+    return true;
+  }
+
+  Exchange_nosort *exchange = get_exchange();
+  if (exchange == nullptr) return true;
+  return exchange->enqueue_error_smoke(0);
+}
+
 bool Gather_operator::run_worker_callback_threaded_producer(
     THD *leader_thd, TABLE *leader_table, uint32 max_rows) {
   if (leader_thd == nullptr || leader_table == nullptr || m_dop == 0 ||
