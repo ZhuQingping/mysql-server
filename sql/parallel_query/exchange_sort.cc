@@ -26,6 +26,9 @@
 #include <cstring>
 #include <utility>
 
+#include "sql/field.h"
+#include "sql/table.h"
+
 namespace {
 
 static_assert(sizeof(PQ_orderby_frame_header) == 28,
@@ -326,6 +329,14 @@ bool pq_load_orderby_frame_batch(MQueue_handle *handle, uint32 worker_id,
     }
     return true;
   }
+}
+
+bool pq_orderby_materialization_table_supported(TABLE *table) {
+  return table != nullptr && table->s != nullptr && table->record[0] != nullptr &&
+         table->s->reclength > 0 && table->s->fields > 0 &&
+         table->field != nullptr && table->field[0] != nullptr &&
+         (table->field[0]->type() == MYSQL_TYPE_LONG ||
+          table->field[0]->type() == MYSQL_TYPE_LONGLONG);
 }
 
 }  // namespace
@@ -783,4 +794,100 @@ bool Exchange_sort::run_orderby_frame_merge_edge_smoke(uint32 *rows_read,
   if (initialized_here) cleanup();
   return failed || *rows_read != 1 || *finishes_read != 2 ||
          *errors_read != 1;
+}
+
+bool Exchange_sort::run_orderby_frame_materialization_smoke(
+    TABLE *leader_table, uint32 *rows_read, uint32 *unsupported) {
+  if (rows_read == nullptr || unsupported == nullptr) return true;
+  *rows_read = 0;
+  *unsupported = 0;
+
+  if (!pq_orderby_materialization_table_supported(leader_table)) {
+    *unsupported = 1;
+    return false;
+  }
+
+  bool initialized_here = false;
+  if (m_mq_handles == nullptr) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+  if (m_nqueues == 0) {
+    if (initialized_here) cleanup();
+    return true;
+  }
+
+  Field *first_field = leader_table->field[0];
+  const uint field_index = first_field->field_index();
+  const bool had_read_bit =
+      leader_table->read_set == nullptr ||
+      bitmap_is_set(leader_table->read_set, field_index);
+  const bool had_write_bit =
+      leader_table->write_set == nullptr ||
+      bitmap_is_set(leader_table->write_set, field_index);
+  if (leader_table->read_set != nullptr && !had_read_bit) {
+    bitmap_set_bit(leader_table->read_set, field_index);
+  }
+  if (leader_table->write_set != nullptr && !had_write_bit) {
+    bitmap_set_bit(leader_table->write_set, field_index);
+  }
+
+  std::vector<uchar> original_record(
+      leader_table->record[0],
+      leader_table->record[0] + leader_table->s->reclength);
+
+  constexpr longlong expected_value = 777;
+  bool failed = first_field->store(expected_value, false) != TYPE_OK;
+  std::vector<uchar> record_image;
+  if (!failed) {
+    record_image.assign(leader_table->record[0],
+                        leader_table->record[0] + leader_table->s->reclength);
+  }
+
+  if (!original_record.empty()) {
+    memcpy(leader_table->record[0], original_record.data(),
+           original_record.size());
+  }
+
+  const uint32 rowid = 70;
+  const int64 sortkey = 7;
+  if (!failed) {
+    failed = pq_send_orderby_frame(get_mq_handle(0), PQ_orderby_frame_type::ROW,
+                                   record_image.data(),
+                                   static_cast<uint32>(record_image.size()),
+                                   &rowid, sizeof(rowid), &sortkey,
+                                   sizeof(sortkey));
+  }
+
+  void *raw_data = nullptr;
+  uint32 raw_len = 0;
+  PQ_orderby_decoded_frame decoded;
+  if (!failed) {
+    failed = get_mq_handle(0)->receive(&raw_data, &raw_len) != MQ_SUCCESS ||
+             pq_decode_orderby_frame(raw_data, raw_len, &decoded) ||
+             decoded.type != PQ_orderby_frame_type::ROW ||
+             decoded.record_image_len != leader_table->s->reclength ||
+             decoded.record_image == nullptr;
+  }
+
+  if (!failed) {
+    memcpy(leader_table->record[0], decoded.record_image,
+           decoded.record_image_len);
+    failed = first_field->val_int() != expected_value;
+  }
+
+  if (!original_record.empty()) {
+    memcpy(leader_table->record[0], original_record.data(),
+           original_record.size());
+  }
+  if (initialized_here) cleanup();
+  if (leader_table->read_set != nullptr && !had_read_bit) {
+    bitmap_clear_bit(leader_table->read_set, field_index);
+  }
+  if (leader_table->write_set != nullptr && !had_write_bit) {
+    bitmap_clear_bit(leader_table->write_set, field_index);
+  }
+
+  if (!failed) *rows_read = 1;
+  return failed;
 }

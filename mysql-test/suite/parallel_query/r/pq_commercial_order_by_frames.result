@@ -27,6 +27,12 @@ WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_edge_smoke_finishes');
 SET @frame_merge_edge_errors_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_edge_smoke_errors');
+SET @frame_materialized_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_materialized_smoke_rows');
+SET @frame_materialized_unsupported_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_materialized_smoke_unsupported');
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
 SET SESSION parallel_default_dop=2;
@@ -82,6 +88,18 @@ SELECT (
 WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_merge_edge_smoke_errors') -
 @frame_merge_edge_errors_before) >= 1 AS orderby_frame_merge_edge_errors_delta;
 orderby_frame_merge_edge_errors_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_materialized_smoke_rows') -
+@frame_materialized_rows_before) >= 1 AS orderby_frame_materialized_rows_delta;
+orderby_frame_materialized_rows_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_materialized_smoke_unsupported') -
+@frame_materialized_unsupported_before) = 0 AS orderby_frame_materialized_unsupported_delta;
+orderby_frame_materialized_unsupported_delta
 1
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;

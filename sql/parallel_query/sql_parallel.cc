@@ -834,8 +834,8 @@ bool Gather_operator::run_exchange_partial_group_smoke(
   return false;
 }
 
-bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd
-                                              [[maybe_unused]]) {
+bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
+                                              TABLE *leader_table) {
   Exchange_sort sort_exchange(3, PQ_MQ_DEFAULT_RING_SIZE);
 
   uint32 rows_read = 0;
@@ -867,6 +867,13 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd
           &frame_merge_edge_errors_read)) {
     return true;
   }
+  uint32 frame_materialized_rows_read = 0;
+  uint32 frame_materialized_unsupported = 0;
+  if (sort_exchange.run_orderby_frame_materialization_smoke(
+          leader_table, &frame_materialized_rows_read,
+          &frame_materialized_unsupported)) {
+    return true;
+  }
 
   pq_global_stats.exchange_sort_smoke_runs.fetch_add(
       1, std::memory_order_relaxed);
@@ -888,6 +895,10 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd
       frame_merge_edge_finishes_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_edge_smoke_errors.fetch_add(
       frame_merge_edge_errors_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_frame_materialized_smoke_rows.fetch_add(
+      frame_materialized_rows_read, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_frame_materialized_smoke_unsupported.fetch_add(
+      frame_materialized_unsupported, std::memory_order_relaxed);
   return false;
 }
 

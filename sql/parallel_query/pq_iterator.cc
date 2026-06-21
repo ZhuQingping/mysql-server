@@ -308,7 +308,7 @@ bool PQTableScanIterator::Init() {
       return true;
     }
     Gather_operator orderby_smoke(3);
-    if (orderby_smoke.run_exchange_sort_smoke(thd())) {
+    if (orderby_smoke.run_exchange_sort_smoke(thd(), table())) {
       cleanup_pq_resources(true);
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;

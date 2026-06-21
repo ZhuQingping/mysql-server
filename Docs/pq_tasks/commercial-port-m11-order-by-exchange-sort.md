@@ -2,9 +2,9 @@
 
 ## 状态
 
-Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1 completed and committed；
-M11-E5b-2 merge-path edge smoke coding completed，Review Agent accepted，
-waiting for commit。
+Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2 completed and committed；
+M11-E5b-3 debug-only row materialization smoke coding completed，waiting for
+review/commit。
 
 ## 背景
 
@@ -214,20 +214,133 @@ Review:
 
 - Code/Doc/Test Review Agent verdict: `ACCEPT`；
 - no blocking findings；
-- confirmed FINISH-only empty worker is accepted for controlled merge；
-- confirmed ERROR frame remains fail-closed and observable；
-- residual risks stay out of scope for this step: real worker-thread,
-  InnoDB, optimizer, `table->record[0]` materialization, abort propagation, and
-  full Filesort-compatible comparison semantics。
-
-Review:
-
-- Code/Doc/Test Review Agent verdict: `ACCEPT`；
-- no blocking findings；
 - residual risks moved to M11-E5b-2 follow-up:
   - FINISH-only empty worker queue must be accepted before real merge path；
   - raw sort-key/rowid byte-vector compare remains controlled-smoke only；
   - ERROR frame path is fail-closed and still needs explicit observable smoke。
+
+### M11-E5b-3: Debug-only ORDER BY Frame Row Materialization Smoke
+
+Status: coding completed，waiting for review/commit。
+
+Goal:
+
+- verify that a decoded ORDER BY frame record image can be copied into the
+  leader `TABLE::record[0]` through an `Exchange_sort`-owned helper；
+- keep this as a debug-only smoke invoked from existing PQ smoke setup；
+- do not enable user-visible ORDER BY PQ；
+- do not import commercial `Filesort` / `Sort_param` comparison logic yet。
+
+Commercial reference:
+
+- commercial `Exchange_sort::store_mq_record()` deep-copies worker MQ data into
+  per-worker cached records；
+- commercial `Exchange_sort::read_mq_record()` copies selected cached record
+  into `table->record[0]` when `m_sort_param` is present, or decodes MQ data
+  into `record[0]` otherwise；
+- current branch already has independent ORDER BY frame decode and controlled
+  K-way merge, but no `table->record[0]` materialization smoke for
+  `Exchange_sort`。
+
+Proposed coding boundary:
+
+- change `Gather_operator::run_exchange_sort_smoke()` to accept an optional
+  `TABLE *leader_table` only for smoke validation；
+- update the only caller in `ParallelIterator::Init()` to pass `table()`；
+- add an `Exchange_sort` helper that:
+  - receives a controlled ROW frame；
+  - decodes `record_image`；
+  - checks `record_image_len == table->s->reclength`；
+  - copies the image into `table->record[0]`；
+  - verifies at least the first integer field can be read back when the table
+    shape is compatible；
+- add counters and MTR assertions for materialized rows；
+- keep failures fail-closed inside the smoke path。
+
+Hard stop:
+
+- no optimizer eligibility changes；
+- no `HAS_ORDER_BY` gate relaxation；
+- no real worker thread or InnoDB path；
+- no `Filesort::make_sortkey()` / `Sort_param` integration；
+- no changes to default `ParallelScanIterator::Read()` behavior；
+- if table shape is not a simple integer first field with a valid record buffer,
+  the smoke must skip or fail closed without opening user-visible ORDER BY。
+
+Required validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5b3_target --tmpdir=/tmp/pqt_m11e5b3_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5b3_full --tmpdir=/tmp/pqt_m11e5b3_full
+```
+
+Completion Report - M11-E5b-3 Coding:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `sql/parallel_query/sql_parallel.h`；
+  - `sql/parallel_query/sql_parallel.cc`；
+  - `sql/parallel_query/pq_iterator.cc`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_commercial_order_by_frames.test`；
+  - `mysql-test/suite/parallel_query/r/pq_commercial_order_by_frames.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - `Gather_operator::run_exchange_sort_smoke()` now accepts optional
+    smoke-only `TABLE *leader_table` and the existing caller passes `table()`；
+  - added `Exchange_sort::run_orderby_frame_materialization_smoke()`；
+  - helper validates simple leader table shape, prepares a controlled record
+    image, sends it through the ORDER BY frame contract, decodes it, copies the
+    image back into `table->record[0]`, and reads the first integer field back
+    through `Field::val_int()`；
+  - helper temporarily sets first-field read/write bitmap bits and restores
+    them before returning, fixing a debug assertion seen during the first
+    targeted MTR run；
+  - incompatible table shapes are counted as unsupported instead of failing the
+    broader smoke path；
+  - added counters:
+    `Parallel_exchange_sort_frame_materialized_smoke_rows` and
+    `Parallel_exchange_sort_frame_materialized_smoke_unsupported`。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - first targeted MTR exposed `Field_long::store()` write-set assertion；
+  - after bitmap restore fix, targeted MTR passed:
+    `pq_commercial_order_by_frames pq_commercial_order_by pq_stats` 4/4；
+  - full `parallel_query` suite passed: 88/88。
+- scope notes:
+  - no optimizer, executor, AccessPath, InnoDB, worker-thread, `Filesort`, or
+    `Sort_param` integration；
+  - user-visible ORDER BY PQ remains closed by existing `HAS_ORDER_BY`
+    boundary；
+  - this is only a smoke-level record-image materialization step, not real
+    `Exchange_sort::read_mq_record()` migration。
+
+Review:
+
+- Code/Doc/Test Review Agent first pass verdict: `REVISE`；
+- no blocking code findings；
+- required doc cleanup:
+  - remove stale review text copied from earlier E5b steps；
+  - update older proposed split numbering so E5b-2 is merge-edge smoke and
+    E5b-3 is row materialization smoke。
+- Code/Doc/Test Review Agent second pass verdict: `ACCEPT`；
+- findings: none；
+- confirmed E5b-3 remains smoke-only and does not enable real worker thread,
+  InnoDB path, `Filesort` / `Sort_param`, or user-visible ORDER BY PQ；
+- residual risks: materialization coverage is intentionally narrow and only
+  covers simple leader table shape with integer first field and valid
+  `record[0]`。
 
 ### M11-E5b-2: Merge-path Empty Worker / ERROR Edge Smoke
 
@@ -274,6 +387,16 @@ Result:
 - `mysqld` build passed；
 - targeted MTR passed，4/4；
 - full `parallel_query` suite passed，88/88。
+
+Review:
+
+- Code/Doc/Test Review Agent verdict: `ACCEPT`；
+- no blocking findings；
+- confirmed FINISH-only empty worker is accepted for controlled merge；
+- confirmed ERROR frame remains fail-closed and observable；
+- residual risks stay out of scope for this step: real worker-thread,
+  InnoDB, optimizer, `table->record[0]` materialization, abort propagation, and
+  full Filesort-compatible comparison semantics。
 
 ## Risk Areas
 
@@ -1165,7 +1288,8 @@ Proposed next split after E5a review:
 
 - M11-E5b-0: ORDER BY frame contract helper, compile-only + unit smoke；
 - M11-E5b-1: `Exchange_sort` controlled frame K-way merge smoke；
-- M11-E5b-2: debug-only visible row materialization smoke into
+- M11-E5b-2: merge-path empty-worker FINISH and ERROR fail-closed smoke；
+- M11-E5b-3: debug-only visible row materialization smoke into
   `table->record[0]`；
 - M11-E5c: user-visible ORDER BY path design review after visible-row smoke
   passes。

@@ -261,6 +261,8 @@ struct PQ_global_stats {
   std::atomic<uint64> exchange_sort_frame_merge_edge_smoke_rows{0};  ///< Rows
   std::atomic<uint64> exchange_sort_frame_merge_edge_smoke_finishes{0};  ///< EOF
   std::atomic<uint64> exchange_sort_frame_merge_edge_smoke_errors{0};  ///< ERROR
+  std::atomic<uint64> exchange_sort_frame_materialized_smoke_rows{0};  ///< Rows
+  std::atomic<uint64> exchange_sort_frame_materialized_smoke_unsupported{0};
   std::atomic<uint64> groupby_dop1_factory_attempts{0};  ///< GROUP BY hook
   std::atomic<uint64> groupby_dop1_factory_selected{0};  ///< PQ wrapper selected
   std::atomic<uint64> groupby_dop1_native_delegate_executed{0};  ///< Native delegate
@@ -382,6 +384,10 @@ struct PQ_global_stats {
     exchange_sort_frame_merge_edge_smoke_finishes.store(
         0, std::memory_order_relaxed);
     exchange_sort_frame_merge_edge_smoke_errors.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_frame_materialized_smoke_rows.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_frame_materialized_smoke_unsupported.store(
         0, std::memory_order_relaxed);
     groupby_dop1_factory_attempts.store(0, std::memory_order_relaxed);
     groupby_dop1_factory_selected.store(0, std::memory_order_relaxed);
@@ -904,7 +910,7 @@ class Gather_operator {
     @retval false  Smoke pass completed
     @retval true   Smoke pass failed
   */
-  bool run_exchange_sort_smoke(THD *leader_thd);
+  bool run_exchange_sort_smoke(THD *leader_thd, TABLE *leader_table = nullptr);
 
   /**
     Run a V2-8C worker THD/TABLE lifecycle smoke pass.

@@ -29,6 +29,8 @@
 #include "sql/parallel_query/binary_heap.h"
 #include "sql/parallel_query/exchange.h"
 
+struct TABLE;
+
 struct PQ_orderby_smoke_record {
   int64 key{0};
   uint32 worker_id{0};
@@ -115,6 +117,9 @@ class Exchange_sort final : public Exchange {
   bool run_orderby_frame_merge_edge_smoke(uint32 *rows_read,
                                           uint32 *finishes_read,
                                           uint32 *errors_read);
+  bool run_orderby_frame_materialization_smoke(TABLE *leader_table,
+                                               uint32 *rows_read,
+                                               uint32 *unsupported);
 
   bool init_order_gather_shape(uint32 workers, bool stable_output,
                                bool index_sort);
