@@ -1,0 +1,187 @@
+# Verify debug ParallelScanIterator order-gather selection stays no-row.
+
+--source include/have_innodb_16k.inc
+--source include/have_debug.inc
+
+CREATE TABLE pq_parallel_scan_order_gather_t (
+  id INT NOT NULL,
+  v INT NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO pq_parallel_scan_order_gather_t VALUES (1,10),(2,20);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+
+SET @order_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_scan_iterator_order_gather_attempts');
+SET @order_selected_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_scan_iterator_order_gather_selected');
+SET @order_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_scan_iterator_order_gather_smoke_rows');
+SET @row_value_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_scan_iterator_row_value_attempts');
+SET @row_value_selected_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_scan_iterator_row_value_selected');
+SET @row_value_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_scan_iterator_row_value_rows');
+SET @exchange_sort_runs_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_smoke_runs');
+SET @exchange_sort_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_smoke_rows');
+SET @queries_executed_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_queries_executed');
+SET @queries_fallback_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_queries_fallback');
+SET @rows_scanned_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_rows_scanned');
+SET @workers_launched_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_workers_launched');
+SET @ranges_dispatched_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched');
+SET @probe_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_probe_attempts');
+SET @worker_open_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_open_smoke_runs');
+SET @worker_handler_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_handler_smoke_runs');
+SET @worker_attach_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_attempts');
+SET @clone_probe_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_clone_probe_attempts');
+SET @clone_preflight_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_clone_preflight_attempts');
+SET @worker_result_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_rows');
+SET @worker_result_finishes_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_finishes');
+SET @worker_result_errors_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_errors');
+SET @worker_result_workers_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_workers');
+
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_parallel_scan_iterator_order_gather_smoke";
+SELECT id, v FROM pq_parallel_scan_order_gather_t;
+SET SESSION debug=@old_debug;
+
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_scan_iterator_order_gather_attempts') -
+  @order_attempts_before) AS order_attempt_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_scan_iterator_order_gather_selected') -
+  @order_selected_before) AS order_selected_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_scan_iterator_order_gather_smoke_rows') -
+  @order_rows_before) AS order_smoke_rows_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_scan_iterator_row_value_attempts') -
+  @row_value_attempts_before) AS row_value_attempt_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_scan_iterator_row_value_selected') -
+  @row_value_selected_before) AS row_value_selected_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_scan_iterator_row_value_rows') -
+  @row_value_rows_before) AS row_value_rows_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_smoke_runs') -
+  @exchange_sort_runs_before) AS exchange_sort_runs_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_smoke_rows') -
+  @exchange_sort_rows_before) AS exchange_sort_rows_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_queries_executed') -
+  @queries_executed_before) AS queries_executed_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_queries_fallback') -
+  @queries_fallback_before) AS queries_fallback_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_rows_scanned') -
+  @rows_scanned_before) AS rows_scanned_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
+  @workers_launched_before) AS workers_launched_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched') -
+  @ranges_dispatched_before) AS ranges_dispatched_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_probe_attempts') -
+  @probe_attempts_before) AS probe_attempts_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_open_smoke_runs') -
+  @worker_open_before) AS worker_open_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_handler_smoke_runs') -
+  @worker_handler_before) AS worker_handler_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_attempts') -
+  @worker_attach_before) AS worker_attach_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_clone_probe_attempts') -
+  @clone_probe_before) AS clone_probe_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_clone_preflight_attempts') -
+  @clone_preflight_before) AS clone_preflight_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_rows') -
+  @worker_result_rows_before) AS worker_result_rows_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_finishes') -
+  @worker_result_finishes_before) AS worker_result_finishes_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_errors') -
+  @worker_result_errors_before) AS worker_result_errors_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_workers') -
+  @worker_result_workers_before) AS worker_result_workers_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE pq_parallel_scan_order_gather_t;

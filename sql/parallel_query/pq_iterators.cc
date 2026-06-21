@@ -37,6 +37,7 @@
 #include "sql/iterators/ref_row_iterators.h"
 #include "sql/iterators/timing_iterator.h"
 #include "sql/mysqld.h"
+#include "sql/parallel_query/exchange_sort.h"
 #include "sql/parallel_query/pq_handler.h"
 #include "sql/parallel_query/sql_parallel.h"
 #include "sql/range_optimizer/index_range_scan.h"
@@ -1054,6 +1055,27 @@ void ParallelScanIterator::cleanup_lifecycle(bool init_failed) {
 bool ParallelScanIterator::Init() {
   m_lifecycle_state = Lifecycle_state::INITIALIZING;
 
+  DBUG_EXECUTE_IF("pq_parallel_scan_iterator_order_gather_smoke", {
+    pq_global_stats.parallel_scan_iterator_order_gather_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+
+    Exchange_sort sort_exchange(3, PQ_MQ_DEFAULT_RING_SIZE);
+    uint32 smoke_rows = 0;
+    if (sort_exchange.run_cached_record_adapter_smoke(&smoke_rows) ||
+        smoke_rows == 0) {
+      cleanup_lifecycle(true);
+      return true;
+    }
+
+    pq_global_stats.parallel_scan_iterator_order_gather_selected.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.parallel_scan_iterator_order_gather_smoke_rows.fetch_add(
+        smoke_rows, std::memory_order_relaxed);
+    m_no_fallback_commit = true;
+    m_lifecycle_state = Lifecycle_state::ORDER_GATHER_VALIDATED;
+    return false;
+  });
+
   DBUG_EXECUTE_IF("pq_parallel_scan_iterator_row_value_smoke", {
     pq_global_stats.parallel_scan_iterator_row_value_attempts.fetch_add(
         1, std::memory_order_relaxed);
@@ -1096,6 +1118,12 @@ bool ParallelScanIterator::Init() {
 }
 
 int ParallelScanIterator::Read() {
+  if (m_lifecycle_state == Lifecycle_state::ORDER_GATHER_VALIDATED) {
+    cleanup_lifecycle(false);
+    table()->set_no_row();
+    return -1;
+  }
+
   if (m_lifecycle_state != Lifecycle_state::RUNNING || m_gather == nullptr ||
       m_gather->get_exchange() == nullptr) {
     PrintError(HA_ERR_INTERNAL_ERROR);

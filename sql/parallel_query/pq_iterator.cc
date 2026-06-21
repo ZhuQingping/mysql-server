@@ -219,6 +219,19 @@ bool PQTableScanIterator::Init() {
     return false;
   });
 
+  DBUG_EXECUTE_IF("pq_parallel_scan_iterator_order_gather_smoke", {
+    m_parallel_scan_delegate = NewIterator<ParallelScanIterator>(
+        thd(), m_mem_root, nullptr, table(), m_expected_rows, m_examined_rows,
+        m_join, nullptr, false, nullptr);
+    if (m_parallel_scan_delegate == nullptr ||
+        m_parallel_scan_delegate->Init()) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+    mark_pq_started();
+    return false;
+  });
+
   // V2-2 bridge smoke: prove the handler can create and release a SQL-visible
   // leader context without starting workers or reading rows. Unsupported
   // engines/states still use the V2-1 serial fallback path; real handler
@@ -674,6 +687,12 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTableScanIterator(
     pq_set_execution_state(thd, PQ_execution_state::ELIGIBLE);
     return nullptr;
   }
+
+  DBUG_EXECUTE_IF("pq_parallel_scan_iterator_order_gather_smoke", {
+    return NewIterator<PQTableScanIterator>(thd, mem_root, mem_root, table,
+                                            join, expected_rows,
+                                            examined_rows);
+  });
 
   if (pq_clone_activation_probe(thd, join)) return nullptr;
 

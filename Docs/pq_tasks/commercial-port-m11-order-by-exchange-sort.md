@@ -2,8 +2,8 @@
 
 ## 状态
 
-Status: design-only taskbook created；Explorer findings incorporated；waiting
-for Docs-Design Review。
+Status: M11-E0/E1/E2/E3 completed and committed；next step is M11-E4
+user-visible ORDER BY gate design。
 
 ## 背景
 
@@ -738,3 +738,62 @@ Docs-Design Review:
   required negative assertions；
 - requested revisions were applied；
 - final re-review returned `ACCEPT`。
+
+Completion Report - M11-E3 Coding:
+
+- changed files:
+  - `sql/parallel_query/pq_iterator.cc`；
+  - `sql/parallel_query/pq_iterators.h`；
+  - `sql/parallel_query/pq_iterators.cc`；
+  - `sql/parallel_query/sql_parallel.h`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_parallel_scan_iterator_order_gather_smoke.test`；
+  - `mysql-test/suite/parallel_query/r/pq_parallel_scan_iterator_order_gather_smoke.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added dedicated E3 status counters:
+    `Parallel_scan_iterator_order_gather_attempts`,
+    `Parallel_scan_iterator_order_gather_selected`,
+    `Parallel_scan_iterator_order_gather_smoke_rows`；
+  - added a DBUG-only factory bridge for
+    `pq_parallel_scan_iterator_order_gather_smoke` before clone activation
+    probe so E3 can assert clone/preflight zero-delta；
+  - `PQTableScanIterator::Init()` creates a delegated
+    `ParallelScanIterator` only under the E3 DBUG flag；
+  - `ParallelScanIterator::Init()` runs controlled
+    `Exchange_sort::run_cached_record_adapter_smoke()` and records E3 counters；
+  - `ParallelScanIterator::Read()` returns EOF/no-row for the E3 validated
+    state and does not mark `Parallel_queries_executed`。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_parallel_scan_iterator_order_gather_smoke pq_commercial_order_by pq_stats`
+    4/4 including `shutdown_report`；
+  - full `parallel_query` suite passed: 87/87。
+- risk notes:
+  - E3 remains debug-only and does not expose user-visible ORDER BY PQ；
+  - real ORDER BY remains rejected by `HAS_ORDER_BY`；
+  - E3 intentionally bypasses clone activation probe only under its dedicated
+    DBUG flag, because the task requires clone/preflight zero-delta for this
+    isolated order-gather smoke；
+  - visible ordered rows and real MQ/worker order frames remain deferred to
+    later reviewed tasks。
+
+Code/Doc/Test Review - M11-E3:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed E3 stays behind `pq_parallel_scan_iterator_order_gather_smoke`；
+- confirmed factory bypass of `pq_clone_activation_probe()` is limited to the
+  dedicated DBUG flag and occurs after normal PQ eligibility, InnoDB,
+  non-worker, and non-EXPLAIN guards；
+- confirmed `ORDER_GATHER_VALIDATED` is consumed as EOF/no-row and does not
+  mark `Parallel_queries_executed`；
+- confirmed focused MTR proves E3 counters grow while D6/E2, executed/fallback,
+  worker, range, probe, handler smoke, clone, and worker-result counters stay
+  flat；
+- residual risk is intentional: debug-only no-row bridge smoke, not visible
+  ordered row materialization or real worker/MQ order-frame behavior。

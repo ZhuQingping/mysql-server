@@ -62,6 +62,7 @@ class ParallelScanIterator final : public TableRowIterator {
     CONSTRUCTED,
     INITIALIZING,
     RUNNING,
+    ORDER_GATHER_VALIDATED,
     FAIL_CLOSED,
     CLEANED_UP,
   };
