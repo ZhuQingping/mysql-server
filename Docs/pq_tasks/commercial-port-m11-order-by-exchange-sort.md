@@ -584,3 +584,157 @@ Code-Docs-Test Review:
   modified；
 - residual risk: real filesort key encoding, collation, NULL handling, and live
   worker/MQ row frames remain deferred beyond E2。
+
+## M11-E3: ParallelScanIterator Order Gather Debug Path
+
+Status: design taskbook completed；Docs-Design Review accepted；ready to code。
+
+Goal:
+
+- design a debug-only bridge from the existing D6
+  `ParallelScanIterator` row-value path to an ORDER gather smoke path；
+- prove the commercial iterator can select an order-gather branch without
+  enabling real ORDER BY SQL or optimizer eligibility changes；
+- keep E3 DOP=1 or controlled in-process smoke only；
+- do not start worker threads, clone JOIN, construct real `Filesort`, consume
+  real MQ, or modify handler/InnoDB。
+
+Scope:
+
+- design only in this taskbook；
+- E3 coding must be a separate commit after review；
+- E3 must remain behind a dedicated DBUG flag, for example
+  `pq_parallel_scan_iterator_order_gather_smoke`；
+- E3 may reuse `Exchange_sort::run_cached_record_adapter_smoke()` but must not
+  treat it as real SQL ORDER BY execution；
+- E3 must not remove or weaken `HAS_ORDER_BY` rejection for real ORDER BY SQL。
+- E3 must not return visible ordered SQL rows from `Exchange_sort`；visible
+  ordered result correctness is deferred to a later reviewed task。
+
+Allowed files for future coding:
+
+- `sql/parallel_query/pq_iterators.h`；
+- `sql/parallel_query/pq_iterators.cc`；
+- `sql/parallel_query/pq_iterator.cc` only for a DBUG-only bridge hook similar
+  to D6；
+- `sql/parallel_query/exchange_sort.h` / `.cc` only for helper accessors needed
+  by the smoke；
+- `sql/parallel_query/sql_parallel.h` / `.cc` only for helper/counter wiring；
+- `sql/mysqld.cc` and `pq_stats.result` only if E3-specific counters are added；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- this taskbook and progress docs。
+
+Forbidden files:
+
+- `sql/parallel_query/pq_optimizer.*`；
+- `sql/sql_optimizer.*`；
+- `sql/sql_executor.*`；
+- `sql/sql_select.*`；
+- `sql/join_optimizer/access_path.*`；
+- `storage/innobase/**`；
+- `sql/handler.*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`；
+- default user-visible ORDER BY PQ eligibility changes。
+
+Required design direction:
+
+1. add a DBUG-only E3 path distinct from D6 row-value smoke；
+2. path must be selected through the same executor-driven bridge pattern:
+   `PQTableScanIterator::Init()` creates a delegated `ParallelScanIterator`,
+   and normal executor `Read()` calls delegate `Read()`；
+3. `ParallelScanIterator::Init()` E3 branch must prove order-gather selection
+   by invoking controlled `Exchange_sort` smoke or a dedicated order helper；
+4. E3 must not return SQL rows from `Exchange_sort` yet；the safe coding path is:
+   `PQTableScanIterator::Init()` creates the delegated `ParallelScanIterator`,
+   `ParallelScanIterator::Init()` runs the controlled order-gather smoke and
+   records E3-specific counters, then `Read()` returns EOF/no-row for that
+   debug statement；
+5. visible ordered rows are explicitly deferred to a later reviewed task with
+   real row materialization semantics；
+6. real ORDER BY SQL must remain optimizer-rejected with `HAS_ORDER_BY`；
+7. failure after any debug commit point must fail closed, not silently fallback
+   as ORDER BY PQ execution；
+8. E3-specific counters are mandatory and must not reuse D6 row-value counters
+   or M8/E2 exchange sort counters as the proof。
+
+Required E3 counters:
+
+- `Parallel_scan_iterator_order_gather_attempts`；
+- `Parallel_scan_iterator_order_gather_selected`；
+- `Parallel_scan_iterator_order_gather_smoke_rows` or
+  `Parallel_scan_iterator_order_gather_validated`。
+
+Required negative assertions:
+
+- `pq_commercial_order_by` remains unchanged semantically:
+  `Not parallel HAS_ORDER_BY`；
+- real ORDER BY SQL has zero delta for `Parallel_queries_executed`,
+  `Parallel_workers_launched`, and `Parallel_ranges_dispatched`；
+- D6 `Parallel_scan_iterator_row_value_*` counters must not grow during an E3
+  order-gather statement；
+- E3 order-gather statement must show E3 attempts/selected delta = 1 and
+  smoke-row/validated delta matching the controlled helper；
+- E2 `Parallel_exchange_sort_smoke_*` counters may grow only as subordinate
+  helper evidence and must never be the sole proof of E3；
+- the E3 order-gather statement itself must assert zero delta for worker,
+  range, handler/InnoDB, clone, and resolver counters；
+- no worker-result, range, handler/InnoDB, clone, or resolver counters grow from
+  real ORDER BY SQL。
+
+Validation for future coding:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by pq_stats <new_e3_test> \
+  --parallel=1 --vardir=/tmp/pqv_m11e3_target --tmpdir=/tmp/pqt_m11e3_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e3_full --tmpdir=/tmp/pqt_m11e3_full
+```
+
+Agent Task Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Design Agent。
+主控 Agent 是 Codex。
+当前任务是 M11-E3 ParallelScanIterator Order Gather Debug Path。
+
+请只做设计，不改源码。
+
+请阅读：
+- Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md；
+- Docs/pq_tasks/commercial-port-m11-parallel-scan-lifecycle.md；
+- sql/parallel_query/pq_iterator.cc；
+- sql/parallel_query/pq_iterators.cc；
+- sql/parallel_query/exchange_sort.*；
+- sql/parallel_query/sql_parallel.cc；
+- 商用仓 `pq_iterators.cc` 中 `pq_make_filesort()` /
+  `pq_init_record_gather()` / `ParallelScanIterator::Read()`。
+
+输出：
+1. E3 debug bridge 是否应该返回可见 SQL rows；当前设计要求不返回；
+2. 是否需要 E3-specific counters；
+3. 允许/禁止文件是否合理；
+4. MTR 应如何证明 E3 path 而不是 D6/E2；
+5. 是否可以进入 E3 编码。
+```
+
+Docs-Design Review:
+
+- first review returned `REVISE`；
+- required E3-specific counters to be mandatory；
+- required E3 not to return visible ordered SQL rows；
+- required MTR assertions for E3 attempts/selected, D6 row-value counters = 0,
+  and worker/range/handler/InnoDB/clone/resolver counters = 0；
+- required E2 exchange sort counters to be subordinate evidence only；
+- first re-review returned `REVISE` because worker/range/handler/InnoDB/clone/
+  resolver zero-delta assertions were only recorded in review notes, not in the
+  required negative assertions；
+- requested revisions were applied；
+- final re-review returned `ACCEPT`。
