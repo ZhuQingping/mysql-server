@@ -1242,6 +1242,217 @@ Code-Docs-Test Review:
 - confirmed status variables, reset, `pq_stats`, and focused MTR coverage；
 - non-blocking note: new MTR test/result files must be explicitly staged。
 
+### M11-D5: Row-value Correctness Before Positive Path Taskbook
+
+Status: design-only taskbook created；waiting for Docs-Design Review。
+
+Decision:
+
+- D4a-D4c are sufficient lifecycle/commit-point guards, but they are not enough
+  to move to M11-E/F or default `ParallelScanIterator` positive execution；
+- D5 must first close the D4b row-value correctness gap；
+- D5 must stay debug-only until a visible SELECT can assert actual returned
+  values, not just row count and counters。
+
+Explorer findings:
+
+- Next-step Explorer recommended continuing M11-D5 instead of M11-E/F because
+  commercial `ParallelScanIterator` is still a fail-closed skeleton in this
+  branch, while D4b/D4c live in `PQTableScanIterator` debug hooks；
+- Row-Value Correctness Explorer confirmed D4b currently copies raw
+  `TABLE::record[0]` images through Exchange, while the commercial reference
+  uses field-level `Field_raw_data` / null bitmap / varlen encoding and leader
+  conversion；
+- the most likely reason for placeholder values in D4b is incomplete worker
+  handler scan/template initialization before `pq_worker_scan_callback_produce()`
+  fills the worker record buffer；
+- the first low-risk suspect is that `run_worker_callback_limited_producer()`
+  does not wrap callback production with the same handler scan init/end pattern
+  used by threaded producer tasks, especially `ha_rnd_init(true)` /
+  `ha_rnd_end()`；
+- final commercial-equivalent row serialization still needs later design；
+  D5 only proves a narrow fixed-row debug path before any positive path
+  migration。
+
+Goal:
+
+- add a debug-only row-value correctness smoke for the D4b-style leader row
+  stream path；
+- make a visible SELECT return deterministic integer values through
+  `PQTableScanIterator::Read()`；
+- keep default execution unchanged；
+- do not enable user-visible/default `PARALLEL_SCAN`；
+- do not introduce worker thread, cloned JOIN, `Query_result_mq`, ORDER/GROUP,
+  ref/range/ICP, or handler/InnoDB interface changes。
+
+Scope:
+
+- DOP fixed at 1；
+- single InnoDB table；
+- fixed-width integer columns only；
+- no BLOB, varlen, generated, hidden, virtual, nullable, partitioned, reverse,
+  ORDER BY real merge, GROUP BY, secondary/ref/range/ICP；
+- row limit fixed and small, suggested first two clustered rows；
+- MTR must not hide SELECT output；
+- D5 may adjust the D4b bounded producer setup only enough to make worker
+  record images valid for this narrow shape。
+
+Allowed files:
+
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/parallel_query/sql_parallel.cc`；
+- `sql/parallel_query/pq_iterator.cc` only for DBUG-only hook/counter
+  accounting if needed；
+- `sql/mysqld.cc` only if new SHOW STATUS counters are required；
+- one focused MTR test/result under `mysql-test/suite/parallel_query/`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result` if status variable count
+  changes；
+- this taskbook；
+- `Docs/pq_tasks/README.md` / M11 main taskbook only for progress status。
+
+Forbidden files:
+
+- `storage/innobase/**`；
+- `sql/handler.*`；
+- `sql/sql_executor.*`；
+- `sql/sql_optimizer.*`；
+- `sql/join_optimizer/access_path.*`；
+- `sql/parallel_query/pq_iterators.*`；
+- `sql/parallel_query/pq_clone*`；
+- `sql/parallel_query/pq_resolver*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/exchange.*`；
+- ORDER/GROUP/ref/ICP related expansion；
+- default AccessPath/factory hook behavior。
+
+Required implementation direction:
+
+1. Prefer fixing/verifying D4b's existing bounded callback producer setup,
+   especially worker handler scan init/end ordering；
+2. if adding `ha_rnd_init(true)` / `ha_rnd_end()` around
+   `pq_worker_scan_callback_produce()` is sufficient, keep the change inside
+   `sql_parallel.cc` and document why it matches existing threaded producer
+   practice；
+3. do not change raw Exchange record-image protocol in D5；
+4. do not add field-level `Field_raw_data` / commercial serialization in D5；
+5. if row values cannot be made correct without touching handler/InnoDB,
+   `exchange.*`, `Query_result_mq`, or clone/JOIN, stop and write a blocked
+   report instead of widening scope；
+6. blocked report must include the visible SELECT output observed, the exact
+   counter deltas for the statement window, and the suspected missing contract。
+
+Required counters:
+
+- D5 can reuse D4b counters if no new status variable is needed:
+  `Parallel_leader_row_stream_smoke_attempts`,
+  `Parallel_leader_row_stream_smoke_selected`,
+  `Parallel_leader_row_stream_smoke_rows`；
+- if a separate D5 hook is introduced, add distinct counters and update
+  `pq_stats`；
+- `Parallel_queries_executed` delta must be 1；
+- `Parallel_rows_scanned` delta must equal visible returned row count；
+- `Parallel_workers_launched` delta must remain 0；
+- `Parallel_probe_attempts` delta must remain 0；
+- `Parallel_queries_fallback` delta must remain 0 after selected/commit point。
+
+Required MTR assertions:
+
+- use focused MTR name `pq_leader_row_stream_row_values`；
+- create a two-row InnoDB table with fixed integer columns and no PRIMARY KEY
+  or secondary index, suggested:
+  `CREATE TABLE pq_row_value_t (id INT NOT NULL, v INT NOT NULL) ENGINE=InnoDB`
+  and rows `(1,10)`, `(2,20)`；
+- visible SELECT output must contain actual expected values:
+  `SELECT id, v FROM pq_row_value_t` returns `(1,10)` and `(2,20)`；
+- result log must stay enabled for the SELECT；
+- row count/counter assertions:
+  - leader row stream attempts delta = 1；
+  - leader row stream selected delta = 1；
+  - leader row stream rows delta = 2；
+  - `Parallel_queries_executed` delta = 1；
+  - `Parallel_rows_scanned` delta = 2；
+  - `Parallel_workers_launched` delta = 0；
+  - `Parallel_probe_attempts` delta = 0；
+  - `Parallel_queries_fallback` delta = 0；
+- D4a attach counters and D4c error counters must not grow；
+- include a guarded negative shape if practical, such as BLOB table fallback or
+  skipped hook, without widening scope。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_leader_row_stream_row_values pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11d5_target --tmpdir=/tmp/pqt_m11d5_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11d5_full --tmpdir=/tmp/pqt_m11d5_full
+```
+
+Agent Task Prompt:
+
+```text
+请先阅读 AGENTS.md，并遵守其中指向的 CLAUDE.md。
+
+你的角色是 Code Agent。
+主控 Agent 是 Codex。
+当前任务是 M11-D5 Row-value Correctness Before Positive Path。
+
+请阅读：
+- Docs/pq_tasks/README.md；
+- Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md；
+- Docs/pq_tasks/commercial-port-m11-parallel-scan-lifecycle.md；
+- sql/parallel_query/pq_iterator.cc；
+- sql/parallel_query/sql_parallel.h；
+- sql/parallel_query/sql_parallel.cc；
+- sql/parallel_query/exchange.cc/.h（只读）。
+
+任务目标：
+1. 让 D4b-style debug leader row stream 能返回真实可断言的固定整数行值；
+2. result log 不得隐藏 SELECT 输出；
+3. 优先检查/修复 bounded callback producer 的 worker handler scan
+   init/end 顺序；
+4. 不改变默认执行行为，不打开 `PARALLEL_SCAN` 默认正路径。
+
+允许修改：
+- 见 M11-D5 Allowed files。
+
+禁止修改：
+- 见 M11-D5 Forbidden files。
+
+硬停止条件：
+- 需要修改 handler/InnoDB、`exchange.*`、`Query_result_mq`、clone/JOIN、
+  AccessPath/factory、worker thread 才能让值正确；
+- SELECT 输出只能隐藏或只能断言行数；
+- post-commit fallback counter 增长；
+- 需要支持 varlen/BLOB/null/generated/secondary/ref/range/ICP 才能通过；
+- 若阻塞，报告必须包含实际 visible SELECT 输出和本语句 counter delta。
+
+验证：
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR: `pq_leader_row_stream_row_values pq_stats`；
+- full `parallel_query` suite。
+
+完成后不要自行 commit。
+```
+
+Docs-Design Review:
+
+- first review returned `REVISE` with no critical findings；
+- review required `exchange.*` to be unconditionally forbidden, because D5 must
+  not change the raw Exchange record-image protocol；
+- review required the MTR shape to avoid range/ref access by using a two-row
+  fixed integer InnoDB table with no primary or secondary index；
+- review required explicit leader row stream attempts/selected/rows deltas；
+- requested revisions were applied；
+- re-review returned `ACCEPT`；
+- confirmed the scope remains debug-only, with no default `PARALLEL_SCAN`, no
+  handler/InnoDB, no `Query_result_mq`, no clone/JOIN, no AccessPath, and no
+  Exchange protocol changes。
+
 ## Review 要求
 
 - D0 requires Docs-Design Review；
