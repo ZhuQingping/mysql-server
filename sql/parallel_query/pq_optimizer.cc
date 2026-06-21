@@ -336,6 +336,13 @@ struct PQ_owned_order_chain_sidecar {
   }
 };
 
+struct PQ_order_chain_identity_snapshot {
+  const ORDER *head{nullptr};
+  Explain_sort_clause src{ESC_none};
+  bool const_optimized{false};
+  std::vector<const ORDER *> node_addresses;
+};
+
 static uint pq_count_order_chain(const ORDER *order) {
   uint count = 0;
   for (const ORDER *cur = order; cur != nullptr && count < 1024;
@@ -407,6 +414,42 @@ static bool pq_order_chain_copy_matches(
 
   return source == nullptr && copied == nullptr &&
          count == copy.nodes.size();
+}
+
+static bool pq_capture_order_chain_identity(
+    const ORDER_with_src &src, PQ_order_chain_identity_snapshot *snapshot) {
+  if (snapshot == nullptr) return false;
+
+  snapshot->head = src.order;
+  snapshot->src = src.src;
+  snapshot->const_optimized = src.is_const_optimized();
+  snapshot->node_addresses.clear();
+
+  for (const ORDER *cur = src.order;
+       cur != nullptr && snapshot->node_addresses.size() < 1024;
+       cur = cur->next) {
+    snapshot->node_addresses.push_back(cur);
+  }
+  return true;
+}
+
+static bool pq_order_chain_identity_matches(
+    const ORDER_with_src &src,
+    const PQ_order_chain_identity_snapshot &snapshot) {
+  if (src.order != snapshot.head || src.src != snapshot.src ||
+      src.is_const_optimized() != snapshot.const_optimized) {
+    return false;
+  }
+
+  uint pos = 0;
+  for (const ORDER *cur = src.order; cur != nullptr && pos < 1024;
+       cur = cur->next, ++pos) {
+    if (pos >= snapshot.node_addresses.size() ||
+        cur != snapshot.node_addresses[pos]) {
+      return false;
+    }
+  }
+  return pos == snapshot.node_addresses.size();
 }
 
 static bool pq_order_chain_contains_source(const ORDER *head,
@@ -553,6 +596,31 @@ static bool pq_order_chain_sidecar_clone_matches(
   return pq_order_vector_clone_matches(src.nodes, clone.nodes) &&
          pq_order_vector_clone_matches(src.restored_nodes,
                                        clone.restored_nodes);
+}
+
+static bool pq_runtime_saved_order_attach_smoke(
+    const ORDER_with_src &join_order,
+    const ORDER_with_src &optimized_order) {
+  PQ_order_chain_identity_snapshot before;
+  if (!pq_capture_order_chain_identity(join_order, &before)) return false;
+
+  bool attached_to_owner = false;
+  {
+    PQ_owned_order_chain_sidecar owner_sidecar;
+    PQ_owned_order_chain_sidecar owner_clone;
+    attached_to_owner =
+        pq_copy_order_chain(join_order, &owner_sidecar) &&
+        pq_order_chain_copy_matches(join_order, owner_sidecar) &&
+        pq_record_order_chain_optimized_flags(optimized_order,
+                                              &owner_sidecar) &&
+        pq_restore_order_chain_from_flags(&owner_sidecar) &&
+        pq_restored_order_chain_matches_optimized(optimized_order,
+                                                  owner_sidecar) &&
+        pq_clone_order_chain_sidecar(owner_sidecar, &owner_clone) &&
+        pq_order_chain_sidecar_clone_matches(owner_sidecar, owner_clone);
+  }
+
+  return attached_to_owner && pq_order_chain_identity_matches(join_order, before);
 }
 
 static bool pq_build_orderby_filesort_restored_order_contract(
@@ -1399,7 +1467,9 @@ static void pq_maybe_run_saved_order_chain_clone_copy_smoke(
       pq_order_chain_sidecar_clone_matches(leader_sidecar, clone_sidecar) &&
       pq_order_chain_copy_matches(join->order, clone_sidecar) &&
       pq_restored_order_chain_matches_optimized(optimized_without_first,
-                                                clone_sidecar)) {
+                                                clone_sidecar) &&
+      pq_runtime_saved_order_attach_smoke(join->order,
+                                          optimized_without_first)) {
     pq_global_stats.saved_order_chain_clone_copy_smoke_success.fetch_add(
         1, std::memory_order_relaxed);
   } else {

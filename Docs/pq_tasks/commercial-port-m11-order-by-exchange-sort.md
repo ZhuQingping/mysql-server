@@ -5911,6 +5911,77 @@ Code/Doc/Test Review - M11-E5h-1:
 - confirmed build, targeted MTR, full `parallel_query` suite, and
   `git diff --check` passed。
 
+### M11-E5h-2: Runtime Saved ORDER Attach Smoke
+
+Status: coding completed locally；waiting for Code/Doc/Test Review。
+
+Goal:
+
+- prove the optimizer-side saved ORDER metadata can be copied/restored/cloned
+  into an owner-local sidecar without mutating `JOIN::order`；
+- keep `Exchange_sort` independent from `JOIN` / `ORDER` internals；
+- keep user-visible ORDER BY serial through `HAS_ORDER_BY`。
+
+Design Explorer - M11-E5h-2:
+
+- Explorer verdict: `ACCEPT`；
+- recommended placing the smoke in `pq_optimizer.cc` by reusing
+  `PQ_owned_order_chain_sidecar` and existing saved-order-chain smokes；
+- recommended not passing `JOIN *`, `ORDER *`, or `ORDER_with_src *` into
+  `Exchange_sort`；
+- recommended reusing existing DBUG flags/counters and avoiding new status
+  variables unless a later review finds an observability gap。
+
+Completion Report - M11-E5h-2 Coding:
+
+- changed files:
+  - `sql/parallel_query/pq_optimizer.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added `PQ_order_chain_identity_snapshot`；
+  - added `pq_capture_order_chain_identity()` and
+    `pq_order_chain_identity_matches()` to snapshot `JOIN::order` head, source,
+    const-optimized flag, and node addresses；
+  - added `pq_runtime_saved_order_attach_smoke()` that creates owner-local
+    sidecar copies/restores/clones inside a local scope, then verifies the
+    original `JOIN::order` identity is unchanged after the owner-local data is
+    destroyed；
+  - extended existing `pq_saved_order_chain_clone_copy_smoke` success condition
+    to include the runtime saved ORDER attach smoke。
+- scope notes:
+  - no `Exchange_sort` dependency on `JOIN`, `ORDER`, or `ORDER_with_src`；
+  - no `Filesort` construction；
+  - no `Sort_param` initialization；
+  - no `JOIN::filesorts_to_cleanup`, QEP, or AccessPath attach；
+  - no `HAS_ORDER_BY` relaxation；
+  - no preflight readiness flag or `execution_disabled` change；
+  - no new status variables or MTR files。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_commercial_order_by pq_saved_order_group_contract pq_stats` 4/4；
+  - full `parallel_query` suite passed: 89/89。
+
+Code/Doc/Test Review - M11-E5h-2:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed `pq_runtime_saved_order_attach_smoke()` only runs through the
+  existing `pq_saved_order_chain_clone_copy_smoke` DBUG flag inside the
+  optimizer-side `HAS_ORDER_BY` rejection branch；
+- confirmed owner-local sidecars are local to `pq_optimizer.cc` and no
+  `JOIN` / `ORDER` dependency is introduced into `Exchange_sort`；
+- confirmed the identity snapshot covers the intended E5h-2 contract:
+  `JOIN::order` head, source, const-optimized flag, and node-address chain；
+- confirmed the patch does not claim full ORDER node field immutability beyond
+  that identity contract；
+- confirmed no `HAS_ORDER_BY`, preflight readiness, `execution_disabled`,
+  `Filesort` / `Sort_param`, `JOIN::filesorts_to_cleanup`, QEP / AccessPath,
+  worker / MQ, or default `Read()` path is changed；
+- confirmed no new status variables or MTR files are required。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
