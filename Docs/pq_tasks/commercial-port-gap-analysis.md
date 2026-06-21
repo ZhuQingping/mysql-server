@@ -25,6 +25,9 @@ M10-C3 GROUP BY deferred boundary adapted test 已完成编码、targeted/full
 suite 验证，并通过 Code-Docs-Test Review。
 M10-D final `parallel_query` suite clean run 已完成，79/79 通过，
 并通过 Docs-Test Review。
+M11 Post-M10 Commercial Main Architecture Restart 已启动：M11-A0 plan
+clone / resolver contract 与 M11-B0 worker result / `Query_result_mq`
+adapter contract 已生成，当前等待 Docs-Design Review。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -95,10 +98,13 @@ Docs/features_for_opensource/01_parallel_query/patches/parallel_query-0009-updat
 
 - 没有完整 worker plan clone；
 - 没有完整 `ParallelScanIterator` 商用执行框架；
-- 没有 `PQblockScanIterator` / `PQRefIterator`；
-- 没有 `Query_result_mq`；
-- 没有 `Exchange_sort`；
-- 没有完整 `pq_resource_stat`；
+- `PQblockScanIterator` / `PQRefIterator` 只有 fail-closed skeleton，
+  没有商用 worker-side row source；
+- `Query_result_mq` 已有 `PQWR` smoke/send path，但没有真实 worker JOIN
+  result adapter；
+- `Exchange_sort` 已有 synthetic smoke，但没有真实 ORDER BY worker output /
+  Gather Merge path；
+- `pq_resource_stat` 已有基础文件，但没有完整商用资源控制语义；
 - 没有 hash join shared context；
 - 没有商用版完整 subquery / UNION / derived / dependent ref / secondary index ICP / partition 等能力；
 - InnoDB PQ 集成仍与商用 `ha_innodb_pq.cc` 形态不同。
@@ -111,18 +117,18 @@ Docs/features_for_opensource/01_parallel_query/patches/parallel_query-0009-updat
 |---|---|---|---|
 | `msg_queue.*` | 已有 typed MQ 版本 | 已有商用 MQ | 保留当前实现为基础，逐项对比商用功能；不优先整体替换 |
 | `exchange.*` | 已有 `Exchange_nosort` 和 typed row-image helper | 已有 `Exchange_nosort`，并配套商用 record gather | 部分保留；补齐商用 record gather 所需接口 |
-| `exchange_sort.*` | 缺失 | 存在 | 新增迁移，承接 ORDER BY/Gather Merge |
-| `query_result_mq.*` | 缺失 | 存在 | 新增迁移，作为 worker result 输出主路径 |
+| `exchange_sort.*` | 已有 synthetic smoke / no real ORDER BY path | 存在完整 Gather Merge | 补真实 ORDER BY worker output / Gather Merge gate |
+| `query_result_mq.*` | 已有 `PQWR` wire/send smoke，未接真实 worker JOIN result | 存在 `Field_raw_data` worker result path | 先补 `PQWR` leader decode adapter，再评估商用协议收敛 |
 | `pq_iterator.*` | 当前自研 `PQTableScanIterator` | 商用为 `pq_iterators.*` | 当前文件后续降级为适配/回归参考；迁移商用 `ParallelScanIterator` 架构 |
-| `pq_iterators.*` | 缺失 | 存在 `ParallelScanIterator`、`PQblockScanIterator`、`PQRefIterator` | 新增迁移，是 SQL 执行主路径核心 |
-| `pq_clone.*` | 缺失 | 存在 | 新增迁移，是 worker plan clone 核心 |
-| `pq_clone_item.cc` | 缺失 | 存在 | 新增迁移，支持 Item tree 深拷贝 |
-| `pq_resolver.*` | 缺失 | 存在 | 新增迁移，支持 clone 后 resolver |
-| `pq_refix_fields_item.cc` | 缺失 | 存在 | 新增迁移，修正 clone 后 field 引用 |
-| `pq_replace_base_item.cc` | 缺失 | 存在 | 新增迁移，替换 base Item |
+| `pq_iterators.*` | 已有 `ParallelScanIterator` / `PQblockScanIterator` / `PQRefIterator` fail-closed skeleton | 存在完整 iterator lifecycle | 补 lifecycle、worker launch/wait/cleanup、record gather；默认继续 fail-closed |
+| `pq_clone.*` | 已有 activation probe / fail-closed `pq_make_join()` | 存在完整 clone path | 先补 contract skeleton 和 preflight，不直接打开 worker plan |
+| `pq_clone_item.cc` | 已有 placeholder | 存在完整 Item clone overrides | 先补 base contract skeleton，不大面积迁移 subclass |
+| `pq_resolver.*` | 已有 placeholder / fail-closed helper | 存在完整 clone 后 resolver | 先迁 compile-only helper 子集 |
+| `pq_refix_fields_item.cc` | 已有 placeholder | 存在完整 refix fields | 后续按 resolver contract 小步迁移 |
+| `pq_replace_base_item.cc` | 已有 placeholder | 存在完整 base item replacement | 后续按 resolver contract 小步迁移 |
 | `pq_optimizer.*` | 已有保守 eligibility | 商用完整 eligibility / RBO / choose table | 以商用为目标重构；保留当前 fallback reason 和 MTR 护栏 |
 | `sql_parallel.*` | 已有 worker/Gather scaffold 与 stats | 商用完整 make plan、worker exec、fallback、thread budget | 逐段迁移商用主流程，保留当前生命周期测试 |
-| `pq_resource_stat.*` | 缺失 | 存在 | 新增迁移，承接 `parallel_max_threads` 等资源控制 |
+| `pq_resource_stat.*` | 已有基础文件，商用资源控制语义不完整 | 存在 | 后续补 `parallel_max_threads` 等资源控制 |
 | `explain_pq_access_path.*` | 缺失 | 存在 | 新增迁移，承接商用 EXPLAIN 展示 |
 | `pq_hash_join_shared_context.*` | 缺失 | 存在 | 后置迁移，不作为第一闭环阻断 |
 | `barrier.h` / `binary_heap.h` / `bloom_filter.h` / `chunk_files_wrapper.h` | 缺失 | 存在 | 按依赖迁移，`binary_heap.h` 优先服务 `Exchange_sort` |
@@ -242,6 +248,44 @@ Docs/features_for_opensource/01_parallel_query/patches/parallel_query-0009-updat
 - M8 先做 `binary_heap.h` / `exchange_sort.*` compile-only 和 synthetic smoke，再接真实 ORDER BY。
 - M9 先补 secondary/ref/ICP fallback 和负向测试，再打开正向 ref/range/ICP。
 - M10 维护 enabled/adapted/deferred manifest；deferred 必须写明缺失能力，不删除测试意图。
+
+### M11: Post-M10 Commercial Main Architecture Restart
+
+M10 之后主线回到商用主架构迁移，但仍保持小步串行。M11 不直接整块搬
+商用实现，先按 contract / adapter / smoke / guarded wiring 拆分。
+
+当前设计任务书：
+
+- [commercial-port-m11-main-architecture-restart.md](commercial-port-m11-main-architecture-restart.md)
+- [commercial-port-m11-plan-clone-resolver.md](commercial-port-m11-plan-clone-resolver.md)
+- [commercial-port-m11-worker-result-path.md](commercial-port-m11-worker-result-path.md)
+
+M11-A explorer 结论：
+
+- 当前 `pq_make_join()` 仍 fail-closed；
+- 商用 plan clone 依赖 `Item::pq_clone()` / `refix_fields()` /
+  `pq_restore()`、`Query_block::pq_backup()/pq_restore()`、`JOIN` clone
+  link 等大范围核心类契约；
+- 下一步必须先做 design-only contract map，再做 compile-only skeleton；
+- `Parallel_clone_probe_success` 在 cleanup contract 未证明前应保持 0。
+
+M11-B explorer 结论：
+
+- 当前 `Query_result_mq` 已有 `PQWR` smoke，但 leader 端还没有
+  `PQWR` ROW frame 到 record/tmp row 的 adapter；
+- 商用 `Field_raw_data` / Batch_buffer 不适合作为 M11-B 最小步整块搬；
+- 下一步应先定义 adapter contract，再做 `PQWR` leader decode adapter
+  和 synthetic MTR smoke；
+- B1/B2 不启动 worker、不改 AccessPath、不接 cloned JOIN。
+
+推荐顺序：
+
+1. M11-A0 / M11-B0 design taskbooks；
+2. Docs-Design Review accepted 后提交；
+3. M11-B1/B2：`PQWR` leader decode adapter + synthetic smoke；
+4. M11-A1：`Item` base contract compile-only skeleton；
+5. 后续再进入 M11-B3 guarded worker result wiring probe 和
+   M11-D `ParallelScanIterator` lifecycle contract。
 
 **任务书入口：**
 
