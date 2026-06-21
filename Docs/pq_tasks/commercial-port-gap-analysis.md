@@ -40,8 +40,9 @@ Review；新增 preflight 诊断计数，但不打开 cloned JOIN 或 worker pla
 M11-A5 Clone preflight MTR smoke 作为 doc-only closure，复用 A4 中
 `pq_clone_diagnostics` / `pq_stats` 覆盖，不新增重复测试。
 M11-B3a guarded worker-result wiring probe design 已完成并通过
-Docs-Design Review；先做 local `Query_result_mq` wiring helper，再评估
-debug-only worker-thread probe。
+Docs-Design Review。M11-B3b local `Query_result_mq` wiring helper 已完成，
+通过 build、targeted MTR、完整 `parallel_query` suite 与 Code-Docs-Test
+Review；下一步进入 M11-B3c debug-only worker-thread probe 设计。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 
@@ -303,8 +304,9 @@ M11-B explorer 结论：
 7. M11-A4：Clone contract preflight probe；
 8. M11-A5：Clone preflight MTR smoke doc-only closure；
 9. M11-B3a：guarded worker-result wiring probe design-only；
-10. 后续再进入 M11-B3b local `Query_result_mq` wiring helper 和
-   M11-D `ParallelScanIterator` lifecycle contract。
+10. M11-B3b local `Query_result_mq` wiring helper；
+11. M11-B3c debug-only worker-thread `Query_result_mq` probe design；
+12. M11-D `ParallelScanIterator` lifecycle contract。
 
 **任务书入口：**
 
