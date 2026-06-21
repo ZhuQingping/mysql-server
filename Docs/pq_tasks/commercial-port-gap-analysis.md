@@ -18,6 +18,7 @@ diff 已完成并通过 Docs-Test Review。M10-B1 sysvars/fullscan edge small
 rewrite 已完成编码、验证并通过 Code-Docs-Test Review。
 M10-B2 EXPLAIN JSON/TREE 与 fallback counter minimal tests 已完成编码、
 验证并通过 Code-Docs-Test Review。
+M10-C1 supported/deferred subset declaration 已完成并通过 Docs-Task Review。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 

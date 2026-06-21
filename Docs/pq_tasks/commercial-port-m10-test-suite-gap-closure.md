@@ -7,6 +7,8 @@ M10-B1 sysvars/fullscan edge small rewrite completed / Code-Docs-Test Review
 accepted。
 M10-B2 EXPLAIN JSON/TREE and fallback counter minimal tests completed /
 Code-Docs-Test Review accepted。
+M10-C1 supported/deferred subset declaration completed / Docs-Task Review
+accepted。
 
 ## 目标
 
@@ -257,6 +259,126 @@ M10-D:
 - 完整 `parallel_query` suite clean run；
 - 记录最终 enabled/adapted/deferred 数量；
 - 若新增测试导致当前 suite 数量变化，更新 README 和本任务书。
+
+## M10-C1: Supported / Deferred Subset Declaration
+
+Status: completed / Docs-Task Review accepted。
+
+本阶段只收敛 M10-C 的 capability 口径，不新增测试、不改源码。
+M10-C 不应把当前分支的 legacy / experimental path 误称为商用完整
+aggregation、ORDER BY 或 ref/ICP 实现。
+
+### Aggregation
+
+Current active/adapted subset:
+
+- implicit aggregate without explicit `GROUP BY`：
+  `COUNT/SUM/AVG/MIN/MAX`，结果正确性由 `pq_agg_*` 和 threaded aggregate
+  tests 覆盖；
+- explicit `GROUP BY` legacy typed-state experimental subset：
+  - single InnoDB table；
+  - single direct integer group key；
+  - single aggregate；
+  - `COUNT(*)`、`COUNT(field)`、`SUM/MIN/MAX(integer field)`；
+  - DOP=1 使用 `parallel_query_experimental_groupby_dop1`；
+  - DOP=2/DOP=4 依赖 threaded DOP gate；
+  - current tests: `pq_groupby_*`；
+- unsupported aggregation guard：
+  `HAVING`、`COUNT(DISTINCT ...)`、unsupported aggregate、expression group
+  key 等继续 fallback/deferred。
+
+Important boundary:
+
+- `Parallel_groupby_commercial_selected` 和
+  `Parallel_groupby_commercial_executed` 当前必须保持 0；
+- 当前可声明的是 legacy typed-state / experimental subset，不是 commercial
+  worker-plan aggregation path。
+
+Deferred:
+
+- real commercial aggregation through worker plan / `Query_result_mq`；
+- multi-key GROUP BY；
+- `AVG(...) GROUP BY` positive path；
+- decimal/double/timestamp typed GROUP BY positive path；
+- `DISTINCT` / aggregate DISTINCT；
+- `HAVING` positive path；
+- join/subquery/derived GROUP BY；
+- GROUP BY + ORDER BY / LIMIT merge。
+
+### ORDER BY
+
+Current active/adapted subset:
+
+- `pq_commercial_order_by` only covers synthetic `Exchange_sort` smoke and
+  serial boundary；
+- real user-visible ORDER BY still falls back with `HAS_ORDER_BY`；
+- true ORDER BY should not increase `Parallel_queries_executed` or
+  `Parallel_queries_fallback` in current boundary tests。
+
+Deferred:
+
+- real ORDER BY worker output / Gather Merge；
+- expression ORDER BY；
+- multi-column ASC/DESC；
+- index-order / descending-index path；
+- tie-break / rowid stability；
+- ORDER BY + LIMIT / GROUP BY / aggregate merge；
+- commercial `pq_msort_error*` debug injection cases。
+
+### Ref / ICP / Secondary Range
+
+Current active/adapted subset is leader-local, bounded, and no-worker/no-MQ:
+
+- fixed integer covering secondary half-open range；
+- fixed integer constant covering secondary ref；
+- fixed integer two-table dependent covering secondary ref；
+- fixed integer non-covering secondary range ICP with clustered
+  materialization；
+- current coverage lives in `pq_commercial_ref_icp` with positive counters and
+  fallback windows。
+
+Deferred:
+
+- worker-side `PQRefIterator` / `ha_pq_next` / `Query_result_mq` ref path；
+- ref ICP / dependent-ref ICP / non-covering ref ICP；
+- multi-range / OR range；
+- inclusive endpoint expansion beyond current safe subset；
+- reverse / descending index；
+- partition / MVI；
+- spatial / nullable / varlen / string collation / prefix key；
+- BLOB/JSON read-set-hostile secondary paths；
+- BKA/hash/semi/derived/subquery dependent-ref commercial regressions。
+
+### M10-C Next Implementation Candidates
+
+Safe next test-only candidates:
+
+- `pq_commercial_group_by_supported_subset`：documented as legacy
+  typed-state experimental subset, with commercial counters asserted 0；
+- `pq_commercial_group_by_deferred_boundary`：HAVING / DISTINCT /
+  expression group key / GROUP BY + ORDER BY fallback boundaries；
+- optional `pq_commercial_order_by_boundary`：only serial `HAS_ORDER_BY`
+  boundary and synthetic `Exchange_sort` smoke, no positive real ORDER BY；
+- optional ref/ICP additions should extend `pq_commercial_ref_icp` rather than
+  create duplicate fixtures。
+
+Not safe for M10-C first coding pass:
+
+- claiming commercial aggregation selected/executed；
+- opening real ORDER BY Gather Merge；
+- copying commercial `pq_group_by`, `pq_order_by`, `pq_icp`, `pq_range_sec`,
+  `pq_jt_ref`, or `pq_depend_ref` wholesale。
+
+Review:
+
+- Docs-Task Review Agent returned `ACCEPT`；
+- confirmed aggregation boundary distinguishes legacy/experimental typed-state
+  subset from commercial worker-plan aggregation；
+- confirmed ORDER BY remains synthetic smoke / serial boundary only；
+- confirmed ref/ICP/secondary range remains leader-local/no-worker/no-MQ
+  subset；
+- confirmed next test candidates are safe and do not invite wholesale
+  commercial test copies。
 
 ## M10-B1: Sysvars And Fullscan Edge Small Rewrites
 
