@@ -1,0 +1,77 @@
+# Test: pq_commercial_fullscan_edges
+# M10-B commercial-suite small rewrites for stable fullscan edge cases.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS actor;
+DROP TABLE IF EXISTS records_in_range_test;
+DROP TABLE IF EXISTS fr;
+DROP TABLE IF EXISTS ai;
+--enable_warnings
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+# Adapted from commercial pq_not_equal: keep a small single-table predicate.
+CREATE TABLE actor (
+  actor_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  first_name VARCHAR(45) NOT NULL,
+  last_name VARCHAR(45) NOT NULL,
+  is_active BIT(1) NOT NULL,
+  PRIMARY KEY(actor_id)
+) ENGINE=InnoDB;
+
+INSERT INTO actor(first_name, last_name, is_active) VALUES
+  ('Victor','Otero',true),
+  ('Gonzalo','Crhystens',false),
+  ('Abraham','Vega',true);
+
+SELECT actor_id, first_name FROM actor WHERE actor_id != 1 ORDER BY actor_id;
+
+# Adapted from commercial pq_aggr_no_record: stable empty/non-empty aggregate.
+CREATE TABLE records_in_range_test (
+  c1 VARCHAR(16),
+  c2 VARCHAR(64),
+  PRIMARY KEY(c1)
+) ENGINE=InnoDB;
+
+INSERT INTO records_in_range_test VALUES
+  ('ccc','v'),('kkk01','v'),('mmm','v'),('xxx','v');
+
+SELECT COUNT(*) FROM records_in_range_test WHERE c1 < 'ccc';
+SELECT COUNT(*) FROM records_in_range_test WHERE c1 < 'xxx';
+
+# Adapted from commercial pq_found_rows: simple form only; UNION remains
+# deferred with subquery/UNION support.
+CREATE TABLE fr (f1 INT) ENGINE=InnoDB;
+INSERT INTO fr VALUES (1),(2),(3),(4);
+
+--disable_warnings
+SELECT SQL_CALC_FOUND_ROWS * FROM fr ORDER BY f1 LIMIT 2;
+SELECT FOUND_ROWS();
+--enable_warnings
+
+# Adapted from commercial pq_autoinc: keep AUTO_INCREMENT + duplicate guard.
+CREATE TABLE ai (
+  id INT NOT NULL AUTO_INCREMENT,
+  ggid VARBINARY(32) NOT NULL DEFAULT '',
+  passwd VARBINARY(32) NOT NULL DEFAULT '',
+  PRIMARY KEY(id),
+  UNIQUE KEY ggid(ggid)
+) ENGINE=InnoDB;
+
+INSERT INTO ai(ggid, passwd) VALUES ('test1','xxx'),('test2','yyy');
+--error ER_DUP_ENTRY
+INSERT INTO ai(ggid, passwd) VALUES ('test2','dup');
+
+SELECT id, ggid, passwd FROM ai WHERE passwd='xxx';
+SELECT id, ggid, passwd FROM ai ORDER BY id;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE ai;
+DROP TABLE fr;
+DROP TABLE records_in_range_test;
+DROP TABLE actor;

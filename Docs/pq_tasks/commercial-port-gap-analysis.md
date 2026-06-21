@@ -14,7 +14,8 @@
 
 M0/M1/M2/M3/M4a/M4b 已完成，M5-M8 已完成，M9 已完成首轮
 secondary/ref/ICP 与 edge backlog 收敛，M10-A commercial test manifest
-diff 已完成并通过 Docs-Test Review。
+diff 已完成并通过 Docs-Test Review。M10-B1 sysvars/fullscan edge small
+rewrite 已完成编码、验证并通过 Code-Docs-Test Review。
 
 本文档是商用实现平移的总差异清单和迁移计划。M3-M10 后续执行采用 Codex 主控 + 子 Agent 只读/实现后 review 的方式推进：每个阶段先按任务书实施，实施完成后启动独立 review 子 Agent 检视阶段 diff、测试证据和风险项，主控确认意见闭环后再提交。
 

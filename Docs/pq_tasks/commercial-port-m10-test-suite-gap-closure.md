@@ -3,6 +3,8 @@
 ## 状态
 
 M10-A manifest diff completed / Docs-Test Review accepted。
+M10-B1 sysvars/fullscan edge small rewrite completed / Code-Docs-Test Review
+accepted。
 
 ## 目标
 
@@ -254,6 +256,48 @@ M10-D:
 - 记录最终 enabled/adapted/deferred 数量；
 - 若新增测试导致当前 suite 数量变化，更新 README 和本任务书。
 
+## M10-B1: Sysvars And Fullscan Edge Small Rewrites
+
+Status: completed / Code-Docs-Test Review accepted。
+
+目标：
+
+- 对齐商用 `pq_variables` 的当前分支可稳定变量边界；
+- 对齐商用 `pq_not_equal`、`pq_aggr_no_record`、`pq_found_rows`、
+  `pq_autoinc` 的小型稳定子集；
+- 不迁移商用 debug、UNION、并发、hint、large matrix 内容；
+- 不改源码。
+
+实现：
+
+- 扩展 `pq_vars`：
+  - `parallel_default_dop` 边界：1 / 256；
+  - 当前 8.0.46 sysvar 行为：0 / 257 被截断并产生 warning；
+  - `parallel_memory_limit` 和 `parallel_queue_timeout` 可 SET/SHOW；
+  - reset 后确认默认值恢复。
+- 新增 `pq_commercial_fullscan_edges`：
+  - `actor_id != 1`；
+  - empty/non-empty `COUNT(*)` range aggregate；
+  - simple `SQL_CALC_FOUND_ROWS` / `FOUND_ROWS()`；
+  - AUTO_INCREMENT + duplicate key guard + point/fullscan select。
+
+验证：
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_vars pq_commercial_fullscan_edges
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_vars pq_commercial_fullscan_edges
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+结果：
+
+- targeted record/replay passed；
+- full `parallel_query` suite passed: 75/75；
+- no source edits, no build required。
+
 ## 允许修改
 
 - `mysql-test/suite/parallel_query/**`
@@ -290,3 +334,12 @@ M10-A:
 - Docs-Test Review Agent returned `ACCEPT`；
 - review confirmed matrix covers 98/98 commercial tests with no missing,
   extra, or duplicated test names。
+
+M10-B1:
+
+- changed MTR tests only plus task docs；
+- targeted record/replay passed；
+- full `parallel_query` suite passed: 75/75；
+- Code-Docs-Test Review Agent returned `ACCEPT`；
+- review confirmed `pq_vars` sysvar boundary behavior and
+  `pq_commercial_fullscan_edges` stable commercial narrow subset coverage。
