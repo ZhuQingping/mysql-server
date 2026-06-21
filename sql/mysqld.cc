@@ -10233,6 +10233,39 @@ static int show_pq_exchange_sort_frame_materialized_smoke_unsupported(
   return 0;
 }
 
+static int show_pq_exchange_sort_state_shape_smoke_attempts(THD *,
+                                                            SHOW_VAR *var,
+                                                            char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_state_shape_smoke_attempts.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_state_shape_smoke_success(THD *,
+                                                           SHOW_VAR *var,
+                                                           char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_state_shape_smoke_success.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_exchange_sort_state_shape_smoke_unsupported(THD *,
+                                                               SHOW_VAR *var,
+                                                               char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.exchange_sort_state_shape_smoke_unsupported.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_callback_smoke_attempts(THD *, SHOW_VAR *var, char *buf) {
   var->type = SHOW_LONGLONG;
   var->value = buf;
@@ -10945,6 +10978,15 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_exchange_sort_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_smoke_rows",
      (char *)&show_pq_exchange_sort_smoke_rows, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_state_shape_smoke_attempts",
+     (char *)&show_pq_exchange_sort_state_shape_smoke_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_state_shape_smoke_success",
+     (char *)&show_pq_exchange_sort_state_shape_smoke_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_state_shape_smoke_unsupported",
+     (char *)&show_pq_exchange_sort_state_shape_smoke_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
     {"Parallel_groupby_dop1_factory_attempts",
      (char *)&show_pq_groupby_dop1_factory_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

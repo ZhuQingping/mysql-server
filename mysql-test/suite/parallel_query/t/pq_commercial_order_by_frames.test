@@ -2,6 +2,7 @@
 # are observable.
 
 --source include/have_innodb_16k.inc
+--source include/have_debug.inc
 
 CREATE TABLE pq_orderby_frame_t (
   id INT PRIMARY KEY,
@@ -39,13 +40,56 @@ SET @frame_materialized_rows_before = (
 SET @frame_materialized_unsupported_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_frame_materialized_smoke_unsupported');
+SET @sort_state_shape_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_attempts');
+SET @sort_state_shape_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_success');
+SET @sort_state_shape_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_unsupported');
 
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
 SET SESSION parallel_default_dop=2;
+SET @old_debug=@@SESSION.debug;
 
 --sorted_result
 SELECT * FROM pq_orderby_frame_t;
+
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_attempts') -
+  @sort_state_shape_attempts_before) = 0 AS sort_state_shape_attempts_without_debug;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_success') -
+  @sort_state_shape_success_before) = 0 AS sort_state_shape_success_without_debug;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_unsupported') -
+  @sort_state_shape_unsupported_before) = 0 AS sort_state_shape_unsupported_without_debug;
+
+SET SESSION debug="d,pq_exchange_sort_state_shape_smoke";
+
+--sorted_result
+SELECT * FROM pq_orderby_frame_t;
+
+SET SESSION debug=@old_debug;
+
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_attempts') -
+  @sort_state_shape_attempts_before) = 1 AS sort_state_shape_attempts_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_success') -
+  @sort_state_shape_success_before) = 1 AS sort_state_shape_success_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_unsupported') -
+  @sort_state_shape_unsupported_before) = 0 AS sort_state_shape_unsupported_delta;
 
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status

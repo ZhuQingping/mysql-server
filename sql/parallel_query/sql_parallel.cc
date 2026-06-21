@@ -874,6 +874,20 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
           &frame_materialized_unsupported)) {
     return true;
   }
+  bool sort_state_shape_enabled = false;
+  DBUG_EXECUTE_IF("pq_exchange_sort_state_shape_smoke",
+                  sort_state_shape_enabled = true;);
+  if (sort_state_shape_enabled) {
+    pq_global_stats.exchange_sort_state_shape_smoke_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    if (sort_exchange.run_orderby_sort_state_shape_smoke()) {
+      pq_global_stats.exchange_sort_state_shape_smoke_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats.exchange_sort_state_shape_smoke_success.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+  }
 
   pq_global_stats.exchange_sort_smoke_runs.fetch_add(
       1, std::memory_order_relaxed);

@@ -2054,8 +2054,8 @@ Commit:
 
 ### M11-E5d-3: Post-Sidecar Filesort Boundary Design
 
-Status: design-only taskbook completed；Design Review Agent accepted；waiting
-for commit。
+Status: design-only taskbook completed；Design Review Agent accepted；committed
+as `2665375de96`。
 
 Goal:
 
@@ -2303,8 +2303,8 @@ Commit:
 
 ### M11-E5d-3b: Filesort Constructor Risk Review
 
-Status: design-only taskbook completed；Design Review Agent accepted；waiting
-for commit。
+Status: design-only taskbook completed；Design Review Agent accepted；committed
+as `1020b3b5c2b`。
 
 Goal:
 
@@ -2777,8 +2777,8 @@ Code/Doc/Test Review - M11-E5d-4a:
 
 ### M11-E5d-4b: Exchange_sort Real-state Adapter Boundary Design
 
-Status: design-only taskbook completed；Design Review Agent accepted；waiting
-for commit。
+Status: design-only taskbook completed；Design Review Agent accepted；committed
+as `ea83b4c3c9c`。
 
 Goal:
 
@@ -2947,6 +2947,96 @@ Design Review - M11-E5d-4b:
   buffers, MQ, `Read()`, and eligibility；
 - confirmed E5d-4b-1 may proceed as a debug-only scalar sort-state adapter
   shape under `Exchange_sort` / `sql_parallel` synthetic smoke setup。
+
+### M11-E5d-4b-1: Debug-only Exchange_sort Sort-state Adapter Shape
+
+Status: coding completed；Code/Doc/Test Review Agent requested documentation
+status corrections only；`git diff --check`, `mysqld` build, targeted MTR, and
+full `parallel_query` suite passed；waiting for re-review and commit。
+
+Goal:
+
+- add a minimal `Exchange_sort`-owned scalar sort-state adapter shape；
+- keep the adapter independent from `pq_optimizer.cc`, `Filesort`,
+  `Sort_param`, worker MQ consumption, `Read()`, and ORDER BY eligibility；
+- verify that the shape can be initialized and cleaned up under a dedicated
+  DBUG flag without changing normal ORDER BY serial behavior。
+
+Implementation summary:
+
+- added `PQ_orderby_sort_state_shape` with scalar fields only:
+  - worker count；
+  - sort-order length；
+  - max record length；
+  - ref length；
+  - stable-output flag；
+  - index-sort flag；
+  - rowid-required flag；
+  - initialized flag；
+- added private `Exchange_sort::init_sort_state_shape()` and
+  `cleanup_sort_state_shape()`；
+- added `Exchange_sort::run_orderby_sort_state_shape_smoke()` using synthetic
+  scalar values only；
+- wired the smoke from `Gather_operator::run_exchange_sort_smoke()` only under
+  DBUG flag `pq_exchange_sort_state_shape_smoke`；
+- added status counters:
+  - `Parallel_exchange_sort_state_shape_smoke_attempts`；
+  - `Parallel_exchange_sort_state_shape_smoke_success`；
+  - `Parallel_exchange_sort_state_shape_smoke_unsupported`；
+- extended `pq_commercial_order_by_frames` to assert:
+  - no-DBUG counters remain zero；
+  - DBUG smoke records one attempt and one success；
+  - unsupported remains zero；
+  - existing frame/merge/materialization smoke counters still pass。
+
+Scope confirmation:
+
+- no `sql/parallel_query/pq_optimizer.cc` edits；
+- no `sql/filesort.*` or `sql/sort_param.*` edits；
+- no `Filesort::make_sortorder()` visibility change；
+- no persisted `ORDER *`, `Filesort *`, `Sort_param *`, `TABLE *`, handler
+  pointer, or real `Sort_param` snapshot；
+- no commercial `MQ_record_gather` import；
+- no `Exchange_sort::init()` real-path override；
+- no worker MQ consumption from default SQL；
+- no `ParallelScanIterator::Read()` change；
+- no optimizer eligibility, AccessPath, handler, or InnoDB change；
+- no `filesort()` execution。
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_order_by_frames \
+  pq_saved_order_group_contract pq_commercial_order_by pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11e5d4b1_target \
+  --tmpdir=/tmp/pqt_m11e5d4b1_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5d4b1_full --tmpdir=/tmp/pqt_m11e5d4b1_full
+```
+
+Result:
+
+- `git diff --check` passed；
+- `mysqld` build passed；
+- targeted MTR passed，5/5 including `shutdown_report`。
+- full `parallel_query` suite passed，89/89 including `shutdown_report`。
+
+Code/Doc/Test Review - M11-E5d-4b-1:
+
+- first review verdict: `REVISE`；
+- code findings: none blocking；
+- documentation finding:
+  - E5d-3 commit status was stale and has been corrected to `2665375de96`；
+  - E5d-4b commit status has been corrected to `ea83b4c3c9c`；
+- confirmed scalar-only state is respected；
+- confirmed forbidden files/actions are respected；
+- confirmed DBUG gate and MTR no-DBUG/DBUG assertions are correct；
+- confirmed cleanup is explicit；
+- confirmed counters, reset, `SHOW_VAR`, and `pq_stats` are consistent。
 
 ## Risk Areas
 

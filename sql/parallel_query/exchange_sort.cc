@@ -437,6 +437,32 @@ bool Exchange_sort::read_ordered_record_shape() {
   return !m_order_shape_initialized;
 }
 
+bool Exchange_sort::init_sort_state_shape(uint32 workers, bool stable_output,
+                                          bool index_sort,
+                                          uint32 sort_order_length,
+                                          uint32 max_record_length,
+                                          uint32 ref_length) {
+  cleanup_sort_state_shape();
+  if (workers == 0 || sort_order_length == 0 || max_record_length == 0) {
+    return true;
+  }
+  if (stable_output && ref_length == 0) return true;
+
+  m_sort_state_shape.workers = workers;
+  m_sort_state_shape.sort_order_length = sort_order_length;
+  m_sort_state_shape.max_record_length = max_record_length;
+  m_sort_state_shape.ref_length = ref_length;
+  m_sort_state_shape.stable_output = stable_output;
+  m_sort_state_shape.index_sort = index_sort;
+  m_sort_state_shape.rowid_required = stable_output;
+  m_sort_state_shape.initialized = true;
+  return false;
+}
+
+void Exchange_sort::cleanup_sort_state_shape() {
+  m_sort_state_shape = PQ_orderby_sort_state_shape{};
+}
+
 void Exchange_sort::cleanup_order_gather_shape() {
   m_min_records.clear();
   m_record_groups.clear();
@@ -445,6 +471,32 @@ void Exchange_sort::cleanup_order_gather_shape() {
   m_order_shape_initialized = false;
   m_order_shape_stable_output = false;
   m_order_shape_index_sort = false;
+  cleanup_sort_state_shape();
+}
+
+bool Exchange_sort::run_orderby_sort_state_shape_smoke() {
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+
+  if (init_sort_state_shape(kWorkers, /*stable_output=*/true,
+                            /*index_sort=*/false, kSortOrderLength,
+                            kMaxRecordLength, kRefLength)) {
+    cleanup_sort_state_shape();
+    return true;
+  }
+
+  const bool valid =
+      m_sort_state_shape.initialized &&
+      m_sort_state_shape.workers == kWorkers &&
+      m_sort_state_shape.sort_order_length == kSortOrderLength &&
+      m_sort_state_shape.max_record_length == kMaxRecordLength &&
+      m_sort_state_shape.ref_length == kRefLength &&
+      m_sort_state_shape.stable_output && !m_sort_state_shape.index_sort &&
+      m_sort_state_shape.rowid_required;
+  cleanup_sort_state_shape();
+  return !valid;
 }
 
 bool Exchange_sort::run_synthetic_order_merge_smoke(uint32 *rows_read) {
