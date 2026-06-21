@@ -27,7 +27,11 @@ committed；M11-E5d-5b sort-key buffer / record-group allocation smoke completed
 and committed；M11-E5d-5c controlled ORDER BY MQ-to-record-group loader
 completed and committed；M11-E5d-5d debug-only ordered leader Read shadow path
 completed and committed；M11-E5d-5e user-visible ORDER BY eligibility gate
-design drafted，waiting for Design Review。
+design completed and committed；M11-E5d-5e-1 ORDER BY eligibility contract
+helper completed and committed as `f54474bda65`；M11-E5d-5e-2 ORDER BY
+execution preflight blocker completed and committed as `68b27d804ca`；real
+ORDER BY execution, default worker MQ consumption, and default ordered `Read()`
+remain disabled。
 
 ## 背景
 
