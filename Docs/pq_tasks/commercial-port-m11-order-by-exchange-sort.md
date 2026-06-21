@@ -3,7 +3,8 @@
 ## 状态
 
 Status: M11-E0/E1/E2/E3/E4/E5a/E5b-0/E5b-1/E5b-2/E5b-3/E5c/E5d/E5d-0
-completed and committed；M11-E5d-S0 saved ORDER/GROUP helper design accepted。
+completed and committed；M11-E5d-S0/S1 completed and committed；
+M11-E5d-S2 leader save/restore smoke design started。
 
 ## 背景
 
@@ -819,8 +820,7 @@ Design/Task Review - M11-E5d-S0:
 
 ### M11-E5d-S1: Saved State Contract Shape
 
-Status: coding, validation, and Code/Doc/Test Review completed；ready to
-commit。
+Status: coding, validation, Code/Doc/Test Review, and commit completed。
 
 Goal:
 
@@ -905,6 +905,174 @@ Code/Doc/Test Review - M11-E5d-S1:
   `pq_saved_order_group_contract_smoke` and MTR verifies
   attempts/unsupported growth while executed/workers/ranges stay zero；
 - next step remains E5d-S2 leader save/restore smoke。
+
+Commit:
+
+- `5ad7ed85d8f` Add PQ M11E saved order group contract。
+
+### M11-E5d-S2: Leader Save/Restore Smoke Design
+
+Status: design-only taskbook completed；Review Agent re-review accepted；no
+source code change。
+
+Goal:
+
+- add a debug-only smoke around the S1 sidecar to prove leader scalar optimizer
+  state can be captured, temporarily perturbed inside the smoke, and restored
+  without changing normal serial ORDER BY behavior；
+- keep this as a leader-local sidecar smoke, not a commercial
+  `JOIN::save_optimized_vars()` port；
+- prepare the ownership proof needed before S3 clone-copy contract and later
+  Filesort contract shape。
+
+Design boundary:
+
+- S2 may only operate on values already captured by
+  `PQSavedOrderGroupContract`；
+- S2 must not access `Query_block::order_list_ptrs` or
+  `Query_block::group_list_ptrs` because they are private and ownership is not
+  reviewed yet；
+- S2 must not mutate real optimizer `ORDER` nodes or `Item` pointers；
+- any temporary mutation, if used, must be limited to scalar `JOIN` fields and
+  restored in the same helper scope before returning；
+- if state capture is incomplete or unsupported, the smoke must still
+  fail-closed and increment an unsupported counter。
+
+Perturb/restore hard constraints:
+
+- use an RAII/scope-guard object for restore so all early returns restore the
+  original values；
+- inside the perturbation window, do not call optimizer, executor, EXPLAIN,
+  diagnostic, tracing, MTR-visible, or other complex functions that may read
+  JOIN state；the window may only perform local assignments and local checks；
+- only trivially reversible bool/enum/integer scalar fields may be perturbed；
+- do not perturb `having_cond`, `having_for_explain`, `where_cond`, `ORDER *`,
+  `Item *`, ORDER/GROUP lists, QEP_TAB, AccessPath, TABLE, handler, MEM_ROOT, or
+  ownership-bearing fields；
+- after RAII restore, rebuild the S1 sidecar contract and compare every
+  captured scalar used by S2 against the initial snapshot；
+- if any restored field mismatches, count only unsupported/fail-closed and do
+  not increment success；
+- even on success, the smoke must keep the full commercial helper contract in
+  `UNSUPPORTED_MISSING_SAVED_HELPERS` state and must not produce `READY`。
+
+Allowed files for coding after review:
+
+- `sql/parallel_query/pq_optimizer.h`；
+- `sql/parallel_query/pq_optimizer.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/mysqld.cc`；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- this taskbook and `Docs/pq_tasks/README.md`。
+
+Forbidden files / actions:
+
+- no `sql/sql_optimizer.h` or `sql/sql_optimizer.cc` changes in S2；
+- no direct `JOIN` saved-state fields；
+- no `Filesort` / `Sort_param` construction；
+- no `Filesort::make_sortorder()`；
+- no `HAS_ORDER_BY` relaxation；
+- no `ParallelScanIterator::Read()` change；
+- no worker thread, InnoDB, handler, MQ, or real ORDER BY producer wiring。
+
+Proposed coding shape:
+
+- add a debug-only helper such as
+  `pq_run_saved_order_group_restore_smoke(Query_block *, JOIN *)`；
+- helper captures the initial S1 contract；
+- helper snapshots a small scalar subset on the stack, for example
+  `simple_order`, `simple_group`, `skip_sort_order`,
+  `need_tmp_before_win`, and `select_distinct`；
+- helper temporarily flips only those scalar fields in a reversible way；
+- helper restores the original scalar values unconditionally before return；
+- helper rebuilds the S1 contract and verifies restored values match the
+  initial snapshot；
+- helper reports success only for this scalar restore proof and still reports
+  the full commercial saved ORDER/GROUP helper layer as unsupported。
+
+Required observability:
+
+- new status counters:
+  `Parallel_saved_order_group_restore_smoke_attempts`；
+  `Parallel_saved_order_group_restore_smoke_success`；
+  `Parallel_saved_order_group_restore_smoke_unsupported`。
+  The `success` counter means only "scalar perturb/restore smoke succeeded"；
+  it does not mean commercial saved ORDER/GROUP helper readiness。
+- DBUG flag:
+  `pq_saved_order_group_restore_smoke`。
+- MTR:
+  - first run a matching ORDER BY `EXPLAIN` without DBUG and verify restore
+    smoke counters do not grow；
+  - run an ORDER BY `EXPLAIN` under the DBUG flag；
+  - verify restore smoke attempts/success grow；
+  - verify S1 contract unsupported still grows or remains explicitly
+    fail-closed；
+  - verify `Parallel_queries_executed`,
+    `Parallel_workers_launched`, and `Parallel_ranges_dispatched` do not grow；
+  - verify `pq_commercial_order_by` still reports
+    `Not parallel HAS_ORDER_BY`。
+
+Required validation for coding:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_saved_order_group_contract \
+  pq_commercial_order_by pq_stats --parallel=1 \
+  --vardir=/tmp/pqv_m11e5ds2_target --tmpdir=/tmp/pqt_m11e5ds2_target
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11e5ds2_full --tmpdir=/tmp/pqt_m11e5ds2_full
+```
+
+Acceptance checklist:
+
+- no source edits before design review；
+- smoke is debug-only and reversible；
+- scalar restore proof does not imply full commercial helper readiness；
+- user-visible ORDER BY remains serial；
+- next step after S2 is S3 clone-copy contract, not Filesort construction。
+
+Review request:
+
+- confirm the scalar perturb/restore smoke is safe enough for S2；
+- confirm S2 must not modify `sql/sql_optimizer.*`；
+- confirm the proposed counters/MTR prove no user-visible activation；
+- confirm full commercial saved ORDER/GROUP helper readiness remains
+  unsupported until S3 and later helper ownership review。
+
+Design Review - M11-E5d-S2 first pass:
+
+- Review Agent verdict: `REVISE`；
+- required stronger perturb/restore constraints:
+  - use RAII/scope guard for restore across early returns；
+  - no complex function calls inside the perturb window；
+  - only trivially reversible scalar fields may be changed；
+  - no pointer/list/QEP_TAB/AccessPath/MEM_ROOT ownership fields；
+  - rebuild S1 contract after restore and compare captured scalars；
+  - success must not imply commercial helper readiness or `READY` status；
+- confirmed S2 must not modify `sql/sql_optimizer.*`；
+- requested MTR include a no-DBUG negative window proving restore counters do
+  not grow by default；
+- confirmed next step remains S3 clone-copy contract, not Filesort
+  construction。
+
+Design Review - M11-E5d-S2 re-review:
+
+- Review Agent verdict: `ACCEPT`；
+- confirmed RAII/scope-guard restore and early-return coverage are required；
+- confirmed perturb window may only perform local assignments/checks and must
+  not call optimizer/executor/EXPLAIN/diagnostic/tracing/MTR-visible functions；
+- confirmed pointer/list/QEP_TAB/AccessPath/TABLE/handler/MEM_ROOT fields are
+  forbidden；
+- confirmed restore must rebuild S1 contract and compare captured scalars；
+- confirmed success means only scalar perturb/restore smoke success and never
+  commercial helper readiness or `READY`；
+- confirmed no-DBUG negative MTR and hard bans on `sql/sql_optimizer.*`,
+  Filesort construction, `HAS_ORDER_BY` relaxation, `Read()` changes, worker,
+  handler, MQ, or real ORDER BY producer wiring；
+- next step: code S2 under this design, then proceed to S3 clone-copy contract。
 
 ## Risk Areas
 
