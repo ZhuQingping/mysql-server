@@ -7473,6 +7473,208 @@ Docs/Source Review - M11-E5r:
   `default_ordered_read_ready=false`, and `HAS_ORDER_BY` serial rejection；
 - confirmed docs-only scope is safe to commit。
 
+### M11-E5s: Wait / Kill / Detach / Error Policy Inventory
+
+Status: Code/Doc/Test Review accepted；ready to commit。
+
+Goal:
+
+- define the ORDER BY `Exchange_sort` wait/kill/detach/error policy before
+  any default ordered read path；
+- compare current controlled reader states with the commercial blocking wait
+  and kill/error behavior；
+- decide whether the next coding step can be limited to private diagnostics
+  and controlled smoke；
+- keep visible ORDER BY PQ blocked。
+
+Current branch inventory:
+
+- `read_ordered_record_stream_shape()` distinguishes:
+  - `ROW`；
+  - `EOF_REACHED`；
+  - `WOULD_BLOCK`；
+  - `DETACHED`；
+  - `ERROR`。
+- `run_orderby_streaming_heap_read_smoke()` and
+  `run_orderby_ordered_reader_skeleton_smoke()` already cover:
+  - `WOULD_BLOCK` without producing a row or EOF；
+  - ordered rows after the missing worker produces data；
+  - `EOF_REACHED` after all workers finish；
+  - `ERROR` frame propagation；
+  - producer detach propagation；
+  - per-state counters for finishes, would-blocks, errors, detaches, refills,
+    heap replace, and heap remove。
+- `run_orderby_ordered_diag_skeleton_smoke()` only reports
+  `kill_not_wired=1`；
+- existing `Parallel_exchange_sort_ordered_diag_kill_not_wired` status is a
+  negative diagnostic, not readiness evidence；
+- `pq_build_orderby_execution_preflight()` keeps
+  `kill_detach_error_diagnostics_ready=false`；
+- visible ORDER BY SQL remains blocked by `HAS_ORDER_BY` and by the central
+  execution preflight blocker。
+
+Commercial reference inventory:
+
+- commercial MQ event wait loops check `thd->is_killed()` while spinning and
+  waiting；
+- commercial `Exchange_nosort::read_next()` loops while
+  `!thd->is_killed() && !thd->pq_error`；
+- commercial reader waits on receiver event after a full round with no data；
+- commercial MQ send/receive loops return `MQ_DETACHED` on PQ error or detached
+  status；
+- commercial `Exchange_sort::load_group_record()` treats `MQ_DETACHED` as a
+  completed worker, `MQ_WOULD_BLOCK` as temporary no data, and otherwise loads
+  the message；
+- commercial `Exchange_sort::get_min_record()` can block while building the
+  initial heap to ensure every active worker has an initial record or terminal
+  state。
+
+Decision draft:
+
+- do not open default ORDER BY `Read()` in E5s；
+- do not set `kill_detach_error_diagnostics_ready=true`；
+- do not wire real THD kill polling into ORDER BY default path yet；
+- the next coding task, if accepted by review, should be limited to private
+  diagnostics describing the current missing kill/wait pieces and proving that
+  `WOULD_BLOCK`, `DETACHED`, and `ERROR` stay distinguishable through the
+  default-heap-reader-shaped helper；
+- if Review finds the current diagnostics already sufficient, E5s should remain
+  docs-only and the next coding split should be handler-ref or real wait-owner
+  design。
+
+Allowed files for E5s design:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Allowed files for a later reviewed private-diagnostic coding step:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- the same task docs；
+- focused `pq_commercial_order_by_frames` MTR only if a new private smoke
+  counter is added。
+
+Forbidden:
+
+- optimizer preflight readiness changes；
+- `HAS_ORDER_BY` serial boundary changes；
+- default `ParallelScanIterator::Read()` ORDER BY path；
+- `Gather_operator::init()` default `Exchange_sort` selection；
+- handler/InnoDB, worker launch, PQWR, `Query_result_mq`, AccessPath, executor,
+  sysvar, or public visible SQL behavior changes；
+- treating `kill_not_wired` as readiness。
+
+Hard gates:
+
+- `kill_detach_error_diagnostics_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- `default_ordered_read_ready=false`；
+- `rowid_tiebreak_ready=false`；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`；
+- normal ORDER BY SQL must not increase executed / worker / range counters。
+
+Minimum validation for any E5s private-diagnostic coding:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  `TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl --suite=parallel_query pq_commercial_order_by_frames pq_commercial_order_by pq_stats --parallel=1 --vardir=/tmp/pqv_m11e5s --tmpdir=/tmp/pqt_m11e5s`；
+- full `parallel_query` suite before commit if source changes touch
+  `exchange_sort.*`。
+
+Review questions:
+
+- should E5s remain design-only because current negative diagnostics already
+  cover `kill_not_wired`；
+- or should E5s add a private diagnostic contract that reports:
+  `would_block_distinct_from_eof`, `detach_cleans_up`, `error_cleans_up`,
+  `kill_polling_not_wired`；
+- whether such a diagnostic belongs in source smoke only or should add MTR
+  counters。
+
+Design/Source Review - M11-E5s:
+
+- Review Agent verdict: `ACCEPT` for extremely narrow fail-closed coding；
+- allowed only private diagnostic state / private DBUG smoke / optional smoke
+  counters；
+- forbidden to implement real wait/kill or set any ORDER BY default-path
+  readiness flag；
+- confirmed current branch already distinguishes `WOULD_BLOCK`, `DETACHED`,
+  and `ERROR` in private ORDER BY reader statuses；
+- confirmed kill remains explicit `kill_not_wired` and must not be reported as
+  ready；
+- confirmed commercial wait/kill/error policy spans MQ event wait,
+  `thd->is_killed()`, `pq_error`, worker ERROR, detach, and iterator `Read()`
+  checks, so it cannot be implemented inside `Exchange_sort` alone。
+
+Implementation - M11-E5s:
+
+- added private `PQ_orderby_ordered_diag_contract_shape`；
+- added private `run_orderby_ordered_diag_contract_smoke()`；
+- the private diagnostic contract verifies:
+  - `WOULD_BLOCK` is distinct from EOF and preserves the default heap reader
+    state；
+  - `ERROR` returns terminal ERROR and then cleanup makes the default helper
+    return `DISABLED`；
+  - `DETACHED` returns terminal DETACHED and then cleanup makes the default
+    helper return `DISABLED`；
+  - kill polling is still not wired；
+  - default ordered read is still not ready；
+  - diagnostics readiness remains false。
+- `run_orderby_ordered_diag_skeleton_smoke()` now calls the private diagnostic
+  contract and still returns only `kill_not_wired=1` to the existing DBUG smoke
+  counter path；
+- no new public counters, sysvars, MTR files, optimizer changes, preflight
+  readiness changes, `HAS_ORDER_BY` changes, default `read_mq_message()`
+  changes, iterator changes, handler/InnoDB changes, PQWR changes, or
+  `Query_result_mq` changes。
+
+Validation - M11-E5s:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`
+  plus `shutdown_report`；
+- full `parallel_query` suite passed: 89/89。
+
+Completion Report - M11-E5s:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added private diagnostic shape and smoke；
+  - strengthened existing ordered diagnostic smoke without widening public
+    observability；
+  - preserved all fail-closed default gates。
+- residual risk:
+  - real THD kill polling, blocking wait policy, worker-thread error
+    propagation, and default ordered `Read()` remain unimplemented；
+  - `kill_detach_error_diagnostics_ready` remains false by design。
+
+Code/Doc/Test Review - M11-E5s:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: none；
+- confirmed `PQ_orderby_ordered_diag_contract_shape` and
+  `run_orderby_ordered_diag_contract_smoke()` are private smoke-only helpers；
+- confirmed the diagnostic contract covers `WOULD_BLOCK` distinct from EOF,
+  `ERROR` cleanup to `DISABLED`, `DETACHED` cleanup to `DISABLED`, and keeps
+  kill/default-read/diagnostics readiness false；
+- confirmed `run_orderby_ordered_diag_skeleton_smoke()` still only exposes
+  `kill_not_wired=1` through the existing DBUG diagnostic path；
+- confirmed no `pq_optimizer.*`, `HAS_ORDER_BY`, default `read_mq_message()`,
+  iterator `Read()`, `Gather_operator`, `Query_result_mq`, PQWR,
+  handler/InnoDB, sysvar, or public counter changes；
+- confirmed fail-closed preflight remains intact:
+  `default_ordered_read_ready=false` and
+  `kill_detach_error_diagnostics_ready=false`；
+- full `parallel_query` suite passed after review: 89/89。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

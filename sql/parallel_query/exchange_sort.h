@@ -220,6 +220,15 @@ struct PQ_orderby_materializer_owner_shape {
   bool restored{false};
 };
 
+struct PQ_orderby_ordered_diag_contract_shape {
+  bool would_block_distinct_from_eof{false};
+  bool error_cleanup_ready{false};
+  bool detach_cleanup_ready{false};
+  bool kill_polling_wired{false};
+  bool default_read_ready{false};
+  bool diagnostics_ready{false};
+};
+
 constexpr uint32 PQ_ORDERBY_FRAME_MAGIC = 0x50514f46;  // "PQOF"
 constexpr uint16 PQ_ORDERBY_FRAME_VERSION = 1;
 
@@ -392,6 +401,8 @@ class Exchange_sort final : public Exchange {
   bool read_default_ordered_record_heap_shape(
       std::vector<uchar> *row_image, PQ_orderby_ordered_read_status *status);
   bool run_orderby_default_heap_reader_contract_smoke();
+  bool run_orderby_ordered_diag_contract_smoke(
+      PQ_orderby_ordered_diag_contract_shape *diag);
   bool init_orderby_materializer_owner_shape(TABLE *leader_table);
   bool materialize_ordered_record_owner_shape(
       TABLE *leader_table, const std::vector<uchar> &row_image,

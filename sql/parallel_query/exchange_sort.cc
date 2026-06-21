@@ -2812,6 +2812,124 @@ bool Exchange_sort::run_orderby_default_heap_reader_contract_smoke() {
   return failed;
 }
 
+bool Exchange_sort::run_orderby_ordered_diag_contract_smoke(
+    PQ_orderby_ordered_diag_contract_shape *diag) {
+  if (diag == nullptr) return true;
+  *diag = PQ_orderby_ordered_diag_contract_shape{};
+
+  constexpr uint32 kWorkers = 3;
+  constexpr uint32 kSortOrderLength = 2;
+  constexpr uint32 kMaxRecordLength = 64;
+  constexpr uint32 kRefLength = 8;
+  const uint32 rowid = 1;
+  const int64 record_low = 100;
+  const int64 record_high = 200;
+  const int64 key_low = 1;
+  const int64 key_high = 2;
+
+  std::vector<uchar> row_image;
+  PQ_orderby_ordered_read_status status =
+      PQ_orderby_ordered_read_status::ERROR;
+
+  auto setup_exchange = [&](Exchange_sort *exchange) {
+    return exchange == nullptr || exchange->init() ||
+           exchange->init_real_init_state_owner_shape(
+               kWorkers, /*stable_output=*/true, /*index_sort=*/false,
+               kSortOrderLength, kMaxRecordLength, kRefLength) ||
+           exchange->allocate_real_init_buffers_shape() ||
+           exchange->init_orderby_heap_reader_state_shape(
+               kWorkers, /*descending=*/false);
+  };
+
+  auto enable_default_heap_reader = [](Exchange_sort *exchange) {
+    exchange->m_orderby_rich_status_shape_enabled = true;
+    exchange->m_orderby_default_heap_reader_shape_enabled = true;
+  };
+
+  bool failed = false;
+  Exchange_sort would_block_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  failed = setup_exchange(&would_block_exchange);
+  if (!failed) {
+    enable_default_heap_reader(&would_block_exchange);
+    PQ_orderby_worker_frame_producer_owner worker0{
+        would_block_exchange.get_mq_handle(0), 0};
+    PQ_orderby_worker_frame_producer_owner worker2{
+        would_block_exchange.get_mq_handle(2), 2};
+    failed =
+        pq_orderby_worker_frame_producer_owner_emit_row(
+            &worker0, &record_high, sizeof(record_high), &rowid,
+            sizeof(rowid), key_high) ||
+        pq_orderby_worker_frame_producer_owner_finish(&worker0) ||
+        pq_orderby_worker_frame_producer_owner_emit_row(
+            &worker2, &record_low, sizeof(record_low), &rowid, sizeof(rowid),
+            key_low) ||
+        pq_orderby_worker_frame_producer_owner_finish(&worker2);
+  }
+  if (!failed) {
+    failed = would_block_exchange.read_default_ordered_record_heap_shape(
+        &row_image, &status);
+    diag->would_block_distinct_from_eof =
+        !failed && status == PQ_orderby_ordered_read_status::WOULD_BLOCK &&
+        row_image.empty() &&
+        would_block_exchange.m_orderby_default_heap_reader_shape_enabled;
+  }
+  would_block_exchange.cleanup_order_gather_shape();
+  would_block_exchange.cleanup();
+
+  Exchange_sort error_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed) failed = setup_exchange(&error_exchange);
+  if (!failed) {
+    enable_default_heap_reader(&error_exchange);
+    PQ_orderby_worker_frame_producer_owner worker0{
+        error_exchange.get_mq_handle(0), 0};
+    failed = pq_orderby_worker_frame_producer_owner_error(&worker0) ||
+             error_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status);
+    const bool saw_error =
+        !failed && status == PQ_orderby_ordered_read_status::ERROR &&
+        row_image.empty();
+    if (!failed) {
+      failed = error_exchange.read_default_ordered_record_heap_shape(
+          &row_image, &status);
+    }
+    diag->error_cleanup_ready =
+        saw_error && !failed &&
+        status == PQ_orderby_ordered_read_status::DISABLED &&
+        row_image.empty();
+  }
+  error_exchange.cleanup_order_gather_shape();
+  error_exchange.cleanup();
+
+  Exchange_sort detached_exchange(kWorkers, PQ_MQ_DEFAULT_RING_SIZE);
+  if (!failed) failed = setup_exchange(&detached_exchange);
+  if (!failed) {
+    enable_default_heap_reader(&detached_exchange);
+    PQ_orderby_worker_frame_producer_owner worker0{
+        detached_exchange.get_mq_handle(0), 0};
+    failed = pq_orderby_worker_frame_producer_owner_detach(&worker0) ||
+             detached_exchange.read_default_ordered_record_heap_shape(
+                 &row_image, &status);
+    const bool saw_detach =
+        !failed && status == PQ_orderby_ordered_read_status::DETACHED &&
+        row_image.empty();
+    if (!failed) {
+      failed = detached_exchange.read_default_ordered_record_heap_shape(
+          &row_image, &status);
+    }
+    diag->detach_cleanup_ready =
+        saw_detach && !failed &&
+        status == PQ_orderby_ordered_read_status::DISABLED &&
+        row_image.empty();
+  }
+  detached_exchange.cleanup_order_gather_shape();
+  detached_exchange.cleanup();
+
+  diag->kill_polling_wired = false;
+  diag->default_read_ready = false;
+  diag->diagnostics_ready = false;
+  return failed;
+}
+
 bool Exchange_sort::run_orderby_frame_merge_smoke(uint32 *rows_read,
                                                   uint32 *finishes_read) {
   if (rows_read == nullptr || finishes_read == nullptr) return true;
@@ -3740,11 +3858,13 @@ bool Exchange_sort::run_orderby_ordered_reader_skeleton_smoke(
 bool Exchange_sort::run_orderby_ordered_diag_skeleton_smoke(
     uint32 *kill_not_wired) {
   if (kill_not_wired == nullptr) return true;
-  /*
-    ERROR/DETACHED/WOULD_BLOCK are covered by the ordered reader skeleton. The
-    remaining 4e diagnostic is explicit: ordered default execution has no real
-    THD kill polling or worker-thread propagation wired yet.
-  */
+  PQ_orderby_ordered_diag_contract_shape diag;
+  if (run_orderby_ordered_diag_contract_smoke(&diag)) return true;
+  if (!diag.would_block_distinct_from_eof || !diag.error_cleanup_ready ||
+      !diag.detach_cleanup_ready || diag.kill_polling_wired ||
+      diag.default_read_ready || diag.diagnostics_ready) {
+    return true;
+  }
   *kill_not_wired = 1;
   return false;
 }
