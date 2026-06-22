@@ -50,6 +50,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <vector>
 
 #include "my_dbug.h"
 #include "mysql/psi/mysql_thread.h"
@@ -1330,6 +1331,54 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     cleanup();
     return !(ownership_mismatch_smoke || icp_ownership_mismatch_smoke);
   }
+
+  DBUG_EXECUTE_IF("pq_orderby_worker_handler_ref_positive_smoke", {
+    pq_global_stats.orderby_worker_handler_ref_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+
+    bool converted = false;
+    bool ref_failed = worker->m_open_ctx.worker_table == nullptr ||
+                      worker->m_open_ctx.worker_table->record[0] == nullptr ||
+                      worker->m_open_ctx.worker_handler == nullptr ||
+                      worker->m_open_ctx.worker_handler
+                              ->pq_worker_scan_callback_smoke(
+                                  worker->m_worker_ctx,
+                                  worker->m_open_ctx.worker_table->record[0],
+                                  &converted) != 0 ||
+                      !converted ||
+                      worker->m_open_ctx.worker_handler->ref_length == 0 ||
+                      worker->m_open_ctx.worker_handler->ref == nullptr;
+
+    std::vector<uchar> copied_ref;
+    if (!ref_failed) {
+      worker->m_open_ctx.worker_handler->position(
+          worker->m_open_ctx.worker_table->record[0]);
+      const uint ref_length = worker->m_open_ctx.worker_handler->ref_length;
+      copied_ref.assign(worker->m_open_ctx.worker_handler->ref,
+                        worker->m_open_ctx.worker_handler->ref + ref_length);
+      ref_failed = copied_ref.size() != ref_length;
+    }
+
+    if (!ref_failed &&
+        worker->m_open_ctx.worker_handler->cmp_ref(copied_ref.data(),
+                                                   copied_ref.data()) != 0) {
+      ref_failed = true;
+    }
+
+    if (ref_failed) {
+      pq_global_stats.orderby_worker_handler_ref_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      cleanup();
+      return true;
+    }
+
+    pq_global_stats.orderby_worker_handler_ref_success.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_worker_handler_ref_bytes.fetch_add(
+        copied_ref.size(), std::memory_order_relaxed);
+    pq_global_stats.orderby_worker_handler_ref_cmp_equal.fetch_add(
+        1, std::memory_order_relaxed);
+  });
 
   failed = false;
   cleanup();

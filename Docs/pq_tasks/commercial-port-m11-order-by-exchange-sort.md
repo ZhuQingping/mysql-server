@@ -9006,6 +9006,62 @@ Required review after E6a coding:
 - Docs Review: confirm E6a/E6b/E6c boundaries remain separate；
 - Test Review: confirm no-DBUG and visible ORDER BY negative windows remain。
 
+Completion Report - M11-E6a:
+
+- Status: implementation completed locally；Code / Docs / Test Review accepted；
+- Changed files:
+  - `sql/parallel_query/sql_parallel.{h,cc}`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`；
+  - `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- Implementation:
+  - added E6a status counters:
+    `Parallel_orderby_worker_handler_ref_attempts`,
+    `Parallel_orderby_worker_handler_ref_success`,
+    `Parallel_orderby_worker_handler_ref_unsupported`,
+    `Parallel_orderby_worker_handler_ref_bytes`,
+    `Parallel_orderby_worker_handler_ref_cmp_equal`；
+  - added DBUG-only `pq_orderby_worker_handler_ref_positive_smoke` inside
+    `Gather_operator::run_worker_attach_contract_smoke()` after successful
+    worker `pq_worker_scan_init()`；
+  - the smoke uses existing callback conversion to materialize one current
+    worker record, calls `handler::position(record)`, deep-copies
+    `handler::ref/ref_length`, and verifies `cmp_ref(copied_ref,
+    copied_ref) == 0`；
+  - no `Query_result_mq` frame format or handler-ref wire was changed；
+  - no optimizer eligibility, `HAS_ORDER_BY`, readiness flag, or default
+    `Exchange_sort` behavior was changed。
+- TDD evidence:
+  - RED: before implementation, `pq_worker_attach_contract_smoke` failed
+    because handler-ref attempts / success / bytes / cmp-equal deltas stayed
+    `0`；
+  - GREEN: after implementation, `pq_worker_attach_contract_smoke` passed。
+- Validation:
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `pq_worker_attach_contract_smoke` replay passed；
+  - `pq_stats` replay passed after syncing the new 224-variable result；
+  - full `parallel_query` suite passed 89/89；
+  - `git diff --check` passed。
+- Review:
+  - Review Agent verdict: `ACCEPT`；
+  - confirmed the E6a logic is reachable only through DBUG-gated worker attach
+    smoke；
+  - confirmed no `Query_result_mq` wire, MQ frame definition, `Exchange_sort`,
+    optimizer eligibility, `HAS_ORDER_BY`, readiness flag, or default gather
+    selection changed；
+  - confirmed `position(record)` runs after callback-converted worker current
+    record, `handler::ref` is deep-copied, and `cmp_ref(copied_ref,
+    copied_ref) == 0` is sufficient for this first private contract。
+- Remaining boundary:
+  - E6a proves only private worker handler-ref production and local
+    `cmp_ref(ref, ref)` consumption；
+  - E6b is still required for MQ handler-ref wire；
+  - E6c is still required for `Exchange_sort` comparator integration；
+  - visible ORDER BY PQ remains blocked。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

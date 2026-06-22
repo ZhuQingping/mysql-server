@@ -5,14 +5,15 @@
 ## Current Summary
 
 - Last synced: 2026-06-22
-- Active update: M11-E6a Worker Handler-ref Positive Contract taskbook
-  已启动。M11-E6 docs-only phase selection 已提交为 `68d40b47421`，确认
-  E5r closure / Post-E5r handoff 后必须新开 reviewed phase；下一步最小正
-  路径选择为 worker `position(record)` / handler-ref positive contract。
-  E6a 当前仍是任务书设计，不改源码；它只允许 private/debug-only
+- Active update: M11-E6a Worker Handler-ref Positive Contract
+  本地实现和验证已完成，Code / Docs / Test Review 已 ACCEPT。M11-E6 docs-only
+  phase selection 已提交为 `68d40b47421`，确认 E5r closure / Post-E5r
+  handoff 后必须新开 reviewed phase；E6a 新增 private/debug-only
   `position(record)` + deep-copied handler ref + `cmp_ref(ref, ref)==0`
-  contract，继续禁止 MQ handler-ref wire、默认 `Exchange_sort`、visible
-  ORDER BY PQ、`HAS_ORDER_BY` 放开和 ORDER BY readiness flags 置 true。
+  contract，目标 MTR、`pq_stats` replay 和完整 `parallel_query` suite
+  89/89 已通过。E6a 继续禁止 MQ handler-ref wire、默认 `Exchange_sort`、
+  visible ORDER BY PQ、`HAS_ORDER_BY` 放开和 ORDER BY readiness flags 置
+  true。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
   ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史

@@ -10059,6 +10059,16 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_record_buffer_nonnull_probes,
                                   worker_record_buffer_nonnull_probes)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_icp_record_buffer_reject_probes,
                                   worker_icp_record_buffer_reject_probes)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_worker_handler_ref_attempts,
+                                  orderby_worker_handler_ref_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_worker_handler_ref_success,
+                                  orderby_worker_handler_ref_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_worker_handler_ref_unsupported,
+                                  orderby_worker_handler_ref_unsupported)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_worker_handler_ref_bytes,
+                                  orderby_worker_handler_ref_bytes)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_worker_handler_ref_cmp_equal,
+                                  orderby_worker_handler_ref_cmp_equal)
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
@@ -11993,6 +12003,21 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_icp_record_buffer_reject_probes",
      (char *)&show_pq_worker_icp_record_buffer_reject_probes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_handler_ref_attempts",
+     (char *)&show_pq_orderby_worker_handler_ref_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_handler_ref_bytes",
+     (char *)&show_pq_orderby_worker_handler_ref_bytes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_handler_ref_cmp_equal",
+     (char *)&show_pq_orderby_worker_handler_ref_cmp_equal, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_handler_ref_success",
+     (char *)&show_pq_orderby_worker_handler_ref_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_worker_handler_ref_unsupported",
+     (char *)&show_pq_orderby_worker_handler_ref_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_handler_smoke_runs",
      (char *)&show_pq_worker_handler_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
