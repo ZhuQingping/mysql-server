@@ -10039,6 +10039,10 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_attach_smoke_success,
                                   worker_attach_smoke_success)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_attach_smoke_cleanup_calls,
                                   worker_attach_smoke_cleanup_calls)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_record_buffer_null_probes,
+                                  worker_record_buffer_null_probes)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_record_buffer_nonnull_probes,
+                                  worker_record_buffer_nonnull_probes)
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
@@ -11945,6 +11949,12 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_attach_smoke_success",
      (char *)&show_pq_worker_attach_smoke_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_record_buffer_nonnull_probes",
+     (char *)&show_pq_worker_record_buffer_nonnull_probes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_record_buffer_null_probes",
+     (char *)&show_pq_worker_record_buffer_null_probes, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_handler_smoke_runs",
      (char *)&show_pq_worker_handler_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},

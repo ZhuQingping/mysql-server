@@ -996,7 +996,7 @@ Code / Docs / Test Review:
 
 ### M11-F4: Native Record_buffer / Prefetch Worker-owned Adapter
 
-Status: F4a design taskbook created；awaiting Design / Docs / Source Review。
+Status: F4b completed / Code-Docs-Test Review accepted；ready to commit。
 
 建议性质：docs-only contract first。`Record_buffer` / prefetch 是性能路径，
 不是当前 correctness 前置。F4 不直接打开 native `Record_buffer` positive
@@ -1173,6 +1173,94 @@ Design / Docs / Source Review:
   fallback-before-start, dependent-ref reinit, and fetch-cache cleanup；
 - confirmed F4b can proceed if it remains debug-only/fail-closed and keeps
   the hard stops。
+
+Completion Report - M11-F4b Coding:
+
+Changed files:
+
+- `sql/parallel_query/sql_parallel.h`
+- `sql/parallel_query/sql_parallel.cc`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`
+- `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- Added status counters:
+  `Parallel_worker_record_buffer_null_probes` and
+  `Parallel_worker_record_buffer_nonnull_probes`；
+- added debug flag `pq_worker_record_buffer_probe_smoke` inside
+  `Gather_operator::run_worker_attach_contract_smoke()`；
+- the debug path opens the independent worker TABLE/handler, observes
+  `ha_get_record_buffer()` before `pq_worker_scan_init()`, records null/non-null,
+  then runs cleanup；
+- the debug path does not call `set_record_buffer()`、`pq_worker_scan_init()`、
+  `pq_worker_scan_next()`、worker row production, or MQ enqueue；
+- no native `Record_buffer` positive path was opened。
+
+TDD / RED evidence:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_worker_attach_contract_smoke --parallel=1
+```
+
+Before implementation, the new F4b window failed because
+`record_buffer_null_probe_delta` stayed `0` and
+`record_buffer_ranges_dispatched_delta` was `1`。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_worker_attach_contract_smoke --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_stats --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_stats --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- `mysqld` build passed；
+- targeted F4b MTR passed；
+- `pq_stats` record/replay passed；
+- full `parallel_query` suite passed: 89/89；
+- F4b window produced:
+  `record_buffer_null_probe_delta=1`、
+  `record_buffer_nonnull_probe_delta=0`、
+  `record_buffer_attempt_delta=1`、
+  `record_buffer_success_delta=1`、
+  `record_buffer_cleanup_delta=1`、
+  `record_buffer_queries_executed_delta=0`、
+  `record_buffer_workers_launched_delta=0`、
+  `record_buffer_ranges_dispatched_delta=0`、
+  `record_buffer_secondary_rows_delta=0`；
+- Code / Docs / Test Review accepted。
+
+Code / Docs / Test Review:
+
+- Review Agent verdict: `ACCEPT`；
+- blocking findings: none；
+- confirmed status variables are added to `PQ_global_stats`、reset、SHOW
+  registration and `pq_stats.result`；
+- confirmed `pq_worker_record_buffer_probe_smoke` is DBUG-only, observes only
+  `ha_get_record_buffer()` after independent worker TABLE open, and returns
+  before ownership mismatch branches and `pq_worker_scan_init()`；
+- confirmed MTR covers null probe、nonnull probe、attempt/success/cleanup and
+  executed/workers/ranges-dispatched/secondary rows；
+- confirmed no F4 hard stop was crossed: no `set_record_buffer()`、no
+  `pq_worker_scan_next()` enablement、no native buffer leader sink、no
+  ICP/ref/partition/reverse/MVI expansion；
+- noted non-blocking limitation: F4b proves only the current pre-init worker
+  handler boundary, not future native attach cleanup after scan init / ERROR /
+  KILL / fetch-cache use。
 
 ### M11-F5: Edge Positive Paths Backlog
 

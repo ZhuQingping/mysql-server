@@ -1262,6 +1262,22 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     return true;
   }
 
+  DBUG_EXECUTE_IF("pq_worker_record_buffer_probe_smoke", {
+    if (worker->m_open_ctx.worker_handler != nullptr &&
+        worker->m_open_ctx.worker_handler->ha_get_record_buffer() != nullptr) {
+      pq_global_stats.worker_record_buffer_nonnull_probes.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats.worker_record_buffer_null_probes.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+    failed = false;
+    cleanup();
+    pq_global_stats.worker_attach_smoke_success.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  });
+
   DBUG_EXECUTE_IF("pq_worker_ownership_mismatch_smoke", {
     /* Force the InnoDB ownership gate to reject this debug-only smoke. */
     ownership_mismatch_smoke = true;
