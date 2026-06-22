@@ -8696,8 +8696,7 @@ Planning/Source Review - M11-E5r-5:
 
 ### M11-E5r-6: Worker position(record) Production Design
 
-Status: design-only taskbook drafted from independent Planning/Source Review；
-ready for docs-only commit。
+Status: committed as `19f4899ebf7`；design-only taskbook accepted。
 
 Goal:
 
@@ -8785,6 +8784,39 @@ Planning/Source Review - M11-E5r-6:
   wire；
 - confirmed direct worker `file->position(record)` coding is still blocked；
 - confirmed no build/MTR is required for docs-only E5r-6。
+
+### M11-E5r Closure
+
+Status: design/validation complete；real execution blocked。
+
+Closure summary:
+
+- E5r-1 documented handler ref ownership inventory；
+- E5r-2-pre documented worker `position(record)` / MQ handler-ref format
+  contract；
+- E5r-2a and E5r-2b added private row-id metadata validation and controlled
+  smoke；
+- E5r-3a and E5r-3b documented/refined worker ref lifetime shape；
+- E5r-4 documented `cmp_ref()` comparator compatibility requirements；
+- E5r-5 documented MQ handler-ref wire contract；
+- E5r-6 documented worker `position(record)` production preconditions。
+
+Closure Review:
+
+- Review Agent verdict: `ACCEPT`；
+- E5r should close as `design/validation complete, real execution blocked`；
+- no E5r-7 readiness summary is needed；
+- current source remains fail-closed:
+  - `PQblockScanIterator::Read()` does not call `position(record)`；
+  - `Query_result_mq::send_data()` sends `PQWR` field-value frames only；
+  - ORDER BY preflight keeps `rowid_tiebreak_ready=false`,
+    `default_ordered_read_ready=false`, and
+    `exchange_sort_heap_read_ready=false`；
+  - ordinary ORDER BY remains rejected by `HAS_ORDER_BY`。
+- no safe E5r source coding remains at this point；
+- real `position(record)`, `Query_result_mq` handler-ref wire,
+  `cmp_ref()` comparator, optimizer readiness, and visible ORDER BY PQ all
+  remain blocked until separate reviewed phases。
 
 ## Risk Areas
 
