@@ -9062,6 +9062,97 @@ Completion Report - M11-E6a:
   - E6c is still required for `Exchange_sort` comparator integration；
   - visible ORDER BY PQ remains blocked。
 
+### M11-E6b: MQ Handler-ref Wire Contract
+
+Status: taskbook draft in progress；no source changes yet。
+
+Goal:
+
+- 在 E6a 已证明 worker 可以生成真实 handler ref 后，验证该 ref 可以通过
+  private ORDER BY MQ frame 传输；
+- 只使用 DBUG-only / private `PQOF` ORDER BY frame contract；
+- 保持通用 `PQWR` worker-result field-value frame 不变；
+- 保持 visible ORDER BY PQ 关闭。
+
+Design decision:
+
+- E6b 不直接平移商用 `Query_result_mq::send_data()` 的 stable-output 字段
+  布局到当前 `PQWR` frame；
+- 当前分支已有 `PQ_orderby_frame_header` / `pq_send_orderby_frame()` /
+  `pq_decode_orderby_frame()`，其中 `row_id` payload 已能承载 ORDER BY
+  tie-break bytes；
+- E6b 的最小安全迁移是：把 E6a 深拷贝得到的真实
+  `handler::ref/ref_length` 放入 private `PQOF` frame 的 `row_id` 区段，
+  再由 leader/private decode helper 验证：
+  - frame type is `ROW`；
+  - `row_id_len == ref_length`；
+  - row-id contract source is `HANDLER_REF`；
+  - decoded bytes equal the E6a copied ref；
+  - decoded bytes are deep-copied before worker handler/table cleanup。
+
+Non-goals:
+
+- 不修改 `PQ_worker_result_frame_header`；
+- 不修改 `PQ_orderby_frame_header` 或 `PQOF` flags 语义；
+- `PQ_orderby_row_id_source::HANDLER_REF` 只是 private validation 输入，
+  不是新的 wire metadata；
+- 不改变 `Query_result_mq::send_data()` 默认 behavior；
+- 不把 handler ref 接入 visible worker result path；
+- 不接 `Exchange_sort` heap comparator；
+- 不设置 `rowid_tiebreak_ready=true`；
+- 不放开 `HAS_ORDER_BY`。
+
+Allowed files for E6b code:
+
+- `sql/parallel_query/exchange_sort.{h,cc}`：
+  - private helper/smoke for handler-ref `PQOF` encode/decode；
+  - validation that `PQ_orderby_row_id_source::HANDLER_REF` with
+    `expected_ref_length` succeeds；
+- `sql/parallel_query/sql_parallel.{h,cc}`：
+  - only if the E6b smoke reuses the E6a worker attach window to obtain a real
+    copied handler ref；
+- `sql/mysqld.cc`：
+  - only for new E6b status counters；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- `Docs/pq_tasks/README.md` and this taskbook。
+
+Forbidden files / behavior:
+
+- `sql/parallel_query/query_result_mq.{h,cc}` frame-format changes；
+- `PQOF` header / flags format changes；
+- `sql/parallel_query/pq_optimizer.*` and visible eligibility changes；
+- `sql/sql_optimizer.*`、`sql/sql_executor.*`、`sql/join_optimizer/**`；
+- `sql/handler.*` and `storage/innobase/**`；
+- default `Gather_operator` `Exchange_sort` selection；
+- visible ORDER BY result changes；
+- `cmp_ref()` comparator integration beyond `cmp_ref(ref, ref)` local
+  validation already done in E6a。
+
+TDD plan:
+
+- RED: add DBUG-only MTR assertions for E6b private MQ wire counters:
+  - attempts delta >= 1；
+  - success delta >= 1；
+  - decoded bytes delta > 0；
+  - decoded handler-ref contract success delta >= 1；
+  - decoded row-id bytes equal the E6a copied handler ref；
+  - unsupported delta == 0；
+  - no-DBUG/default-path E6b counters stay 0；
+  - visible ORDER BY still reports `Not parallel HAS_ORDER_BY` in existing
+    ORDER BY guards；
+  - no default `Query_result_mq` / `PQWR` behavior changes。
+- Before implementation, this RED must fail on E6b success/bytes counters
+  staying `0`；
+- GREEN: implement only the private `PQOF` handler-ref encode/decode smoke；
+- replay focused MTR, `pq_stats`, and full `parallel_query` suite。
+
+Required review after E6b coding:
+
+- Code Review: confirm `PQWR` and `Query_result_mq::send_data()` are unchanged；
+- Docs Review: confirm E6b does not claim visible ORDER BY readiness；
+- Test Review: confirm E6b is DBUG-only and existing visible ORDER BY negative
+  guards remain。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
