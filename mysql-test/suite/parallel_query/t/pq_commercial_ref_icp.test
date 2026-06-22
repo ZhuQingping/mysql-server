@@ -1257,6 +1257,10 @@ SET @f3_partition_secondary_rows_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @f3_partition_reject_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_partition_reject_probes');
 
 --disable_warnings
 --replace_column 10 #
@@ -1321,7 +1325,12 @@ SELECT
       FROM performance_schema.global_status
       WHERE variable_name = 'Parallel_secondary_rows_produced') -
       @f3_partition_secondary_rows_before
-    AS f3_partition_secondary_rows_delta;
+    AS f3_partition_secondary_rows_delta,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_partition_reject_probes') -
+      @f3_partition_reject_before) >= 3
+    AS f3_partition_reject_probe_seen;
 
 # M9-F4: secondary-index MIN / first-row shortcuts are optimizer shortcuts,
 # not the current PQ secondary row-production path. Keep them observable and

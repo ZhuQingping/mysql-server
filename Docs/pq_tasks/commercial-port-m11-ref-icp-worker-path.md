@@ -5,9 +5,10 @@
 Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage accepted；
 M11-F5a secondary MIN / optimizer shortcut source inventory completed and
 accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic completed and
-committed；F5-A reverse boundary contract completed and committed；next task is
-F5-C partition worker ownership docs-first design；real worker-side ICP positive row production
-remains blocked。
+committed；F5-A reverse boundary contract completed and committed；F5-C
+partition worker ownership design completed and committed；next task is F5-C1
+debug-only partition reject diagnostic；real worker-side ICP positive row
+production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -1364,7 +1365,7 @@ Completed / blocked before this priority:
 
 #### Proposed M11-F5-C: Partition Worker Ownership Design
 
-Status: docs-only taskbook drafted；waiting Design / Source / Test Review。
+Status: docs-only taskbook accepted；committed as `011cec1e30f`。
 
 Goal:
 
@@ -1504,8 +1505,166 @@ Recommended Next Coding Task After Review:
 Validation:
 
 - 本阶段只做文档 review，不运行 build/MTR；
-- Design / Source / Test Review Agent 必须返回 `ACCEPT` 后才能提交；
+- Design / Source / Test Review Agent returned `ACCEPT` after one revision；
 - 若 review 认为要编码，必须另起 M11-F5-C1 coding taskbook。
+
+Review:
+
+- Initial verdict: `REVISE`；
+- blocking finding: F3 dependent-ref partition join is rejected by
+  `MULTI_TABLE`, not `PARTITIONED_TABLE`；
+- fixed by limiting F3 `PARTITIONED_TABLE` wording and C1 counter semantics to
+  single-table partition rejection；
+- final verdict: `ACCEPT`；
+- safe next task: M11-F5-C1 debug-only partition reject diagnostic at
+  `pq_check_single_table()`。
+
+#### Proposed M11-F5-C1: Debug-only Partition Reject Diagnostic Taskbook
+
+Status: implemented；build and MTR validation passed；waiting Code / Docs /
+Test Review。
+
+Goal:
+
+- Add a narrow partition-specific reject diagnostic at the existing
+  single-table eligibility reject point；
+- prove partition full/range/ref single-table shapes remain rejected as
+  `PARTITIONED_TABLE` and do not enter PQ execution / worker / range /
+  secondary row production；
+- keep dependent-ref partition join as `MULTI_TABLE` fail-closed and exclude it
+  from partition reject counter requirements；
+- do not open any partition positive PQ path。
+
+Allowed Files:
+
+- `sql/parallel_query/pq_optimizer.cc`，仅允许在
+  `pq_check_single_table()` 的 `share->m_part_info != nullptr` reject 分支
+  增加 counter increment；
+- `sql/parallel_query/sql_parallel.h`，仅允许新增一个
+  `PQ_global_stats` atomic counter 和 `reset()` 清零；
+- `sql/mysqld.cc`，仅允许新增 SHOW STATUS helper / entry；
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Forbidden Files:
+
+- `sql/handler.*`
+- `sql/sql_executor.*`
+- `sql/sql_select.*`
+- `sql/join_optimizer/**`
+- `sql/range_optimizer/**`
+- `sql/parallel_query/pq_iterators.cc`
+- `sql/parallel_query/pq_clone.*`
+- `sql/parallel_query/exchange*`
+- `sql/parallel_query/query_result_mq.*`
+- `storage/innobase/**`
+- any `ha_innopart` implementation or header；
+- any partition pruning / range dispatch / worker TABLE / handler / prebuilt
+  ownership code；
+- any native `Record_buffer`、ICP、MVI、reverse positive path。
+
+Counter Semantics:
+
+- Add one status variable:
+  `Parallel_partition_reject_probes`；
+- increment exactly when `pq_check_single_table()` rejects a single-table
+  candidate because `share->m_part_info != nullptr`；
+- do not increment for multi-table queries, including the F3 dependent-ref
+  partition join that is rejected earlier as `MULTI_TABLE`；
+- do not increment from iterator factories, handler, InnoDB, MTR-only hooks,
+  `ha_innopart`, or partition pruning code；
+- counter increment must not alter `pq_reject()` reason, execution state,
+  AccessPath / iterator selection, handler calls, or fallback behavior。
+
+MTR Requirements:
+
+- Extend `pq_commercial_ref_icp` F3 window；
+- capture `Parallel_partition_reject_probes` before F3；
+- after the existing full/range/ref/dependent-ref SQL:
+  - assert partition reject delta is at least 3 for the single-table
+    full/range/ref shapes；
+  - do not require the delta to include the dependent-ref join；
+  - keep existing generic deltas at 0:
+    - `Parallel_queries_executed`；
+    - `Parallel_workers_launched`；
+    - `Parallel_ranges_built`；
+    - `Parallel_ranges_dispatched`；
+    - `Parallel_secondary_rows_produced`；
+- update `pq_stats.result` for the new status variable；
+- do not add or migrate commercial `pq_partition` positive tests。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test && ./mtr parallel_query.pq_commercial_ref_icp --record
+cd build-ninja/mysql-test && ./mtr parallel_query.pq_commercial_ref_icp
+cd build-ninja/mysql-test && ./mtr parallel_query.pq_stats --record
+cd build-ninja/mysql-test && ./mtr parallel_query.pq_stats
+cd build-ninja/mysql-test && ./mtr --suite=parallel_query --parallel=1
+```
+
+Hard Stops:
+
+- If implementing the counter requires touching `ha_innopart` or
+  `storage/innobase/**`, stop；
+- if dependent-ref partition join requires special handling to grow the counter,
+  stop and keep it excluded；
+- if any generic execution / worker / range / secondary-row counter grows for
+  F3 partition shapes, stop；
+- if `PARTITIONED_TABLE` EXPLAIN reason changes for single-table partition
+  full/range/ref, stop；
+- if `MULTI_TABLE` reason changes for the dependent-ref partition join, stop。
+
+Acceptance:
+
+- Design / Source / Test Review Agent returned `ACCEPT`；
+- after coding, Code / Docs / Test Review Agent returns `ACCEPT`；
+- no source changes outside Allowed Files；
+- build and targeted/full MTR validation pass。
+
+Design Review:
+
+- Verdict: `ACCEPT`；
+- Coding recommendation: `CODE`；
+- accepted semantics: counter increments only for single-table
+  `PARTITIONED_TABLE` rejects at `pq_check_single_table()`；
+- dependent-ref partition join stays excluded because it is rejected earlier as
+  `MULTI_TABLE`；
+- non-blocking note: `Parallel_partition_reject_probes >= 3` is intentionally
+  loose because EXPLAIN and SELECT may both evaluate eligibility；
+- non-blocking note: this is diagnostic-only, implemented as a normal PQ SHOW
+  STATUS variable to match existing PQ counter style, not `#ifndef NDEBUG` only。
+
+Implementation Summary:
+
+- Added `PQ_global_stats::partition_reject_probes` and reset plumbing；
+- added SHOW STATUS variable `Parallel_partition_reject_probes`；
+- incremented the counter only in `pq_check_single_table()` when
+  `share->m_part_info != nullptr` returns `PARTITIONED_TABLE`；
+- extended `pq_commercial_ref_icp` F3 window to capture the counter baseline
+  and assert single-table partition rejects are observed；
+- updated `pq_stats.result` for the new status variable；
+- no `ha_innopart`、partition pruning、worker ownership、InnoDB、Record_buffer、
+  ICP、MVI、reverse or positive partition execution path changed。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `cd build-ninja/mysql-test && ./mtr parallel_query.pq_commercial_ref_icp --record`
+  passed；
+- `TMPDIR=/tmp ./mtr parallel_query.pq_commercial_ref_icp --vardir=/tmp/pqv_c1_ref --tmpdir=/tmp/pqt_c1_ref`
+  passed；
+- `TMPDIR=/tmp ./mtr parallel_query.pq_stats --record --vardir=/tmp/pqv_c1_stats_record --tmpdir=/tmp/pqt_c1_stats_record`
+  executed SQL and updated result, but MTR reported a record-copy failure while
+  copying the log into the result file；
+- `TMPDIR=/tmp ./mtr parallel_query.pq_stats --vardir=/tmp/pqv_c1_stats --tmpdir=/tmp/pqt_c1_stats`
+  passed；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_c1_full --tmpdir=/tmp/pqt_c1_full`
+  passed, 89/89。
 
 Agent Review Prompt:
 

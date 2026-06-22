@@ -2004,6 +2004,8 @@ static bool pq_check_single_table(Table_ref *table_ref,
 
   // Must not be partitioned
   if (share->m_part_info != nullptr) {
+    pq_global_stats.partition_reject_probes.fetch_add(
+        1, std::memory_order_relaxed);
     return pq_reject(info, PQUnsuiteReason::PARTITIONED_TABLE,
                      "table is partitioned");
   }
