@@ -8373,8 +8373,8 @@ Design/Source Review - M11-E5r-3a:
 
 ### M11-E5r-3b: Private Handler-ref Lifetime Validation Shape
 
-Status: implementation completed；focused MTR passed；Code/Doc/Test Re-review
-accepted；ready for commit。
+Status: committed as `ed0bfc591b5`；focused MTR passed；Code/Doc/Test
+Re-review accepted。
 
 Goal:
 
@@ -8501,6 +8501,94 @@ Code/Doc/Test Re-review - M11-E5r-3b:
 - confirmed no source changes to `file->ref` reads, `position(record)`,
   `PQOF` / `PQWR` wire headers, `Query_result_mq`, iterators, Gather,
   optimizer, `HAS_ORDER_BY`, or public counters/status。
+
+### M11-E5r-4: cmp_ref() Comparator Compatibility Design
+
+Status: design-only taskbook drafted from independent Planning/Source Review；
+ready for docs-only commit。
+
+Goal:
+
+- document why comparator coding remains blocked；
+- define the compatibility requirements before any future
+  `handler::cmp_ref()` use；
+- prevent synthetic row ids or byte-vector ordering from being mistaken for
+  handler-ref stable ordering；
+- keep visible ORDER BY PQ and all real comparator/execution changes blocked。
+
+Current branch findings:
+
+- `rowid_tiebreak_ready=false` and `default_ordered_read_ready=false` remain
+  false in optimizer preflight；
+- ordinary SQL ORDER BY still reaches the `HAS_ORDER_BY` serial rejection；
+- current `Exchange_sort` comparator uses byte-vector `sort_key`, byte-vector
+  `row_id`, and worker id in controlled smoke paths；
+- current branch has no real worker `position(record)` production；
+- current branch has no `Query_result_mq` handler-ref deep-copy wire；
+- E5r-3b validates only metadata/lifetime shape and does not prove refs are
+  comparable by a leader handler。
+
+Comparator compatibility requirements:
+
+- comparator inputs must be deep-copied handler refs, not synthetic row ids；
+- both refs must have validated `ref_length` matching the comparator handler；
+- leader handler must be compatible by engine, table shape, ref format, and
+  partition semantics；
+- handler lifetime and table ownership must outlive the comparator use；
+- partitioned refs require explicit design before comparison；
+- InnoDB primary-key refs are type-aware under `cmp_ref()`；
+- generated row-id refs may use byte comparison inside the handler, but that
+  does not make generic byte-vector ordering equivalent；
+- comparator failure must remain fail-closed and must not fall back to a
+  synthetic total order for visible SQL。
+
+Future private helper prerequisites:
+
+- real handler-ref production design reviewed；
+- MQ ref deep-copy wire reviewed；
+- leader handler ownership / compatibility reviewed；
+- metadata can prove `HANDLER_REF`, stable output, expected `ref_length`, deep
+  copy, and no detach/advance risk；
+- helper remains private/non-default until visible ORDER BY execution is
+  separately reviewed。
+
+Allowed files for E5r-4:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Forbidden:
+
+- `exchange_sort.*` comparator coding；
+- `query_result_mq.*` changes；
+- `pq_iterators.*` changes；
+- `Gather_operator` changes；
+- `pq_optimizer.*` readiness or `HAS_ORDER_BY` serial-boundary relaxation；
+- handler/InnoDB, AccessPath, executor, sysvar, or public counter changes；
+- any visible ORDER BY PQ path。
+
+Hard gates:
+
+- `rowid_tiebreak_ready=false`；
+- `default_ordered_read_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`。
+
+Validation for E5r-4:
+
+- docs-only；
+- `git diff --check` before commit；
+- no build/MTR required unless source or test files change。
+
+Planning/Source Review - M11-E5r-4:
+
+- Review Agent verdict: `ACCEPT` for docs-only design；
+- recommended E5r-4 docs-only as the next smallest safe task；
+- explicitly rejected E5r-4a private comparator shape helper for now；
+- confirmed direct comparator helper coding may create false evidence before
+  worker ref production, MQ ref wire, and leader handler compatibility are
+  proven；
+- confirmed real `cmp_ref()` comparator and visible ORDER BY PQ remain blocked。
 
 ## Risk Areas
 
