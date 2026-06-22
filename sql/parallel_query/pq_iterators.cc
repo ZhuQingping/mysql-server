@@ -318,6 +318,13 @@ void pq_record_buffer_probe(TABLE *table) {
   }
 }
 
+void pq_secondary_reverse_ref_reject_probe() {
+  pq_global_stats.secondary_reverse_reject_probes.fetch_add(
+      1, std::memory_order_relaxed);
+  pq_global_stats.secondary_reverse_ref_reject_probes.fetch_add(
+      1, std::memory_order_relaxed);
+}
+
 class PQ_record_buffer_sink final : public PQ_row_sink {
  public:
   PQ_record_buffer_sink(TABLE *leader_table,
@@ -1340,6 +1347,10 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRefIterator(
   Index_lookup *ref = param.ref;
 
   if (!is_root_ref) {
+    if (param.reverse) {
+      pq_secondary_reverse_ref_reject_probe();
+      return nullptr;
+    }
     if (pq_secondary_dependent_ref_gate_is_safe(join, path, param.reverse) &&
         pq_secondary_ref_is_dependent_scaffold_candidate(table, ref)) {
       bool dependent_ref_smoke_enabled = false;
@@ -1358,6 +1369,11 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRefIterator(
     return nullptr;
   }
 
+  if (param.reverse) {
+    pq_secondary_reverse_ref_reject_probe();
+    return nullptr;
+  }
+
   if (!join->plan_is_single_table() || join->query_block == nullptr ||
       !join->query_block->is_simple_query_block() ||
       join->query_block->is_ordered() ||
@@ -1370,7 +1386,7 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRefIterator(
     return nullptr;
   }
 
-  if (param.reverse || table == nullptr || table->s == nullptr ||
+  if (table == nullptr || table->s == nullptr ||
       table->file == nullptr || table->key_info == nullptr ||
       table->s->db_type() != innodb_hton || table->part_info != nullptr ||
       table->file->pushed_idx_cond != nullptr || ref == nullptr) {

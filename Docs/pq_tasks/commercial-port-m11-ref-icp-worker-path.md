@@ -82,7 +82,7 @@ blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
 
 ## M11-F0: Worker Path Continuation Contract
 
-Status: design-only / read-only。
+Status: design-only / read-only；Design Review accepted。
 
 目标：
 
@@ -125,12 +125,26 @@ Status: design-only / read-only。
 - 文档明确 M11-F1 是 probe/guard-only 还是可编码正例；
 - 不改变源码和 MTR。
 
+Review:
+
+- Design / Docs / Source Review Agent returned `ACCEPT`；
+- confirmed current M9 capabilities are leader-local with `workers/ranges=0`；
+- confirmed commercial worker-side ref/ICP is materially different because it
+  depends on `PQRefIterator`, per-ref range building, `ha_pq_next()` /
+  `pq_worker_scan_next()`, worker handler/prebuilt state, cloned
+  `pushed_idx_cond`, and worker pull-row state；
+- recommended next step is M11-F1 as probe/guard-only；
+- explicitly rejected copying commercial `PQRefIterator::Read()`, calling real
+  `pq_worker_scan_next()`, or introducing worker-side ICP clone/refix in F1。
+
 ## 初步任务拆分
 
 ### M11-F1: Worker-side Ref/ICP Shape Probe
 
-建议性质：probe/guard-only，F0 review 通过后再进入。F1 只能新增诊断、
-counter 或 fail-closed guard；必须保持零真实 worker row production。
+Status: M11-F1a completed / Code-Docs-Test Review pending。
+
+建议性质：probe/guard-only。F1 只能新增诊断、counter 或 fail-closed guard；
+必须保持零真实 worker row production。
 
 候选目标：
 
@@ -150,6 +164,194 @@ counter 或 fail-closed guard；必须保持零真实 worker row production。
 - 不接真实 MQ worker-result path；
 - 不引入 worker-side `Item` clone/refix；
 - 不增长真实执行正例的 worker/MQ row production。
+
+#### M11-F1a: Reverse Ref Reject Probe
+
+目标：
+
+- 给 secondary ref factory 中已有的 reverse / worker-ref 失败关闭分支增加
+  直接可观测 counter；
+- 证明当前 reverse ref 仍不进入 PQ execution、worker、range dispatch 或
+  secondary row production；
+- 对 reverse range/index 只保留现有 zero-counter guard，不在 F1a 试图从
+  `TryCreatePQSecondaryCoveringRangeIterator()` 观测，因为 reverse
+  `INDEX_RANGE_SCAN` / `INDEX_SCAN` 在 `access_path.cc` 会先选择串行
+  reverse iterator；
+- 为未来 ORDER BY / Gather Merge 打开后仍能识别 reverse rejection 留护栏；
+- 不打开 reverse positive path。
+
+允许修改：
+
+- `sql/parallel_query/pq_iterators.cc`
+- `sql/parallel_query/sql_parallel.h`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+禁止修改：
+
+- `storage/innobase/**`
+- `sql/handler.h`
+- `sql/range_optimizer/**`
+- `sql/parallel_query/query_result_mq.*`
+- `sql/parallel_query/pq_clone.*`
+- `sql/parallel_query/pq_optimizer.*`
+- `mysql-test/suite/parallel_query/t/pq_stats.test`，除非 status 列表查询
+  本身必须更新；
+- 任何 positive reverse/ref/ICP row production；
+- 任何 `PQRefIterator::Read()`、`PQblockScanIterator::Read()` 或真实
+  `pq_worker_scan_next()` 接线。
+
+拟新增状态变量：
+
+- `Parallel_secondary_reverse_reject_probes`
+- `Parallel_secondary_reverse_ref_reject_probes`
+
+实现要求：
+
+- 在 `TryCreatePQSecondaryCoveringRefIterator()` 的 `param.reverse` /
+  dependent-ref reverse fail-closed 分支记录 ref reverse reject；
+- aggregate counter 与 ref 子 counter 同时增长；aggregate 不是
+  MTR 派生值；
+- counter 只允许在 ref factory 决定返回 `nullptr` 的 reject 分支增长；
+- counter 增长不得改变 `pq_set_execution_state()`、iterator selection、
+  fallback、handler/InnoDB 调用或 row materialization；
+- 新字段必须加入 `PQ_global_stats::reset()`、`mysqld.cc` SHOW STATUS
+  注册和 `pq_stats.result` status variable list；
+- positive M9-B3/C2/D3d/E1c-2a windows 的 executed / worker / range /
+  secondary row 语义必须保持不变。
+
+MTR 验收：
+
+- `pq_commercial_ref_icp` 新增 F1a counter window：
+  - reverse ref 或 adjacent ref shape，必须能触达 ref factory reject
+    branch；
+  - reverse secondary range / reverse index 继续只断言 existing zero
+    execution/worker/range/row counters，不要求新增 reverse reject counter；
+- 断言：
+  - `Parallel_secondary_reverse_reject_probes` delta `> 0`；
+  - `Parallel_secondary_reverse_ref_reject_probes` delta `> 0`；
+  - `Parallel_queries_executed` delta `= 0`；
+  - `Parallel_workers_launched` delta `= 0`；
+  - `Parallel_ranges_built` delta `= 0`；
+  - `Parallel_ranges_dispatched` delta `= 0`；
+  - `Parallel_secondary_rows_produced` delta `= 0`；
+- 更新 `pq_stats.result` 的 status variable list；
+- targeted record/replay、`pq_stats` record/replay、完整 `parallel_query`
+  suite 通过。
+
+Validation commands:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_stats
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_stats
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Hard stop:
+
+- 如果需要修改 InnoDB、handler API、`Query_result_mq`、worker thread task、
+  `pq_clone` 或 `PQRefIterator::Read()`，立即停止并转为新的 design phase；
+- 如果 reverse/ref SQL shape 无法稳定触达 factory reject branch，只提交
+  docs-only blocked result，不用弱断言冒充 probe 成功。
+- 如果要观测 reverse range/index 的 access-path-level rejection，必须另开
+  phase 并重新 review 是否允许触碰 `sql/join_optimizer/access_path.cc`。
+
+Taskbook Review:
+
+- First review returned `REVISE` because reverse `INDEX_RANGE_SCAN` /
+  `INDEX_SCAN` is handled in `access_path.cc` before current PQ secondary
+  factories are reached；
+- F1a was narrowed to reverse ref reject only；
+- re-review returned `ACCEPT` and required:
+  - counters only in `TryCreatePQSecondaryCoveringRefIterator()` reverse
+    reject paths；
+  - no counters for reverse range/index；
+  - root reverse ref counted before ordered-query guard hides `param.reverse`；
+  - fields added to `PQ_global_stats`, `reset()`, `mysqld.cc` SHOW STATUS,
+    and `pq_stats.result`；
+  - MTR proves reverse ref counter deltas `> 0` while execution/workers/ranges/
+    secondary rows stay `0`。
+
+Completion Report - M11-F1a Coding:
+
+Changed files:
+
+- `sql/parallel_query/pq_iterators.cc`
+- `sql/parallel_query/sql_parallel.h`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `mysql-test/suite/parallel_query/t/pq_stats.test`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- Added `Parallel_secondary_reverse_reject_probes` and
+  `Parallel_secondary_reverse_ref_reject_probes`；
+- counters are registered in SHOW STATUS and reset with other
+  `PQ_global_stats`；
+- added `pq_secondary_reverse_ref_reject_probe()` and call it only from
+  `TryCreatePQSecondaryCoveringRefIterator()` when `param.reverse` causes a
+  fail-closed return；
+- moved root reverse-ref counting before the simple-query / ordered-query guard；
+- did not modify InnoDB, handler API, MQ, clone, optimizer, range optimizer,
+  `PQRefIterator::Read()`, `PQblockScanIterator::Read()`, or
+  `pq_worker_scan_next()`；
+- `pq_stats.test` now masks EXPLAIN `rows` estimate with
+  `--replace_column 10 ROWS` because the estimate varied between record/replay
+  while the test only depends on PQ status and Extra diagnostics.
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_commercial_ref_icp
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_stats
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_stats
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- `mysqld` build passed；
+- `pq_commercial_ref_icp` record/replay passed；
+- F1a counter window produced
+  `f2_reverse_executed_delta=0`、`f2_reverse_workers_delta=0`、
+  `f2_reverse_ranges_built_delta=0`、
+  `f2_reverse_ranges_dispatched_delta=0`、
+  `f2_reverse_secondary_rows_delta=0`、
+  `f1a_reverse_reject_probe_seen=1`、
+  `f1a_reverse_ref_reject_probe_seen=1`；
+- `pq_stats` record/replay passed；
+- full `parallel_query` suite passed: 89/89。
+
+Residual risks:
+
+- reverse range/index still has no new counter because those paths are selected
+  in `access_path.cc` before current PQ secondary factories；
+- access-path-level reverse diagnostics require a separate reviewed phase；
+- no worker-side ref/ICP row production is enabled by F1a。
 
 ### M11-F2: Worker TABLE / Handler / Prebuilt Ownership Contract
 

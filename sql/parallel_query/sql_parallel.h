@@ -276,6 +276,8 @@ struct PQ_global_stats {
   std::atomic<uint64> secondary_ref_empty_probes{0};  ///< Ref probes with no row
   std::atomic<uint64> secondary_ref_fallback_probes{0};  ///< Probe fallbacks
   std::atomic<uint64> secondary_ref_rows_produced{0};  ///< Dep ref rows
+  std::atomic<uint64> secondary_reverse_reject_probes{0};  ///< Reverse ref rejects
+  std::atomic<uint64> secondary_reverse_ref_reject_probes{0};  ///< Reverse ref
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
   std::atomic<uint64> worker_producer_smoke_runs{0};  ///< Producer loop smoke runs
   std::atomic<uint64> worker_open_smoke_runs{0};  ///< Worker THD/TABLE smoke runs
@@ -532,6 +534,8 @@ struct PQ_global_stats {
     secondary_ref_empty_probes.store(0, std::memory_order_relaxed);
     secondary_ref_fallback_probes.store(0, std::memory_order_relaxed);
     secondary_ref_rows_produced.store(0, std::memory_order_relaxed);
+    secondary_reverse_reject_probes.store(0, std::memory_order_relaxed);
+    secondary_reverse_ref_reject_probes.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
     worker_producer_smoke_runs.store(0, std::memory_order_relaxed);
     worker_open_smoke_runs.store(0, std::memory_order_relaxed);

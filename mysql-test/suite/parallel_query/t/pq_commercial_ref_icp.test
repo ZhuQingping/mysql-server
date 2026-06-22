@@ -1165,6 +1165,14 @@ SET @f2_reverse_secondary_rows_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @f2_reverse_reject_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_reverse_reject_probes');
+SET @f2_reverse_ref_reject_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_reverse_ref_reject_probes');
 
 --disable_warnings
 --replace_column 10 #
@@ -1212,10 +1220,20 @@ SELECT
       @f2_reverse_ranges_dispatched_before
     AS f2_reverse_ranges_dispatched_delta,
   (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @f2_reverse_secondary_rows_before
+    AS f2_reverse_secondary_rows_delta,
+  ((SELECT CAST(variable_value AS UNSIGNED)
       FROM performance_schema.global_status
-      WHERE variable_name = 'Parallel_secondary_rows_produced') -
-      @f2_reverse_secondary_rows_before
-    AS f2_reverse_secondary_rows_delta;
+      WHERE variable_name = 'Parallel_secondary_reverse_reject_probes') -
+      @f2_reverse_reject_before) > 0
+    AS f1a_reverse_reject_probe_seen,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_reverse_ref_reject_probes') -
+      @f2_reverse_ref_reject_before) > 0
+    AS f1a_reverse_ref_reject_probe_seen;
 
 # M9-F3: partition tables have per-part handler state and partition pruning
 # semantics that are not enabled for current PQ full/secondary/ref paths.

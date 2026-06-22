@@ -9934,6 +9934,10 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ref_fallback_probes,
                                     secondary_ref_fallback_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ref_rows_produced,
                                     secondary_ref_rows_produced)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_reject_probes,
+                                    secondary_reverse_reject_probes)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_ref_reject_probes,
+                                    secondary_reverse_ref_reject_probes)
 
 #undef DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC
 
@@ -11906,6 +11910,12 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_ref_rows_produced",
      (char *)&show_pq_secondary_ref_rows_produced, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_reverse_reject_probes",
+     (char *)&show_pq_secondary_reverse_reject_probes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_reverse_ref_reject_probes",
+     (char *)&show_pq_secondary_reverse_ref_reject_probes, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_rows_produced",
      (char *)&show_pq_secondary_rows_produced, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
