@@ -5,8 +5,9 @@
 Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage accepted；
 M11-F5a secondary MIN / optimizer shortcut source inventory completed and
 accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic completed and
-committed；next task is F5-A reverse boundary contract docs-first；real
-worker-side ICP positive row production remains blocked。
+committed；F5-A reverse boundary contract completed and committed；next task is
+F5-A1 blocked-result commit；real worker-side ICP positive row production
+remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -1283,14 +1284,16 @@ F5 目标不是打开正例，而是把 M11-F 之后仍未平移的商用 edge p
 F5-A: Reverse positive range/ref/index scan
 
 - 商用能力：reverse range/index/ref scan、ORDER-sensitive worker result；
-- 当前状态：reverse ref reject probe 已有，visible ORDER BY 仍 blocked；
+- 当前状态：F5-A boundary contract completed；F5-A1 review accepted
+  `RECORD_BLOCKED`；reverse ref reject probe 已有，visible ORDER BY 仍
+  blocked；
 - 主要前置：
   - M11-E ORDER BY / Exchange_sort visible path 达到可执行；
   - reverse range boundary、direction、tie-break rowid、worker result order
     contract 单独验证；
   - no partition、no ICP、no native `Record_buffer` 首批；
-- 首个可执行任务建议：docs-only reverse boundary contract，随后
-  debug-only reverse reject/diagnostic，不直接 positive。
+- 结论：不进入 positive；不继续编码 reverse range/index diagnostic，除非
+  后续允许触碰 `access_path.cc` 且 ORDER BY / worker path 已 ready。
 
 F5-B: MVI positive unique filter
 
@@ -1320,13 +1323,15 @@ F5-C: Partition positive full/range/ref/dependent-ref
 F5-D: Secondary index MIN / optimizer shortcut
 
 - 商用能力：secondary MIN / shortcut access path；
-- 当前状态：secondary MIN blocked，避免 optimizer shortcut 绕过 PQ gates；
+- 当前状态：F5a inventory completed；F5a-1 debug-only optimizer shortcut
+  diagnostic completed and committed as `377de6edd70`；secondary MIN positive
+  path remains blocked；
 - 主要前置：
   - optimizer path 识别与 fail-closed reason；
   - aggregate / MIN shortcut 与 worker row production counter 关系；
   - no reverse/no partition/no record-buffer 首批；
-- 首个可执行任务建议：docs-only shortcut source inventory，先确认 hook
-  point；debug-only counter 必须等 hook-point review 后再编码。
+- 结论：只保留 debug-only guard / diagnostic，不平移 positive shortcut
+  execution。
 
 F5-E: ICP + native `Record_buffer` combined path
 
@@ -1344,13 +1349,17 @@ F5-E: ICP + native `Record_buffer` combined path
 
 #### Proposed Priority
 
-1. F5-D secondary MIN / optimizer shortcut source inventory：最小且主要在
-   optimizer guard / diagnostic 设计层，适合先补防线；
-2. F5-A reverse boundary contract：依赖 ORDER BY 但可先设计，不打开正例；
-3. F5-C partition worker ownership design：跨 handler/InnoDB，保持 docs-first；
-4. F5-B MVI inventory：wrong-result 风险高，先只读调研；
-5. F5-E ICP + native `Record_buffer` combined design：依赖 F3/F4 positive
+1. F5-C partition worker ownership design：跨 handler/InnoDB，保持 docs-first；
+2. F5-B MVI inventory：wrong-result 风险高，先只读调研；
+3. F5-E ICP + native `Record_buffer` combined design：依赖 F3/F4 positive
    path，最后处理。
+
+Completed / blocked before this priority:
+
+- F5-D secondary MIN / optimizer shortcut inventory and debug-only diagnostic
+  completed；positive execution remains blocked；
+- F5-A reverse boundary contract completed；F5-A1 recorded blocked for
+  reverse range/index diagnostics under the current allowed-file boundary。
 
 #### Proposed M11-F5a: Secondary MIN / Optimizer Shortcut Source Inventory
 
@@ -1639,7 +1648,7 @@ Triage Review Revision:
 
 #### Proposed M11-F5-A: Reverse Boundary Contract Taskbook
 
-Status: docs-only taskbook drafted；waiting Design / Source / Test Review。
+Status: docs-only taskbook accepted；committed as `e799008575e`。
 
 Goal:
 
@@ -1770,9 +1779,173 @@ F5-A Decision:
 Validation:
 
 - 本阶段只做文档 review，不运行 build/MTR；
-- Design / Source / Test Review Agent 必须返回 `ACCEPT` 后，才能提交；
+- Design / Source / Test Review Agent returned `ACCEPT`；
 - 若 review 认为需要编码，必须另起 M11-F5-A1 任务书，单独定义
   Allowed / Forbidden files、MTR window 和 review gate。
+
+Review:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Non-blocking risks:
+  - reverse range / index observability intentionally remains weaker than
+    reverse ref；
+  - M9-F2 reverse SQL shape rejection is dominated by `HAS_ORDER_BY` at the
+    visible layer；
+  - docs-only review is sufficient because no source or MTR files changed。
+- Safe next task: M11-F5-A1 debug-only negative / diagnostic taskbook。
+
+#### Proposed M11-F5-A1: Debug-only Reverse Diagnostic Taskbook
+
+Status: docs-only taskbook accepted；Review recommendation is `RECORD_BLOCKED`。
+
+Goal:
+
+- 在不打开 reverse positive execution 的前提下，定义是否需要补充
+  debug-only reverse diagnostics；
+- 保持 visible ORDER BY `HAS_ORDER_BY` serial boundary；
+- 不改变 iterator selection、access path selection、handler/InnoDB reverse
+  cursor、worker/MQ row path 或现有 MTR positive/negative semantics。
+
+Scope Decision:
+
+- reverse ref 已有 factory-level counters：
+  `Parallel_secondary_reverse_reject_probes` 和
+  `Parallel_secondary_reverse_ref_reject_probes`；
+- reverse range / index 目前只有 zero-execution guard。F5-A1 不能为了
+  产生 counter 而强制 reverse range/index 进入 PQ factory；
+- 若找不到稳定 existing hook，F5-A1 应提交 docs-only blocked result，
+  而不是添加不可靠 counter。
+
+Allowed Files For F5-A1 Coding Candidate:
+
+- `sql/parallel_query/sql_parallel.h`，仅允许新增 debug-only or
+  fail-closed diagnostic counter 字段和 reset；
+- `sql/mysqld.cc`，仅允许新增对应 SHOW STATUS entry；
+- `sql/parallel_query/pq_optimizer.cc`，仅允许在既有 ORDER BY / reverse
+  fail-closed diagnostic hook 中记录 shape，不得改变 rejection；
+- `sql/parallel_query/pq_iterators.cc`，仅允许复用或细分现有 reverse
+  ref reject observation；
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Forbidden Files:
+
+- `sql/join_optimizer/access_path.cc`
+- `sql/range_optimizer/**`
+- `sql/sql_executor.*`
+- `sql/sql_select.*`
+- `sql/handler.*`
+- `sql/parallel_query/exchange_sort.*`
+- `sql/parallel_query/exchange.*`
+- `sql/parallel_query/query_result_mq.*`
+- `sql/parallel_query/pq_clone.*`
+- `storage/innobase/**`
+- any ORDER BY visible positive test/result file except read-only reference；
+- any partition/MVI/native `Record_buffer` source or test file。
+
+Candidate Diagnostics:
+
+1. Reverse ref status refinement:
+   - keep current counters unchanged unless review finds ambiguity；
+   - optionally document current counters as covering ref-only direct reject。
+
+2. ORDER BY-dominated reverse shape diagnostic:
+   - if a stable, read-only diagnostic point exists before
+     `HAS_ORDER_BY` rejection, record that ordered query contains a
+     reverse access shape；
+   - counter names must make clear they are optimizer/ORDER-BY diagnostic,
+     not PQ factory reject counters。
+
+3. Reverse range/index best-effort diagnostic:
+   - only allowed if current objects already expose `reverse` without changing
+     plan selection；
+   - no new iterator construction；
+   - no access path rewrite；
+   - no handler reverse cursor call。
+
+MTR Requirements If Coding Proceeds:
+
+- Extend the existing M9-F2 window in `pq_commercial_ref_icp`；
+- keep existing expected deltas:
+  - `Parallel_queries_executed = 0`；
+  - `Parallel_workers_launched = 0`；
+  - `Parallel_ranges_built = 0`；
+  - `Parallel_ranges_dispatched = 0`；
+  - `Parallel_secondary_rows_produced = 0`；
+- any new diagnostic deltas must be boolean or lower-bound expressions to
+  avoid dependence on prior tests；
+- update `pq_stats.result` only for newly registered status variables；
+- do not migrate commercial positive reverse tests in this task。
+
+Validation If Coding Proceeds:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test && ./mtr parallel_query.pq_commercial_ref_icp --record
+cd build-ninja/mysql-test && ./mtr parallel_query.pq_commercial_ref_icp
+cd build-ninja/mysql-test && ./mtr parallel_query.pq_stats --record
+cd build-ninja/mysql-test && ./mtr parallel_query.pq_stats
+cd build-ninja/mysql-test && ./mtr --suite=parallel_query --parallel=1
+```
+
+Hard Stops:
+
+- Any need to edit `access_path.cc` means stop and record blocked result；
+- Any need to open visible ORDER BY, `Exchange_sort` production path,
+  `PQblockScanIterator::Read()`, `PQRefIterator::Read()` or
+  `pq_worker_scan_next()` means stop；
+- Any change that can increase PQ execution / worker / range / secondary-row
+  counters for reverse SQL means stop；
+- Any diagnostic that conflates reverse range/index with reverse ref factory
+  reject semantics must be rejected。
+
+Acceptance:
+
+- Design / Source / Test Review Agent returned `ACCEPT`；
+- reviewer recommendation: `RECORD_BLOCKED`；
+- no source or MTR edits are required。
+
+Review:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Required fixes before commit: none；
+- Recommendation: `RECORD_BLOCKED`。
+
+Blocked Result:
+
+- F5-A1 will not code reverse range/index diagnostics in the current allowed
+  file boundary；
+- this is not because MySQL or the commercial implementation lacks reverse
+  execution. The commercial reference supports reverse range/index/ref positive
+  PQ, but current branch intentionally keeps that path blocked；
+- reverse range is not observable in the allowed coding surface because
+  `AccessPath::INDEX_RANGE_SCAN` with `param.reverse` goes directly to
+  `ReverseIndexRangeScanIterator`; the PQ range factory is only called in the
+  non-reverse branch；
+- reverse index scan also has no PQ factory hook because `AccessPath::INDEX_SCAN`
+  selects the serial reverse iterator directly；
+- `pq_optimizer.cc` can observe ordered-query rejection before
+  `HAS_ORDER_BY`, but the stable fields there do not prove reverse range, and
+  `QEP_TAB::m_reversed_access` is only asserted for `JT_REF` /
+  `JT_INDEX_SCAN`；
+- the only currently safe observable is the existing reverse ref factory counter
+  path in `pq_iterators.cc`，and M9-F2 already validates it while keeping
+  `Parallel_queries_executed`、workers、ranges、dispatch and secondary rows at
+  zero。
+
+Next Safe Task:
+
+- Do not code F5-A1；
+- keep reverse positive migration deferred until visible ORDER BY/Gather Merge,
+  worker row path, rowid tie-break and InnoDB reverse cursor contract are
+  production-ready；
+- continue to the next F5 backlog item instead of expanding reverse diagnostics
+  through `access_path.cc`。
 
 Agent Review Prompt:
 
