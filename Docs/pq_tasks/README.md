@@ -5,41 +5,20 @@
 ## Current Summary
 
 - Last synced: 2026-06-22
-- Active update: M11-F5-E ICP + native `Record_buffer` combined path design
-  已通过 Design / Source / Test Review；两个 Explorer 均返回
-  `DESIGN_ONLY`，当前只写任务书和状态机，不打开 worker-side ICP +
-  native buffer positive path；review 建议把 `ICP_NO_MATCH` 到 retryable
-  `DB_NOT_FOUND` 的中间状态写入 contract，已补充。M11-F5-E1 debug-only
-  combined negative diagnostic 已完成本地实现：新增
-  `Parallel_worker_icp_record_buffer_reject_probes`，在 worker attach smoke
-  中同时证明 worker native `Record_buffer` 仍为 null、ICP ownership mismatch
-  在成功 scan 前拒绝，并保持 workers/ranges/secondary rows 为 0；`mysqld`
-  build、`pq_worker_attach_contract_smoke` replay、`pq_stats` replay 和完整
-  `parallel_query` suite 89/89 通过，Code / Docs / Test Review 返回
-  `ACCEPT`；已提交为 `eefc952df22`。M11-F5-E2 debug-only ICP sentinel restore cleanup 已完成本地
-  实现：复现组合 DBUG flags 导致 `innobase_index_cond()` 崩溃的 RED
-  路径后，将 sentinel 安装改为只保存一次原始 ICP state；`mysqld` build、
-  `pq_worker_attach_contract_smoke` replay 和完整 `parallel_query` suite
-  89/89 通过，Code / Docs / Test Review 返回 `ACCEPT`；已提交为
-  `f4d0070b610`。M11-F5 closure audit 已通过 Docs / Source / Task Review，
-  F5-A/B/C/D/E 均已收敛为 design / diagnostic / blocked boundary。
-  M11-F5-C1
-  debug-only partition reject diagnostic 已通过 Code / Docs / Test Review
-  并提交为 `df74acaf881`；新增 `Parallel_partition_reject_probes`，只在
-  `pq_check_single_table()` 的 single-table `PARTITIONED_TABLE` reject 点
-  增长；dependent-ref partition join 继续通过 `MULTI_TABLE`
-  fail-closed，不计入 partition counter。M11-F5-B MVI unique filter
-  inventory / design 已提交为 `91415c38b07`。M11-F5-B1 debug-only MVI
-  reject diagnostic 已完成实现和验证并提交为 `58014c5b0a9`，新增
-  `Parallel_secondary_mvi_reject_probes`，保持 MVI fail-closed，不打开
-  `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER`；首轮 review 修正 mixed-index
-  overcount 风险后复审 `ACCEPT`；`mysqld` build、`pq_commercial_ref_icp`
-  replay、`pq_stats` replay 和完整 `parallel_query` suite 89/89 通过。
-  F5-C design 已提交为
-  `011cec1e30f`；F5-A1 已记录 `RECORD_BLOCKED`；F5-A 已提交为
-  `e799008575e`；F5a-1 已提交为 `377de6edd70`。
+- Active update: M11-E6 ORDER BY positive-path phase selection
+  已启动。M11-F5 已通过 closure audit 并提交为 `3044319e718`，F5-A/B/C/D/E
+  均已收敛为 design / diagnostic / blocked boundary。ORDER BY M11-E5r 已
+  closure，Post-E5r handoff 明确 source work stopped；后续若继续真实
+  ORDER BY path，必须新开 reviewed phase。当前只做 docs-only M11-E6 阶段
+  选择：对齐当前分支、商用参考实现和测试护栏，锁定下一步最小正路径为
+  worker `position(record)` / handler-ref positive contract，随后再进入 MQ
+  handler-ref wire 和 `cmp_ref()` comparator；继续禁止放开 `HAS_ORDER_BY`
+  或设置 ORDER BY readiness flags。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
-- Current M11-E5g correction: M11-E5g-2 和 M11-E5g-3 已提交；M11-E5g-4 design-only 已完成；M11-E5g-4a、M11-E5g-4b、M11-E5g-4c、M11-E5g-4d、M11-E5g-4e 已提交；M11-E5g-4f design-only 已完成并拒绝当前 executable visible gate。下方超长历史摘要如仍出现 5g-2 waiting final review，不作为当前状态来源。
+- Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
+  ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史
+  摘要如仍出现 5g-2 waiting final review 或 E5g-4f 之后缺失 E5r closure，
+  不作为当前状态来源。
 - Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1-M10 已完成当前支持子集和测试收口；M11 Post-M10 Commercial Main Architecture Restart 已启动，M11-A0/B0 design accepted；M11-A1-A5 plan clone/resolver contract 与 preflight 已完成；M11-B1/B2 PQWR leader decode adapter、M11-B3a/B3b/B3c worker-result wiring probes 已完成；M11-D0-D6 已完成并提交；M11-E0/E1/E2/E3 已完成并提交；M11-E4 user-visible ORDER BY gate design 已提交；M11-E5a real `Exchange_sort` worker-frame materialization design 已提交；M11-E5b-0 ORDER BY frame contract helper 已提交；M11-E5b-1 controlled frame K-way merge smoke 已提交；M11-E5b-2 merge-path empty-worker/ERROR edge smoke 已提交；M11-E5b-3 debug-only row materialization smoke 已提交；M11-E5c user-visible ORDER BY gate design 已提交；M11-E5d Filesort State Contract design 已提交；M11-E5d-0 read-only helper inventory 已提交；M11-E5d-S0 saved ORDER/GROUP helper design 已通过 review；M11-E5d-S1 saved state contract shape 已提交；M11-E5d-S2 leader save/restore smoke 已提交；M11-E5d-S3 clone-copy contract 已提交；M11-E5d-1 fail-closed Filesort contract shape 已提交；M11-E5d-2 design 已提交；M11-E5d-2a owned ORDER chain copy smoke 已提交；M11-E5d-2b optimized flag contract smoke 已提交；M11-E5d-2c restore-to-sidecar contract smoke 已提交；M11-E5d-2d clone-copy contract smoke 已提交；M11-E5d-3 post-sidecar Filesort boundary design 已提交；M11-E5d-3a restored ORDER Filesort contract 已提交；M11-E5d-3b Filesort constructor risk design 已提交；M11-E5d-3c debug-only Filesort construction smoke 已提交；M11-E5d-4 Sort_param / Exchange_sort initialization boundary design 已提交；M11-E5d-4a debug-only Sort_param init smoke 已提交；M11-E5d-4b Exchange_sort real-state adapter boundary design 已提交；M11-E5d-4b-1 debug-only Exchange_sort scalar sort-state adapter shape 已提交；M11-E5d-4c optimizer-side Filesort/Sort_param scalar handoff design 已提交；M11-E5d-4c-1 debug-only optimizer-to-Exchange_sort scalar handoff 已提交；M11-E5d-5 real `Exchange_sort` init / MQ / Read boundary design 已提交；M11-E5d-5a `Exchange_sort` real-init state owner shape 已提交；M11-E5d-5b sort-key buffer / record-group allocation smoke 已提交；M11-E5d-5c controlled ORDER BY MQ-to-record-group loader 已提交；M11-E5d-5d debug-only ordered leader Read shadow path 已提交；M11-E5d-5e-1 eligibility contract 已提交；M11-E5d-5e-2 execution preflight blocker 已提交；M11-E5d-5f runtime prerequisite diagnostics 已提交；M11-E5g-0 worker ORDER BY frame producer and streaming heap read boundary design 已提交；M11-E5g-1 DBUG-only worker ORDER BY `PQOF` producer smoke 已提交；M11-E5g-2 streaming `Exchange_sort` heap-read state-machine smoke 已完成本地实现和验证，等待 final review。
 - Latest commits:
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration

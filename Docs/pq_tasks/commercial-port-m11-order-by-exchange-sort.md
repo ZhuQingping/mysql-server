@@ -38,7 +38,10 @@ leader materialization smoke from streaming reader completed locally with build,
 targeted MTR, full `parallel_query` suite, and Code/Doc/Test Review passed；
 M11-E5g-4a/4b/4c/4d/4e completed and committed；M11-E5g-4f minimal
 ASC-only visible ORDER BY gate design completed locally，Design Explorer and
-Code/Doc/Test Review Agent accepted。
+Code/Doc/Test Review Agent accepted。M11-E5r closure 已完成，Post-E5r
+handoff accepted；当前权威状态是 real execution blocked，source work
+stopped。后续真实 ORDER BY path 必须从新的 reviewed phase 启动；M11-E6
+已启动为 docs-only phase selection，不继承 E5r source work。
 
 ## 背景
 
@@ -8845,6 +8848,80 @@ Forbidden without a new reviewed phase:
 - `sql/**` or `storage/**` source changes for M11-E；
 - `mysql-test/**` changes that imply visible ORDER BY PQ readiness；
 - relaxing `HAS_ORDER_BY` or setting ORDER BY readiness flags true。
+
+### M11-E6: ORDER BY Positive-path Phase Selection
+
+Status: docs-only design in progress。
+
+Goal:
+
+- 从 E5r closure 后的新 reviewed phase 重新选择真实 ORDER BY path 的下一步；
+- 对齐当前分支、商用参考实现和现有 MTR 护栏；
+- 明确下一步只打开一个最小 positive contract，不打开用户可见 ORDER BY PQ。
+
+Explorer conclusions:
+
+- Current-branch Explorer 确认当前仍 fail-closed：
+  `pq_check_query_block_eligible()` 继续以 `HAS_ORDER_BY` reject 普通
+  ORDER BY；`PQblockScanIterator::Init()` / `Read()` 仍返回 failure/error
+  path，不调用 `position(record)`；`Query_result_mq` 只发送当前 `PQWR`
+  field-value frame；`Exchange_sort` 仍未接默认 gather path，rowid
+  tie-break 只存在私有 shape/smoke；
+- Commercial-reference Explorer 确认商用正路径顺序是：
+  worker 读到当前 row 后调用 `handler::position(record)` 生成
+  `handler::ref`，worker MQ 深拷贝该 ref，leader `Exchange_sort` 再用
+  divided-table handler 的 `cmp_ref()` 作为 stable tie-break；
+- Test/Docs Explorer 确认当前 `pq_commercial_order_by`、
+  `pq_saved_order_group_contract` 和 `pq_commercial_order_by_frames` 仍是
+  负向/DBUG-only 护栏；`README.md` 和本文件顶部状态已按 E5r closure
+  刷新。
+
+Phase decision:
+
+- 下一编码阶段命名为 M11-E6a Worker Handler-ref Positive Contract；
+- E6a 只验证 private positive contract：受控 worker/block-scan 路径在读到
+  当前 row 后调用 `position(record)`，深拷贝 `handler::ref/ref_length`，
+  并在 leader/private helper 中证明该 ref 可被同一 opened divided-table
+  handler 的 `cmp_ref()` 消费；
+- M11-E6b 再做 MQ handler-ref wire，把 E6a 生成的 ref 接入私有 MQ frame；
+- M11-E6c 再做 `Exchange_sort` private `cmp_ref()` comparator；
+- optimizer readiness、default ordered `Read()` 和 visible ORDER BY PQ 必须排在
+  E6a/E6b/E6c 之后，且需要单独 reviewed gate。
+
+Allowed files for E6 docs-only:
+
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`；
+- `Docs/pq_tasks/README.md`。
+
+Allowed files for later E6a code taskbook, pending review:
+
+- `sql/parallel_query/pq_iterators.{h,cc}`，仅限受控/private
+  `position(record)` contract；
+- `sql/parallel_query/query_result_mq.{h,cc}`，E6a 仅允许 explicit no-wire
+  assertion；实际 handler-ref MQ copy / wire 必须留到 E6b；
+- `sql/parallel_query/exchange_sort.{h,cc}`，仅限 private handler-ref
+  validation / `cmp_ref()` smoke helper；
+- focused MTR under `mysql-test/suite/parallel_query/`，必须保持普通 ORDER BY
+  负向断言。
+
+Forbidden for E6/E6a unless a later reviewed phase explicitly allows:
+
+- relaxing `HAS_ORDER_BY`；
+- setting `rowid_tiebreak_ready`、`default_ordered_read_ready` 或
+  `exchange_sort_heap_read_ready` true；
+- changing default `Gather_operator` to use `Exchange_sort`；
+- changing visible `ParallelScanIterator::Read()` ORDER BY behavior；
+- adding naked `memcmp(ref)` as a substitute for handler `cmp_ref()`；
+- touching `storage/innobase/**` or `sql/handler.*` without a separate
+  handler/InnoDB boundary review；
+- updating result files to imply visible ORDER BY PQ readiness。
+
+Validation:
+
+- E6 itself is docs-only：run `git diff --check`；
+- no build/MTR required unless source or test files change；
+- before E6a source coding, write the E6a taskbook and request Code / Docs /
+  Test Review。
 
 ## Risk Areas
 
