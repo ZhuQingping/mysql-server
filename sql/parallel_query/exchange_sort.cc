@@ -625,6 +625,68 @@ bool pq_validate_orderby_handler_ref_lifetime_contract(
                                              contract.row_id_contract);
 }
 
+bool pq_run_orderby_handler_ref_wire_smoke(const uchar *record_image,
+                                           uint32 record_image_len,
+                                           const uchar *handler_ref,
+                                           uint32 ref_length,
+                                           uint32 *decoded_ref_bytes,
+                                           uint32 *contract_success) {
+  if (decoded_ref_bytes == nullptr || contract_success == nullptr) return true;
+  *decoded_ref_bytes = 0;
+  *contract_success = 0;
+
+  if (record_image == nullptr || record_image_len == 0 ||
+      handler_ref == nullptr || ref_length == 0) {
+    return true;
+  }
+
+  PQ_mq_event sender_event;
+  PQ_mq_event receiver_event;
+  char ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue queue(&sender_event, &receiver_event, ring, sizeof(ring));
+  MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (handle.init()) return true;
+
+  const int64 sort_key = 0;
+  if (pq_send_orderby_frame(&handle, PQ_orderby_frame_type::ROW, record_image,
+                            record_image_len, handler_ref, ref_length,
+                            &sort_key, sizeof(sort_key), 0)) {
+    return true;
+  }
+
+  void *raw_data = nullptr;
+  uint32 raw_len = 0;
+  if (handle.receive(&raw_data, &raw_len) != MQ_SUCCESS) return true;
+
+  PQ_orderby_decoded_frame decoded;
+  if (pq_decode_orderby_frame(raw_data, raw_len, &decoded) ||
+      decoded.type != PQ_orderby_frame_type::ROW ||
+      decoded.record_image_len != record_image_len ||
+      decoded.row_id_len != ref_length ||
+      decoded.sort_key_len != sizeof(sort_key) ||
+      memcmp(decoded.record_image, record_image, record_image_len) != 0 ||
+      memcmp(decoded.row_id, handler_ref, ref_length) != 0) {
+    return true;
+  }
+
+  const PQ_orderby_row_id_contract row_id_contract{
+      PQ_orderby_row_id_source::HANDLER_REF, ref_length, true};
+  if (pq_validate_orderby_row_id_contract(&decoded, row_id_contract)) {
+    return true;
+  }
+
+  std::vector<uchar> decoded_ref(decoded.row_id,
+                                 decoded.row_id + decoded.row_id_len);
+  if (decoded_ref.size() != ref_length ||
+      memcmp(decoded_ref.data(), handler_ref, ref_length) != 0) {
+    return true;
+  }
+
+  *decoded_ref_bytes = decoded.row_id_len;
+  *contract_success = 1;
+  return false;
+}
+
 bool Exchange_sort::read_mq_message(MQMessageType &type, void **datap,
                                     uint32 &data_len) {
   type = MQMessageType::FINISH;

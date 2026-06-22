@@ -58,9 +58,34 @@ SET @handler_ref_bytes_before = (
 SET @handler_ref_cmp_equal_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_orderby_worker_handler_ref_cmp_equal');
+SET @handler_ref_wire_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_attempts');
+SET @handler_ref_wire_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_success');
+SET @handler_ref_wire_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_unsupported');
+SET @handler_ref_wire_bytes_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_bytes');
+SET @handler_ref_wire_contract_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_contract_success');
+
+SELECT id, v FROM pq_worker_attach_t WHERE v >= 0 ORDER BY id;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_attempts') -
+  @handler_ref_wire_attempts_before) AS handler_ref_wire_attempts_without_debug;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_success') -
+  @handler_ref_wire_success_before) AS handler_ref_wire_success_without_debug;
 
 SET @old_debug=@@session.debug;
-SET SESSION debug="d,pq_worker_attach_contract_smoke,pq_orderby_worker_handler_ref_positive_smoke";
+SET SESSION debug="d,pq_worker_attach_contract_smoke,pq_orderby_worker_handler_ref_positive_smoke,pq_orderby_handler_ref_wire_smoke";
 SELECT id, v FROM pq_worker_attach_t WHERE v >= 0;
 SET SESSION debug=@old_debug;
 
@@ -124,6 +149,26 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_orderby_worker_handler_ref_cmp_equal') -
   @handler_ref_cmp_equal_before) >= 1 AS handler_ref_cmp_equal_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_attempts') -
+  @handler_ref_wire_attempts_before) >= 1 AS handler_ref_wire_attempts_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_success') -
+  @handler_ref_wire_success_before) >= 1 AS handler_ref_wire_success_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_unsupported') -
+  @handler_ref_wire_unsupported_before) AS handler_ref_wire_unsupported_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_bytes') -
+  @handler_ref_wire_bytes_before) > 0 AS handler_ref_wire_bytes_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_orderby_handler_ref_wire_contract_success') -
+  @handler_ref_wire_contract_before) >= 1 AS handler_ref_wire_contract_delta;
 
 SET @attach_attempts_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status

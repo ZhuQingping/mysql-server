@@ -8925,7 +8925,7 @@ Validation:
 
 ### M11-E6a: Worker Handler-ref Positive Contract
 
-Status: taskbook draft in progress；no source changes yet。
+Status: implementation completed locally；Code / Docs / Test Review accepted。
 
 Goal:
 
@@ -9152,6 +9152,66 @@ Required review after E6b coding:
 - Docs Review: confirm E6b does not claim visible ORDER BY readiness；
 - Test Review: confirm E6b is DBUG-only and existing visible ORDER BY negative
   guards remain。
+
+Completion Report - M11-E6b:
+
+- Status: implementation completed locally；Code / Docs / Test Review accepted；
+- Changed files:
+  - `sql/parallel_query/exchange_sort.{h,cc}`；
+  - `sql/parallel_query/sql_parallel.{h,cc}`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`；
+  - `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- Implementation:
+  - added E6b status counters:
+    `Parallel_orderby_handler_ref_wire_attempts`,
+    `Parallel_orderby_handler_ref_wire_success`,
+    `Parallel_orderby_handler_ref_wire_unsupported`,
+    `Parallel_orderby_handler_ref_wire_bytes`,
+    `Parallel_orderby_handler_ref_wire_contract_success`；
+  - added private helper `pq_run_orderby_handler_ref_wire_smoke()` to encode
+    one real copied handler ref into a `PQOF` ORDER BY ROW frame `row_id`
+    payload, receive and decode the frame, verify `row_id_len == ref_length`,
+    verify decoded bytes equal the copied handler ref, and deep-copy decoded
+    bytes before reporting success；
+  - reused the E6a worker attach smoke window under the additional
+    `pq_orderby_handler_ref_wire_smoke` DBUG flag；
+  - did not modify `PQ_worker_result_frame_header`, `Query_result_mq`,
+    `PQOF` header / flags format, optimizer eligibility, `HAS_ORDER_BY`,
+    readiness flags, or default `Exchange_sort` selection。
+- TDD evidence:
+  - RED: after adding E6b counters and MTR assertions but before implementation,
+    `pq_worker_attach_contract_smoke` failed because E6b attempts / success /
+    bytes / contract deltas stayed `0`；
+  - GREEN: after implementation, `pq_worker_attach_contract_smoke` passed。
+- Validation:
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `pq_worker_attach_contract_smoke` passed；
+  - `pq_stats --record` SQL completed and hit the known final copy errno 1；
+    generated result log was copied manually；
+  - `pq_stats` replay passed；
+  - full `parallel_query` suite passed 89/89；
+  - `git diff --check` passed。
+- Review:
+  - Review Agent verdict: `ACCEPT`；
+  - confirmed no changes to `Query_result_mq`,
+    `PQ_worker_result_frame_header`, optimizer eligibility, `HAS_ORDER_BY`,
+    readiness flags, default Gather / `Exchange_sort` selection, or PQWR
+    frame path；
+  - confirmed E6b uses the E6a real handler ref source, encodes it into
+    private `PQOF` `row_id`, validates length / bytes / `HANDLER_REF`
+    contract, and deep-copies decoded bytes inside the helper；
+  - non-blocking follow-up: E6c / real comparator work should add stronger
+    post-cleanup ownership checks if decoded refs are retained beyond the
+    helper。
+- Remaining boundary:
+  - E6b proves only private `PQOF` handler-ref wire encode/decode；
+  - E6c is still required for `Exchange_sort` `cmp_ref()` comparator
+    integration；
+  - visible ORDER BY PQ remains blocked。
 
 ## Risk Areas
 

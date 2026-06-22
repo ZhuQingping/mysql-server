@@ -10069,6 +10069,16 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_worker_handler_ref_bytes,
                                   orderby_worker_handler_ref_bytes)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_worker_handler_ref_cmp_equal,
                                   orderby_worker_handler_ref_cmp_equal)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_wire_attempts,
+                                  orderby_handler_ref_wire_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_wire_success,
+                                  orderby_handler_ref_wire_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_wire_unsupported,
+                                  orderby_handler_ref_wire_unsupported)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_wire_bytes,
+                                  orderby_handler_ref_wire_bytes)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_wire_contract_success,
+                                  orderby_handler_ref_wire_contract_success)
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
@@ -12012,6 +12022,21 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_worker_handler_ref_cmp_equal",
      (char *)&show_pq_orderby_worker_handler_ref_cmp_equal, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_wire_attempts",
+     (char *)&show_pq_orderby_handler_ref_wire_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_wire_bytes",
+     (char *)&show_pq_orderby_handler_ref_wire_bytes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_wire_contract_success",
+     (char *)&show_pq_orderby_handler_ref_wire_contract_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_wire_success",
+     (char *)&show_pq_orderby_handler_ref_wire_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_wire_unsupported",
+     (char *)&show_pq_orderby_handler_ref_wire_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_worker_handler_ref_success",
      (char *)&show_pq_orderby_worker_handler_ref_success, SHOW_FUNC,

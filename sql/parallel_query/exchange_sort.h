@@ -268,6 +268,13 @@ bool pq_validate_orderby_handler_ref_lifetime_contract(
     const PQ_orderby_decoded_frame *decoded,
     const PQ_orderby_handler_ref_lifetime_contract &contract);
 
+bool pq_run_orderby_handler_ref_wire_smoke(const uchar *record_image,
+                                           uint32 record_image_len,
+                                           const uchar *handler_ref,
+                                           uint32 ref_length,
+                                           uint32 *decoded_ref_bytes,
+                                           uint32 *contract_success);
+
 class Exchange_sort final : public Exchange {
  public:
   Exchange_sort() = default;

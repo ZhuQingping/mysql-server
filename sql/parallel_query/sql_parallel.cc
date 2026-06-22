@@ -1365,6 +1365,36 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       ref_failed = true;
     }
 
+    DBUG_EXECUTE_IF("pq_orderby_handler_ref_wire_smoke", {
+      pq_global_stats.orderby_handler_ref_wire_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+
+      uint32 decoded_ref_bytes = 0;
+      uint32 contract_success = 0;
+      const bool wire_failed =
+          ref_failed || worker->m_open_ctx.worker_table == nullptr ||
+          worker->m_open_ctx.worker_table->record[0] == nullptr ||
+          pq_run_orderby_handler_ref_wire_smoke(
+              worker->m_open_ctx.worker_table->record[0],
+              worker->m_open_ctx.worker_table->s->reclength,
+              copied_ref.data(), static_cast<uint32>(copied_ref.size()),
+              &decoded_ref_bytes, &contract_success);
+
+      if (wire_failed) {
+        pq_global_stats.orderby_handler_ref_wire_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+        cleanup();
+        return true;
+      }
+
+      pq_global_stats.orderby_handler_ref_wire_success.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats.orderby_handler_ref_wire_bytes.fetch_add(
+          decoded_ref_bytes, std::memory_order_relaxed);
+      pq_global_stats.orderby_handler_ref_wire_contract_success.fetch_add(
+          contract_success, std::memory_order_relaxed);
+    });
+
     if (ref_failed) {
       pq_global_stats.orderby_worker_handler_ref_unsupported.fetch_add(
           1, std::memory_order_relaxed);

@@ -301,6 +301,11 @@ struct PQ_global_stats {
   std::atomic<uint64> orderby_worker_handler_ref_unsupported{0};  ///< E6a
   std::atomic<uint64> orderby_worker_handler_ref_bytes{0};  ///< E6a
   std::atomic<uint64> orderby_worker_handler_ref_cmp_equal{0};  ///< E6a
+  std::atomic<uint64> orderby_handler_ref_wire_attempts{0};  ///< E6b
+  std::atomic<uint64> orderby_handler_ref_wire_success{0};  ///< E6b
+  std::atomic<uint64> orderby_handler_ref_wire_unsupported{0};  ///< E6b
+  std::atomic<uint64> orderby_handler_ref_wire_bytes{0};  ///< E6b
+  std::atomic<uint64> orderby_handler_ref_wire_contract_success{0};  ///< E6b
   std::atomic<uint64> leader_row_stream_error_smoke_attempts{0};  ///< Error smoke
   std::atomic<uint64> leader_row_stream_error_smoke_selected{0};  ///< Error selected
   std::atomic<uint64> leader_row_stream_error_smoke_errors{0};  ///< Error seen
@@ -578,6 +583,12 @@ struct PQ_global_stats {
                                                  std::memory_order_relaxed);
     orderby_worker_handler_ref_bytes.store(0, std::memory_order_relaxed);
     orderby_worker_handler_ref_cmp_equal.store(0, std::memory_order_relaxed);
+    orderby_handler_ref_wire_attempts.store(0, std::memory_order_relaxed);
+    orderby_handler_ref_wire_success.store(0, std::memory_order_relaxed);
+    orderby_handler_ref_wire_unsupported.store(0, std::memory_order_relaxed);
+    orderby_handler_ref_wire_bytes.store(0, std::memory_order_relaxed);
+    orderby_handler_ref_wire_contract_success.store(
+        0, std::memory_order_relaxed);
     leader_row_stream_error_smoke_attempts.store(0,
                                                  std::memory_order_relaxed);
     leader_row_stream_error_smoke_selected.store(0,

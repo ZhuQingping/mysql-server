@@ -5,13 +5,16 @@
 ## Current Summary
 
 - Last synced: 2026-06-22
-- Active update: M11-E6b MQ Handler-ref Wire Contract taskbook
-  已启动。M11-E6a Worker Handler-ref Positive Contract 已提交为
-  `70197ead960`，证明 private/debug-only `position(record)` + deep-copied
-  handler ref + `cmp_ref(ref, ref)==0` contract。E6b 当前仅写任务书：计划用
-  private `PQOF` ORDER BY frame 传输 E6a 真实 handler ref，不改通用 `PQWR`
-  worker-result frame，不改 `Query_result_mq::send_data()` 默认行为，不打开
-  visible ORDER BY PQ、`HAS_ORDER_BY` 或 ORDER BY readiness flags。
+- Active update: M11-E6b MQ Handler-ref Wire Contract
+  已完成实现、验证和 Code / Docs / Test Review，准备提交。M11-E6a
+  已提交为 `70197ead960`，证明 private/debug-only `position(record)` +
+  deep-copied handler ref + `cmp_ref(ref, ref)==0` contract。E6b 当前用
+  private `PQOF` ORDER BY frame 传输 E6a 真实 handler ref，并验证 decoded
+  row-id bytes 等于 copied handler ref；通用 `PQWR` worker-result frame、
+  `Query_result_mq::send_data()` 默认行为、visible ORDER BY PQ、
+  `HAS_ORDER_BY` 和 ORDER BY readiness flags 均保持不变。验证：
+  `mysqld` build passed，`pq_worker_attach_contract_smoke` passed，
+  `pq_stats` passed，full `parallel_query` suite passed 89/89。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
   ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史
