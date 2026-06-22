@@ -352,6 +352,43 @@ SELECT (
    WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced') -
   @secondary_rows_before) AS icp_record_buffer_secondary_rows_delta;
 
+SET @worker_icp_record_buffer_reject_before = COALESCE((
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_icp_record_buffer_reject_probes'), 0);
+SET @attach_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_success');
+SET @ranges_dispatched_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched');
+SET @secondary_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced');
+
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_worker_attach_contract_smoke,pq_worker_icp_record_buffer_negative_smoke,pq_worker_icp_ownership_mismatch_smoke";
+SELECT id, v FROM pq_worker_attach_t WHERE v >= 0;
+SET SESSION debug=@old_debug;
+SELECT id, v FROM pq_worker_attach_t WHERE v >= 20 ORDER BY id;
+
+SELECT COALESCE((
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_icp_record_buffer_reject_probes'), 0) -
+  @worker_icp_record_buffer_reject_before >= 1
+  AS combined_icp_flags_reject_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_success') -
+  @attach_success_before) AS combined_icp_flags_success_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched') -
+  @ranges_dispatched_before) AS combined_icp_flags_ranges_dispatched_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced') -
+  @secondary_rows_before) AS combined_icp_flags_secondary_rows_delta;
+
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;
 SET SESSION parallel_default_dop=4;

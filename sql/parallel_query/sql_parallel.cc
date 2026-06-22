@@ -1201,6 +1201,17 @@ bool Gather_operator::run_worker_attach_contract_smoke(
   bool icp_record_buffer_negative_smoke = false;
   Item *saved_leader_pushed_idx_cond = nullptr;
   uint saved_leader_pushed_idx_cond_keyno = MAX_KEY;
+  auto install_leader_icp_sentinel = [&]() {
+    if (!icp_ownership_mismatch_smoke) {
+      saved_leader_pushed_idx_cond = leader_table->file->pushed_idx_cond;
+      saved_leader_pushed_idx_cond_keyno =
+          leader_table->file->pushed_idx_cond_keyno;
+      icp_ownership_mismatch_smoke = true;
+    }
+    leader_table->file->pushed_idx_cond =
+        reinterpret_cast<Item *>(leader_table);
+    leader_table->file->pushed_idx_cond_keyno = leader_table->s->primary_key;
+  };
   auto cleanup = [&]() {
     if (cleanup_reached) return;
     cleanup_reached = true;
@@ -1290,13 +1301,7 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     }
 
     icp_record_buffer_negative_smoke = true;
-    icp_ownership_mismatch_smoke = true;
-    saved_leader_pushed_idx_cond = leader_table->file->pushed_idx_cond;
-    saved_leader_pushed_idx_cond_keyno =
-        leader_table->file->pushed_idx_cond_keyno;
-    leader_table->file->pushed_idx_cond =
-        reinterpret_cast<Item *>(leader_table);
-    leader_table->file->pushed_idx_cond_keyno = leader_table->s->primary_key;
+    install_leader_icp_sentinel();
   });
 
   DBUG_EXECUTE_IF("pq_worker_ownership_mismatch_smoke", {
@@ -1311,13 +1316,7 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       Item tree. The InnoDB worker gate must reject the non-null leader ICP
       before any worker range dispatch or row production can dereference it.
     */
-    icp_ownership_mismatch_smoke = true;
-    saved_leader_pushed_idx_cond = leader_table->file->pushed_idx_cond;
-    saved_leader_pushed_idx_cond_keyno =
-        leader_table->file->pushed_idx_cond_keyno;
-    leader_table->file->pushed_idx_cond =
-        reinterpret_cast<Item *>(leader_table);
-    leader_table->file->pushed_idx_cond_keyno = leader_table->s->primary_key;
+    install_leader_icp_sentinel();
   });
 
   if (worker->m_open_ctx.worker_handler == nullptr ||

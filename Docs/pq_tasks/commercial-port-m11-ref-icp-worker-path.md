@@ -1884,6 +1884,86 @@ Review Result:
   task constrained to review / cleanup or another negative contract, and do
   not open worker-side ICP + native `Record_buffer` positive execution。
 
+#### M11-F5-E2: Debug-only ICP Sentinel Restore Cleanup
+
+Status: completed；build, targeted MTR, full suite validation, and Code /
+Docs / Test Review passed。
+
+Goal:
+
+- 收敛 F5-E1 review 的非阻塞风险：如果手工同时启用
+  `pq_worker_icp_record_buffer_negative_smoke` 和
+  `pq_worker_icp_ownership_mismatch_smoke`，旧逻辑会第二次保存已经注入的
+  leader ICP sentinel，导致 cleanup 恢复 sentinel 而不是原始状态；
+- 保持所有 positive worker-side ICP + native `Record_buffer` path 关闭。
+
+Implementation:
+
+- 在 `Gather_operator::run_worker_attach_contract_smoke()` 内部抽出
+  idempotent `install_leader_icp_sentinel()` helper；
+- 只有第一次安装 sentinel 时保存原始 `pushed_idx_cond` 和
+  `pushed_idx_cond_keyno`；
+- 后续 DBUG 分支重复安装 sentinel 时不覆盖保存值；
+- cleanup 继续通过既有路径恢复 leader handler ICP state。
+
+Test Contract:
+
+- `pq_worker_attach_contract_smoke` 新增组合 DBUG window：
+  - 同时启用 `pq_worker_icp_record_buffer_negative_smoke` 和
+    `pq_worker_icp_ownership_mismatch_smoke`；
+  - 查询必须返回原始行，不崩溃；
+  - 恢复 debug 后立即执行普通查询，证明 leader ICP state 已恢复；
+  - combined reject delta `>= 1`；
+  - attach success / ranges dispatched / secondary rows deltas all `0`。
+
+Validation:
+
+- RED check reproduced the issue before the fix: combined flags caused
+  connection loss / mysqld SIGSEGV in `innobase_index_cond()` because the
+  sentinel remained installed during serial read；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `pq_worker_attach_contract_smoke --record` executed SQL successfully but MTR
+  failed at final log-to-result copy with errno 1；result was mechanically
+  synced from the generated log；
+- `pq_worker_attach_contract_smoke` replay passed；
+- full `parallel_query` suite passed 89/89。
+
+Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: None；
+- Non-blocking risks:
+  - GREEN test proves restoration indirectly through an immediate ordinary
+    query after resetting debug, rather than inspecting `pushed_idx_cond`
+    directly；this is acceptable because RED reproduced a crash in the
+    subsequent serial read path；
+  - working tree has many unrelated untracked files；commit must include only
+    the reviewed F5-E2 files；
+- Required fixes before commit: None；
+- Safe next task: commit F5-E2 cleanup, then continue with another negative
+  contract or review-only cleanup；keep native `Record_buffer`,
+  `pq_worker_scan_next()`、MQ row production and worker-side ICP positive path
+  closed。
+
+Review Prompt:
+
+请作为 M11-F5-E2 Code / Docs / Test Review Agent，只读审查当前 patch：
+
+1. `install_leader_icp_sentinel()` 是否只保存一次原始 leader ICP state；
+2. 组合 DBUG flags 是否不会再把 sentinel 作为 saved state；
+3. cleanup 是否仍恢复原始 `pushed_idx_cond` / keyno；
+4. 是否没有打开 `set_record_buffer()`、`pq_worker_scan_next()`、worker row
+   production、MQ token 或 worker-side ICP positive path；
+5. 测试是否真实覆盖 RED 崩溃路径和 GREEN 恢复路径。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Required fixes before commit
+- Safe next task recommendation
+
 Review Prompt:
 
 请作为 M11-F5-E1 Code / Docs / Test Review Agent，只读审查当前 patch：
