@@ -7820,6 +7820,182 @@ Design/Source Review - M11-E5r-1:
   - `ref_length` validation；
   - handler instance compatibility。
 
+### M11-E5r-2-pre: Worker position(record) and MQ Handler Ref Format Contract
+
+Status: design-only taskbook drafted from independent Design/Source Review；
+Docs/Source Review accepted；ready for docs-only commit。
+
+Goal:
+
+- define the preconditions for moving from synthetic `PQOF` row_id bytes to
+  handler `ref` bytes；
+- identify the future worker row-production hook where `position(record)` may
+  be called；
+- define a safe MQ handler-ref deep-copy contract；
+- keep `cmp_ref()` comparator coding blocked until this contract is reviewed；
+- keep visible ORDER BY PQ blocked。
+
+Design/Source Review input:
+
+- Review Agent verdict: `ACCEPT` for design-only pre-task；
+- direct `cmp_ref()` comparator remains forbidden；
+- if coding is considered later, only private metadata / validation helper is
+  acceptable, and only after a separate review。
+
+Current branch future-hook inventory:
+
+- `PQ_row_sink` documents that SQL sink implementations must deep-copy worker
+  row image before `send_row()` returns；
+- `PQ_limited_mq_row_sink::send_row()` is the closest SQL-layer callback row
+  production point；it currently sends only row image through
+  `Exchange_nosort::enqueue_record_image()`；
+- `Exchange_nosort::enqueue_record_image()` deep-copies record image to MQ and
+  is a useful no-ref contrast point；
+- `PQ_orderby_frame_header` already has `row_id_len` and payload layout for
+  ORDER BY `PQOF` frames；
+- `pq_send_orderby_frame()` deep-copies `record_image`, `row_id`, and
+  `sort_key` into the MQ message, but does not prove `row_id` is handler ref；
+- `PQblockScanIterator::Read()` remains a skeleton and must not be modified in
+  this pre-task；
+- `Query_result_mq::send_data()` currently does not send `file->ref` /
+  `file->ref_length` in this branch and must not be modified in this pre-task；
+- `Gather_operator::init()` still defaults to `Exchange_nosort` and must not
+  select `Exchange_sort` for normal SQL；
+- `ParallelScanIterator::Read()` remains the nosort materialization path and
+  must not be connected to ORDER BY。
+
+Commercial reference chain:
+
+1. Worker `PQblockScanIterator::Read()` successfully reads a worker record；
+2. if `m_need_rowid` is true, worker calls
+   `table()->file->position(m_record)`；
+3. InnoDB `position(record)` writes either primary-key bytes or generated
+   row-id bytes into handler-owned `file->ref`；
+4. commercial `Query_result_mq::send_data()` includes `file->ref` with length
+   `file->ref_length` when stable output is required；
+5. commercial `Exchange_sort::store_mq_record()` deep-copies MQ ref bytes into
+   cached `m_row_id`；
+6. commercial `heap_compare_records()` compares real Filesort key first, then
+   calls `file->cmp_ref(row_id_0, row_id_1) < 0` for equal-key stable output。
+
+Contract requirements:
+
+- worker may call `position(record)` only after a successful row read；
+- `record` must be the worker handler's current row image, matching
+  `TABLE::record[0]` / iterator-owned record state；
+- handler ref bytes must be deep-copied before the worker handler advances,
+  detaches, or reuses handler buffers；
+- ORDER BY frame metadata must distinguish handler ref bytes from synthetic
+  smoke row ids；
+- frame metadata must carry or validate expected `ref_length`；
+- stable-output requirement must be explicit；
+- leader comparator handler must be compatible with the worker-produced ref
+  table shape and ref format；
+- partitioned handler refs require mandatory `ref_length` validation；
+- InnoDB primary-key refs are type-aware under `cmp_ref()`, so byte-vector
+  lexical order must not be claimed equivalent。
+
+Recommended next split:
+
+- E5r-2-pre remains docs-only；
+- a later reviewed E5r-2a may add private frame metadata shape and validation
+  helper only；
+- a later reviewed E5r-2b may add a private controlled validation smoke using
+  synthetic bytes only to verify fail-closed metadata checks；
+- actual worker `position(record)`, `Query_result_mq` wire-format changes,
+  and `cmp_ref()` comparator must remain blocked until their own reviews。
+
+Allowed files for E5r-2-pre:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Allowed files for a later reviewed private metadata task:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- docs；
+- optional focused MTR only if a new DBUG-visible guard is added。
+
+Forbidden:
+
+- `cmp_ref()` comparator；
+- `file->position(record)` calls；
+- `Query_result_mq::send_data()` wire-format changes；
+- `PQblockScanIterator::Read()` changes；
+- `ParallelScanIterator::Read()` changes；
+- `Gather_operator::init()` default `Exchange_sort` selection；
+- `pq_optimizer.*` readiness changes；
+- `HAS_ORDER_BY` serial boundary changes；
+- handler/InnoDB, worker launch, AccessPath, executor, sysvar, or public
+  counter changes；
+- claiming synthetic row_id bytes are handler refs。
+
+Hard gates:
+
+- `rowid_tiebreak_ready=false`；
+- `default_ordered_read_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- `HAS_ORDER_BY` remains the ordinary SQL serial boundary；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`；
+- normal ORDER BY SQL must not increase executed / worker / range counters。
+
+Validation for E5r-2-pre:
+
+- docs-only；
+- `git diff --check` before commit；
+- no build/MTR required unless source or test files change。
+
+Design/Source Review - M11-E5r-2-pre:
+
+- Review Agent verdict: `ACCEPT` for a design-only pre-task；
+- confirmed future hook candidates:
+  - `PQ_row_sink`；
+  - `PQ_limited_mq_row_sink::send_row()`；
+  - `Exchange_nosort::enqueue_record_image()` as no-ref contrast；
+  - `PQOF` frame header and `pq_send_orderby_frame()` as private metadata
+    shape candidates。
+- confirmed still-forbidden current points:
+  - `PQblockScanIterator::Read()`；
+  - `Query_result_mq::send_data()`；
+  - `Gather_operator::init()`；
+  - `ParallelScanIterator::Read()`。
+- confirmed the commercial chain from worker `position(record)` to
+  `file->ref`, MQ ref deep-copy, `Exchange_sort::m_row_id`, and
+  `handler::cmp_ref()`；
+- recommended only design-only now；
+- if later coding is approved, limit it to private frame metadata shape or
+  validation helper；
+- confirmed `Query_result_mq` and `pq_iterators` must remain forbidden in this
+  pre-task。
+
+Docs/Source Review - M11-E5r-2-pre:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: no critical, important, or minor issues；
+- confirmed the taskbook accurately records future hooks:
+  - `PQ_row_sink`；
+  - `PQ_limited_mq_row_sink::send_row()`；
+  - `Exchange_nosort::enqueue_record_image()`；
+  - `PQOF` header and `pq_send_orderby_frame()`。
+- confirmed the taskbook keeps current forbidden points intact:
+  - `PQblockScanIterator::Read()`；
+  - `Query_result_mq::send_data()`；
+  - `Gather_operator::init()`；
+  - `ParallelScanIterator::Read()`。
+- confirmed the commercial chain is documented as worker `Read()` to
+  `position(record)`, handler `file->ref/ref_length`, MQ deep-copy,
+  `Exchange_sort::m_row_id`, and `cmp_ref()` tie-break；
+- confirmed the docs do not over-commit coding and keep future implementation
+  limited to private metadata / validation helper after a separate review；
+- confirmed hard gates remain explicit:
+  - `rowid_tiebreak_ready=false`；
+  - `default_ordered_read_ready=false`；
+  - `exchange_sort_heap_read_ready=false`；
+  - ordinary SQL ORDER BY remains blocked by the `HAS_ORDER_BY` serial boundary。
+- scope note: tracked diff is docs-only；build/MTR is not required for this
+  task。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
