@@ -2,9 +2,9 @@
 
 ## 状态
 
-Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage under review；
-next task is M11-F5a secondary MIN / optimizer shortcut docs-only source
-inventory；real worker-side ICP positive row production remains blocked。
+Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage accepted；
+M11-F5a secondary MIN / optimizer shortcut source inventory completed and
+under review；real worker-side ICP positive row production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -1352,6 +1352,8 @@ F5-E: ICP + native `Record_buffer` combined path
 
 #### Proposed M11-F5a: Secondary MIN / Optimizer Shortcut Source Inventory
 
+Status: source inventory completed；Design / Docs / Source Review pending。
+
 性质：docs-only design/source inventory。debug-only coding 只有在 hook-point
 review 证明检测点不会错过 shortcut，也不会改变 MIN/MAX shortcut 语义后才
 允许进入。
@@ -1397,6 +1399,67 @@ review 证明检测点不会错过 shortcut，也不会改变 MIN/MAX shortcut �
   `Parallel_secondary_rows_produced` 不增长；
 - targeted MTR、`pq_stats`、完整 suite 通过；
 - Code / Docs / Test Review Agent 返回 `ACCEPT`。
+
+Source Inventory Findings:
+
+- 当前分支 `sql/sql_optimizer.cc` 在 `JOIN::optimize()` 早期调用
+  `optimize_aggregated_query()`；如果返回 `AGGR_COMPLETE`，
+  optimizer 会设置 `tables_list = nullptr`、`best_rowcount = 1`，
+  创建 fake single-row access path，并跳到 `setup_subq_exit`。这发生在
+  后置 PQ eligibility 之前。
+- 当前分支 `sql/opt_sum.cc` 的 MIN/MAX shortcut 在
+  `find_key_for_maxmin()` 成功后直接 `ha_index_init()`，临时收窄
+  `TABLE::read_set`，调用 `get_index_min_value()` /
+  `get_index_max_value()`，再恢复 `read_set` 并结束 handler index cursor。
+  该路径是 optimizer shortcut，不是 PQ worker row-production path。
+- 当前分支 `sql/parallel_query/pq_optimizer.cc` 的后置 eligibility 只能
+  看到未被 optimized-away 的 plan；`pq_check_full_table_scan()` 只接受
+  `JT_ALL`。`JT_RANGE` secondary index 只做 unsupported probe / smoke，
+  然后以 `NON_FULL_TABLE_SCAN` fail-closed。
+- 因此仅在 `pq_optimizer.cc` 后置诊断无法证明 secondary MIN shortcut
+  已被观测；如果后续需要 debug-only counter，主观测点必须在
+  `opt_sum.cc` shortcut 读取完成并决定 `AGGR_COMPLETE` / `AGGR_EMPTY`
+  的边界附近，`pq_optimizer.cc` 只能作为相邻 fail-closed 证明。
+- 商用参考仓 `sql/opt_sum.cc` 未发现 PQ 专用 guard、fallback reason 或
+  debug hook。商用 `sql_optimizer.cc` 也在 PQ 选择前执行
+  `optimize_aggregated_query()`，shortcut 成功后同样表现为
+  `Select tables optimized away`。
+- 商用参考仓 `pq_sec_index_min.test` 名称有误导性：内容是 secondary
+  index predicate 的 `SELECT * WHERE i < ... / j < ...`，没有 `MIN()`，
+  没有 EXPLAIN，也不能证明 secondary MIN shortcut positive PQ。
+- 商用参考仓有普通 aggregate / covering secondary range positive 证据，
+  但这不等于 `opt_sum` MIN/MAX shortcut 并行化。当前迁移结论是：
+  secondary MIN shortcut 先作为 optimizer shortcut guard / diagnostic
+  分类，不作为可平移 positive execution path。
+
+F5a Decision:
+
+- 不平移 secondary MIN positive execution；
+- 不把商用 `pq_sec_index_min` 当作 MIN/MAX shortcut 正例；
+- 后续若做 F5a-1，只允许 debug-only diagnostic taskbook；
+- F5a-1 的首选代码边界必须先单独 review：`opt_sum.cc` 只读诊断 counter
+  + MTR guard；不得改变 shortcut 选择、handler read、read_set 语义、
+  PQ eligibility、worker/MQ/InnoDB row path；
+- `pq_optimizer.cc` 后置诊断只能补充验证相邻 `ORDER BY ... LIMIT 1` /
+  secondary range fallback，不得替代 `opt_sum.cc` shortcut 观测。
+
+Recommended F5a-1 Task Shape:
+
+- 先写 coding taskbook，不直接编码；
+- 候选 SQL shape 复用 `pq_commercial_ref_icp.test` 的
+  `pq_ref_icp_min(id, i, j, KEY j_idx(j))`；
+- 必备 SQL：
+  - `SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)`；
+  - `SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx) WHERE j < 30`；
+  - empty boundary：`SELECT MIN(j) ... WHERE j < 0`；
+  - adjacent first-row fallback：
+    `SELECT id, i, j ... WHERE j < 30 ORDER BY j LIMIT 1`；
+- 现有 PQ counter window 必须继续保持：
+  `Parallel_queries_executed = 0`、`Parallel_workers_launched = 0`、
+  `Parallel_ranges_built = 0`、`Parallel_ranges_dispatched = 0`、
+  `Parallel_secondary_rows_produced = 0`；
+- 若新增 debug-only shortcut counters，只能表达 attempts / success /
+  empty / unsupported，不得影响 release build 或 user-visible execution。
 
 Triage Review Revision:
 
