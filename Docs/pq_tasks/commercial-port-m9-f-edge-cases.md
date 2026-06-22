@@ -11,7 +11,9 @@ M9-F5 record buffer / prefetch contract completed / Design Review accepted。
 M9-F5a/F5b record-buffer diagnostics completed / Code/Task Review accepted。
 M9-F6 optional reverse positive gate skipped: F2 review did not recommend
 opening a positive reverse range gate。
-M9-F7 commercial breadth backlog recorded。
+M9-F7 commercial breadth backlog recorded。Worker-side ref/ICP continuation
+has moved to M11-F0:
+[commercial-port-m11-ref-icp-worker-path.md](commercial-port-m11-ref-icp-worker-path.md)。
 No source edits outside MTR/docs。
 
 M9-E2-0 已确认当前没有稳定 constant covering `REF + ICP` 正例，因此
@@ -622,6 +624,10 @@ Backlog:
   shortcut 专项，不混入 M9 secondary row-production path；
 - ICP + native `Record_buffer`：必须单独阶段验证，不并入首个
   record-buffer performance gate。
+
+商用 worker-side ref/ICP 主线不再继续塞入 M9-F。M9-F 保留为 edge guard /
+diagnostic backlog；`PQRefIterator`、worker-side ICP clone/refix、
+`pq_worker_scan_next()` 和 MQ row production 的连续迁移进入 M11-F。
 
 ## 推荐执行顺序
 
