@@ -2,9 +2,9 @@
 
 ## 状态
 
-Status: M11-F0/F1a/F2 completed；M11-F3 Worker-side ICP Clone / Refix
-Contract design taskbook created；real worker-side ICP positive row production
-remains blocked。
+Status: M11-F0/F1a/F2/F3 completed；next task is M11-F4 Native
+Record_buffer / Prefetch Worker-owned Adapter design；real worker-side ICP
+positive row production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -733,7 +733,8 @@ Code / Task Review:
 
 ### M11-F3: Worker-side ICP Clone / Refix Contract
 
-Status: M11-F3b implemented；awaiting Code / Docs / Test Review Agent。
+Status: M11-F3b completed / Code-Docs-Test Review accepted / committed as
+`a8ad45ecf0c`。
 
 建议性质：design-first + 后续 debug-only fail-closed smoke。F3 不打开真实
 worker-side ICP positive path；不调用真实 `PQRefIterator::Read()` /
