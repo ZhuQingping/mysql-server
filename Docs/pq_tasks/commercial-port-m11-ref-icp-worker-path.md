@@ -996,16 +996,183 @@ Code / Docs / Test Review:
 
 ### M11-F4: Native Record_buffer / Prefetch Worker-owned Adapter
 
-建议性质：design-first，性能优化，不是 correctness 前置。
+Status: F4a design taskbook created；awaiting Design / Docs / Source Review。
 
-首批仅允许讨论：
+建议性质：docs-only contract first。`Record_buffer` / prefetch 是性能路径，
+不是当前 correctness 前置。F4 不直接打开 native `Record_buffer` positive
+path，不调用真实 `pq_worker_scan_next()`，不迁移商用 `pq_record_buffer`
+大矩阵。
 
-- non-partitioned；
-- forward；
-- covering secondary range；
-- no ICP；
-- no BLOB/fixed-point/read-set-hostile shape；
-- 每个 worker 独占 `Record_buffer` / prebuilt fetch cache。
+#### Explorer Findings
+
+当前分支确认：
+
+- 没有 native `Record_buffer` / InnoDB prefetch positive path；
+- 已有 `pq_record_buffer_probe()` 只统计 handler
+  `ha_get_record_buffer()` 是否为 null/non-null；
+- `PQ_record_buffer_sink` 是 SQL-owned `std::vector<std::vector<uchar>>`
+  row-image buffer，不是 server native `Record_buffer`；
+- 当前 leader-local secondary/ref positive path 会先写 handler
+  `record[0]`，再 deep-copy 到 SQL vector，最后 leader iterator 再 memcpy
+  回 leader `record[0]`；
+- debug worker callback/MQ path 使用 row-image MQ / `Exchange_nosort`，
+  也不是 native `Record_buffer`；
+- `pq_worker_scan_next()` 仍返回 unsupported；worker pull-row path 没有
+  native buffer 执行入口；
+- M9-F/F5 diagnostics 期望 native record-buffer non-null delta 为 `0`。
+
+商用实现确认：
+
+- `PQblockScanIterator::Init()` / `PQRefIterator::Init()` 在
+  `pq_worker_scan_init()` 后调用 `set_record_buffer()`；
+- `set_record_buffer()` 分配或复用 `TABLE::m_record_buffer`，并通过
+  `ha_set_record_buffer()` 把裸指针交给 handler；
+- InnoDB worker row read 通过 `row_sel_get_record_buffer(prebuilt)` 从
+  worker handler 取得 buffer；
+- 有 record buffer 时，商用 `PQ_Ctx::read_record()` 以
+  `Record_buffer::max_records()` 为 batch 上限；
+- `Record_buffer::out_of_range` 用于延迟通知当前 ctx/range 已耗尽：先 drain
+  cached rows，再请求下一 ctx；
+- `pq_worker_scan_end()` 清理 worker `pq_ctx`、`pq_worker`、ref info、
+  `n_fetch_cached`、`fetch_cache_first` 等 prebuilt fetch-cache 状态；
+- 商用 `pq_record_buffer.test` 覆盖 normal/partition/hash/list/key、
+  unsuitable scenes、ICP、dependent-ref join、subquery、dirty fetch-cache 等
+  大矩阵，当前不能一次性平移。
+
+#### F4 Contract Requirements
+
+所有权：
+
+- native `Record_buffer` 所有权属于 worker `TABLE::m_record_buffer`；
+- 内存由 SQL executor / worker MEM_ROOT 管理；
+- handler / InnoDB 只能保存裸指针，不释放、不跨 worker 共享；
+- worker handler、`TABLE::record[0]`、`TABLE::m_record_buffer`、
+  `prebuilt->n_fetch_cached`、`prebuilt->fetch_cache_first` 必须 worker-local；
+- leader `TABLE::m_record_buffer` 或 leader handler `m_record_buffer` 不能
+  泄漏到 worker。
+
+attach / detach 顺序：
+
+- worker `TABLE` / handler / prebuilt ownership gate 通过后，才允许讨论
+  native buffer attach；
+- attach 必须发生在 worker handler scan init 完成、handler `inited`
+  状态有效之后，第一次 worker row read 之前；
+- worker scan end、ERROR、KILL、early EOF、fallback-before-start 都必须清理
+  handler record-buffer pointer 和 InnoDB fetch-cache counters；
+- nested-loop / repeated init 场景不能重复分配泄漏，只能 reset
+  `TABLE::m_record_buffer` 并同步清 prebuilt cached counters。
+
+row lifetime：
+
+- native `Record_buffer` 只缓存 worker handler row read 的 result rows；
+- SQL-owned row-image sink / MQ sink 仍是当前 row-production contract；
+- F4 不把 SQL-owned `PQ_record_buffer_sink` 替换为 native `Record_buffer`；
+- native buffer slots 由 worker `TABLE::m_record_buffer` / worker MEM_ROOT
+  拥有，只能经 worker handler row buffer 消费，并继续通过当前 worker
+  row-image / MQ contract copy 给 leader；不能把 buffer slot 指针直接交给
+  leader result；
+- BLOB/TEXT/JSON/GEOMETRY、fixed-point、hostile read_set/write_set、
+  locking read、HANDLER、FTS 等 unsuitable shapes 继续 blocked。
+
+range / ref / ICP：
+
+- `Record_buffer::out_of_range` 必须与 worker range/ctx 边界一致；
+- dependent ref 每个 probe key 重建 range 后必须 reset buffer 与
+  fetch-cache state；
+- ICP + native `Record_buffer` 必须单独阶段处理，不能并入 F4 首批；
+- non-covering clustered lookup、MVI、reverse、partition、visible ORDER BY
+  positive path 继续 blocked。
+
+当前 F4 正例延后原因：
+
+- 当前分支不使用商用独立 B+tree partition/pull reader，而是基于 8.0.46
+  `Parallel_reader` / callback / row-image MQ 适配路线；
+- `PQblockScanIterator::Read()`、`PQRefIterator::Read()` 和真实
+  `pq_worker_scan_next()` 仍未作为用户可见路径启用；
+- worker-side ICP clone/refix、dependent ref dispatch、partition/MVI/reverse
+  gates 还未达到可与 native buffer 混合的状态；
+- 因此直接平移商用 `pq_record_buffer` positive path 风险高于收益。
+
+#### Proposed M11-F4a: Record_buffer Contract Design Review
+
+性质：docs-only。
+
+允许修改：
+
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+禁止修改：
+
+- `sql/**`
+- `storage/**`
+- `mysql-test/**`
+- 构建脚本或 result 文件
+
+验收：
+
+- Design / Docs / Source Review Agent 返回 `ACCEPT`；
+- 明确 F4b 是否进入 debug-only diagnostic；
+- 不改变源码和 MTR。
+
+#### Proposed M11-F4b: Debug-only Record_buffer Diagnostic
+
+性质：F4a review accepted 后再做；debug-only / fail-closed diagnostic。
+
+候选目标：
+
+- 在现有 worker attach/probe 边界证明当前 worker handler
+  `ha_get_record_buffer()` 仍为空；
+- 证明没有 native buffer attach、没有 `n_fetch_cached` /
+  `fetch_cache_first` 污染、worker end cleanup 幂等；
+- 任何 native-buffer non-null shape 都不得增长
+  `Parallel_queries_executed`、`Parallel_workers_launched`、
+  `Parallel_ranges_dispatched`、`Parallel_secondary_rows_produced`；
+- 不要求 `Parallel_ranges_built = 0`，除非诊断点位于 leader range build 前。
+
+候选允许修改：
+
+- `sql/parallel_query/sql_parallel.cc`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`
+- `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`
+- 必要的 PQ status 变量注册文件
+- 本任务文档与总看板
+
+候选禁止修改：
+
+- `sql/sql_executor.cc`
+- `sql/record_buffer.h`
+- `sql/iterators/basic_row_iterators.*`
+- `sql/iterators/ref_row_iterators.*`
+- `sql/parallel_query/pq_iterators.cc` positive `Read()` 路径；
+- `storage/innobase/row/row0pread_pq.cc` positive pull-reader path；
+- `storage/innobase/row/row0sel.cc`
+- 任何 positive native `Record_buffer` / prefetch row production。
+
+Hard stop：
+
+- 需要在 PQ worker 上真实调用 `set_record_buffer()`；
+- 需要启用 `pq_worker_scan_next()`；
+- 需要把 native buffer slot 作为 leader result row sink；
+- 需要同时处理 ICP/ref/partition/reverse/MVI；
+- smoke 需要非 debug gate 或长测试。
+
+Design / Docs / Source Review:
+
+- Review Agent verdict: `ACCEPT`；
+- blocking findings: none；
+- confirmed current branch has no native `Record_buffer` / prefetch positive
+  path；
+- confirmed current code only probes `ha_get_record_buffer()` null/non-null and
+  uses SQL-owned row-image sinks；
+- confirmed `PQblockScanIterator::Read()`、`PQRefIterator::Read()` and
+  `ha_innobase::pq_worker_scan_next()` remain fail-closed/stubbed；
+- confirmed ownership/lifecycle contract covers worker TABLE/handler/prebuilt
+  isolation, attach ordering, cleanup on ERROR/KILL/early EOF/
+  fallback-before-start, dependent-ref reinit, and fetch-cache cleanup；
+- confirmed F4b can proceed if it remains debug-only/fail-closed and keeps
+  the hard stops。
 
 ### M11-F5: Edge Positive Paths Backlog
 
