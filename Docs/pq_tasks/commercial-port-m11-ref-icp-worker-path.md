@@ -2,8 +2,9 @@
 
 ## 状态
 
-Status: M11-F0/F1a completed；M11-F2 Worker TABLE / Handler / Prebuilt
-Ownership Contract design in progress。
+Status: M11-F0/F1a/F2 completed；M11-F3 Worker-side ICP Clone / Refix
+Contract design taskbook created；real worker-side ICP positive row production
+remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -732,16 +733,179 @@ Code / Task Review:
 
 ### M11-F3: Worker-side ICP Clone / Refix Contract
 
-建议性质：design-first。
+Status: design taskbook accepted；Design / Docs / Source Review Agent returned
+`ACCEPT`；next task is M11-F3b debug-only ICP ownership mismatch smoke。
 
-需要回答：
+建议性质：design-first + 后续 debug-only fail-closed smoke。F3 不打开真实
+worker-side ICP positive path；不调用真实 `PQRefIterator::Read()` /
+`PQblockScanIterator::Read()` row production；不启用 `pq_worker_scan_next()`。
 
-- `TABLE::pq_copy()` deep-clone `pushed_idx_cond` 在当前 8.0 分支是否可行；
-- `make_cond_for_index()` / `idx_cond_push()` / `make_cond_remainder()` 在
-  worker THD/TABLE 中的所有权；
-- `ICP_OUT_OF_RANGE`、filtered row、clustered lookup continuation 与
-  PQ counters 的关系；
-- ICP failure after partial row production 是否允许 fallback。
+#### Explorer Findings
+
+当前分支确认：
+
+- 标准 ICP 拆分与推下在 `make_cond_for_index()`、
+  `make_cond_remainder()`、`QEP_TAB::push_index_cond()` 和
+  handler `idx_cond_push()` 链路中完成；
+- InnoDB ICP 依赖 handler `pushed_idx_cond` / `pushed_idx_cond_keyno`、
+  `build_template()` 生成的 `m_prebuilt->idx_cond` template，以及
+  `row_search_idx_cond_check()` 对当前 handler `table->record[0]` 的求值；
+- 当前可执行正例 M9-E1c-2a 是 leader-local non-covering secondary range
+  ICP + clustered lookup，会保存/恢复 leader handler/prebuilt mutable
+  state；它不是 worker-owned ICP；
+- 当前 `pq_clone.cc`、`pq_clone_item.cc`、`pq_refix_fields_item.cc` 和
+  `pq_resolver.cc` 仍不能提供 worker `TABLE/Field/Item` 全量 clone/refix；
+- 因此当前不能把 leader `pushed_idx_cond`、`pq_cond` 或 `Item_field`
+  直接借给 worker handler 执行。
+
+商用实现确认：
+
+- `QEP_TAB::pq_copy()` clone `pq_cond` 并 `refix_fields()`；
+- `TABLE::pq_copy()` deep-clone `orig->file->pushed_idx_cond`，复制
+  `pushed_idx_cond_keyno`，并把字段引用 refix 到 worker TABLE；
+- `Index_lookup::pq_copy()` deep-copy ref key buffer、clone/refix ref items，
+  重建 `store_key`；
+- worker setup 在 worker `THD/TABLE/handler` 上重新执行
+  `make_cond_for_index()` -> `idx_cond_push()` -> `make_cond_remainder()`；
+- InnoDB worker row read 在 secondary record 阶段执行 ICP，
+  `ICP_NO_MATCH` 跳过，`ICP_OUT_OF_RANGE` 结束当前 range，`ICP_MATCH`
+  才继续必要的 clustered lookup；
+- `pq_ref_build_ranges()` 不用 ICP 判断 ref key 是否为空；dependent ref 的
+  per-probe key 需要由 ref path deep-copy，并交给 worker dispatch 校验。
+
+#### F3 Contract Requirements
+
+Worker-owned ICP Item：
+
+- `pushed_idx_cond`、`pq_cond`、remainder condition 和 ref key items 必须在
+  worker `THD` / worker `TABLE` 生命周期内 deep-clone；
+- 所有 `Item_field::field` / table map / record pointer 必须 refix 到
+  worker TABLE/record；
+- 禁止共享 leader `Item*`、leader handler `pushed_idx_cond`、leader
+  `TABLE::record[0]` 或 leader prebuilt ICP state；
+- 在 clone/refix 覆盖面没有逐类证明前，worker-side ICP 必须 fail-closed。
+
+Worker pushdown / remainder：
+
+- worker TABLE 与 handler 已打开后，才能在 worker handler 上重新执行
+  `idx_cond_push(keyno, idx_cond)`；
+- `idx_cond` 必须来自 worker-owned cloned condition；
+- `make_cond_remainder()` 的结果必须保留 SQL 层非 ICP filter，不能丢
+  filter，也不能重复过滤导致结果不一致；
+- `pushed_idx_cond_keyno` 必须与 worker active index 一致。
+
+InnoDB prebuilt / template：
+
+- `m_prebuilt->m_mysql_table`、`m_mysql_handler`、`index`、
+  `active_index`、`read_just_key`、`mysql_template`、`idx_cond`、
+  `idx_cond_n_cols`、`need_to_access_clustered`、`m_end_range`、
+  `pcur/clust_pcur` 必须是 worker handler 独占状态；
+- worker ICP 只能经由 `idx_cond_push()` + `build_template()` +
+  `row_search_idx_cond_check()`，禁止裸调 `pushed_idx_cond->val_int()`；
+- leader prebuilt/handler mutable state 不得因 worker setup 或 cleanup 被修改。
+
+Counters / error semantics：
+
+- `ICP_NO_MATCH` 过滤行不得增长 produced-row counters；
+- `ICP_OUT_OF_RANGE` 只能结束当前 worker range，不能被解释为 produced row；
+- worker start 之前发现 clone/refix/pushdown 不满足，可以 fail-closed 并走
+  串行 fallback；
+- worker start 之后或已有 worker row token 之后失败，不允许 silent serial
+  fallback，必须走 worker ERROR / abort / cleanup；
+- dependent ref + ICP 中，range/ref boundary build 不能用 ICP 过滤 key 是否
+  存在，尤其不能用含 outer-table 引用的 ICP 提前判空。
+
+继续 blocked：
+
+- native `Record_buffer` / InnoDB prefetch 与 ICP 组合；
+- MVI positive unique filter；
+- reverse positive range/ref/index scan；
+- partition positive full/range/ref/dependent-ref；
+- visible ORDER BY positive path；
+- `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、真实
+  `pq_worker_scan_next()` row production。
+
+#### Proposed M11-F3a: Worker ICP Contract Documentation Review
+
+性质：docs-only。
+
+允许修改：
+
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+禁止修改：
+
+- `sql/**`
+- `storage/**`
+- `mysql-test/**`
+- 构建脚本或 result 文件
+
+验收：
+
+- Design / Docs / Source Review Agent 返回 `ACCEPT`；
+- review 明确 F3b 是否可以进入 debug-only fail-closed smoke；
+- 不改变源码和 MTR。
+
+#### Proposed M11-F3b: Debug-only ICP Ownership Mismatch Smoke
+
+性质：debug-only negative smoke；需在 F3a review accepted 后再编码。
+
+目标：
+
+- 构造 ICP-specific mismatch：leader 有 `pushed_idx_cond`，但 worker 没有
+  worker-owned cloned/refixed ICP state，或 worker ICP keyno ownership 不满足；
+- 不允许仅重复 M11-F2b generic handler/prebuilt ownership mismatch；
+- 证明该形态在 worker attach/init 边界 fail-closed；
+- 证明负例不增长 `Parallel_queries_executed`、
+  `Parallel_workers_launched`、`Parallel_ranges_dispatched`、
+  `Parallel_secondary_rows_produced`；
+- 不强制 `Parallel_ranges_built = 0`，因为 worker attach/init smoke 可能在
+  worker-side rejection 之前已经构造 leader-side ranges；
+- 断言 attach/smoke attempt delta `>= 1`、cleanup delta `>= 1`、success
+  delta `= 0`，证明负例可达且 cleanup 执行；
+- 证明不会调用真实 `pq_worker_scan_next()` 或 enqueue worker row token。
+
+候选允许修改：
+
+- `sql/parallel_query/sql_parallel.cc`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`
+- `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`
+- 必要的 PQ status 变量注册文件
+- 本任务文档与总看板
+
+候选禁止修改：
+
+- `sql/item*.{h,cc}`
+- `sql/sql_select.cc`
+- `sql/parallel_query/pq_clone.*`
+- `sql/parallel_query/pq_refix*`
+- `storage/innobase/row/row0sel.cc`
+- `storage/innobase/handler/ha_innodb.cc`
+- 任何 positive worker-side ICP row production。
+
+Hard stop：
+
+- 需要 clone `pushed_idx_cond` 到 worker `THD/TABLE/handler`；
+- 需要重绑 `Item_field::field` 到 worker `TABLE::field[]`；
+- 需要在 worker handler 上真实执行 `idx_cond_push()`；
+- worker 路径出现 `m_prebuilt->idx_cond == true` 后仍继续生产行；
+- smoke 需要非 debug gate 或长测试。
+
+Design / Docs / Source Review:
+
+- Review Agent verdict: `ACCEPT`；
+- blocking findings: none；
+- confirmed F3 contract distinguishes current leader-local ICP from commercial
+  worker-side ICP；
+- confirmed F3 keeps `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+  `pq_worker_scan_next()` and positive worker-side ICP row production blocked；
+- recommended F3b proceed with an ICP-specific mismatch, not a repeat of the
+  F2b generic ownership mismatch；
+- clarified F3b should not require `Parallel_ranges_built = 0` but must assert
+  attempt/cleanup reached, success `= 0`, workers/ranges-dispatched/secondary
+  rows unchanged。
 
 ### M11-F4: Native Record_buffer / Prefetch Worker-owned Adapter
 
