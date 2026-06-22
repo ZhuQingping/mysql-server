@@ -8128,8 +8128,8 @@ Code/Doc/Test Review - M11-E5r-2a:
 
 ### M11-E5r-2b: Controlled Row-id Metadata Validation Smoke
 
-Status: implementation completed；Code/Doc/Test Review accepted；full
-`parallel_query` suite passed；ready for commit。
+Status: committed as `976885fb58c`；Code/Doc/Test Review accepted；full
+`parallel_query` suite passed。
 
 Goal:
 
@@ -8247,6 +8247,129 @@ Code/Doc/Test Review - M11-E5r-2b:
 - confirmed forbidden paths are not touched；
 - requested full `parallel_query` suite before commit；this was completed and
   passed 89/89。
+
+### M11-E5r-3a: Worker position(record) and MQ Ref Lifetime Design
+
+Status: design-only taskbook drafted from independent Design/Source Review；
+ready for docs-only commit。
+
+Goal:
+
+- document the current branch gaps before any worker `position(record)` coding；
+- define the required worker-side preconditions for producing handler refs；
+- define the MQ deep-copy and lifetime contract for future handler refs；
+- define leader handler compatibility requirements before any future
+  `cmp_ref()` tie-break；
+- keep all real execution-path changes blocked。
+
+Current branch findings:
+
+- `PQblockScanIterator::Read()` remains a fail-closed skeleton and does not
+  call `file->position(record)`；
+- `Query_result_mq::send_data()` emits existing `PQWR` field-value frames and
+  does not carry handler `file->ref` / `file->ref_length`；
+- current `Exchange_sort` row-id handling is private and controlled through
+  `PQOF` frames that deep-copy caller-provided bytes；
+- current controlled compare still falls back to byte-vector row-id / worker-id
+  ordering and does not call `handler::cmp_ref()`；
+- commercial code confirms the missing stable-output chain is multi-step:
+  worker read success, `position(record)`, MQ ref deep-copy, and leader
+  `cmp_ref()` equal-key tie-break。
+
+Worker `position(record)` preconditions:
+
+- call only after a successful worker row read；
+- `record` must be the worker handler's current row image；
+- worker `TABLE`, handler, prebuilt state, read view, and iterator ownership
+  must still be valid；
+- do not call on detach, kill, EOF, or error paths；
+- stable-output requirement must be explicit before producing refs；
+- handler `ref_length` must be known and nonzero before any ref bytes are sent。
+
+Handler ref lifetime contract:
+
+- `file->ref` is handler-owned mutable storage；
+- bytes are valid only until the handler advances, reuses buffers, detaches, or
+  is destroyed；
+- any future MQ path must deep-copy exactly `file->ref_length` bytes before the
+  worker continues；
+- partitioned or engine-specific refs require mandatory `ref_length`
+  validation；
+- synthetic smoke row ids must remain distinguishable from handler refs。
+
+Future MQ contract requirements:
+
+- do not overload existing `PQWR` field-value frames without a separate wire
+  review；
+- do not overload `PQOF::flags`, which currently carries worker id in the
+  controlled ORDER BY frame path；
+- future metadata must explicitly distinguish handler refs from synthetic
+  smoke row ids；
+- future metadata must carry or validate expected `ref_length`；
+- worker ref deep-copy must happen before worker handler state advances。
+
+Leader handler compatibility requirements:
+
+- comparator must use a handler compatible by engine, table shape, ref format,
+  and `ref_length`；
+- compatibility is not established by pointer identity alone；
+- InnoDB `cmp_ref()` is type-aware for primary-key refs and byte-comparison only
+  for generated row-id refs；
+- byte-vector row-id ordering must not be claimed equivalent to
+  `handler::cmp_ref()`；
+- any future comparator task must prove leader handler lifetime and table shape
+  ownership independently。
+
+Recommended next split:
+
+- E5r-3a remains docs-only；
+- E5r-3b may later add a private non-default validation/shape helper only after
+  separate review；
+- real `position(record)`, `Query_result_mq` wire-format ref deep-copy, and
+  `cmp_ref()` comparator tasks remain blocked until their own design and review
+  gates。
+
+Allowed files for E5r-3a:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Forbidden:
+
+- `PQblockScanIterator::Read()` real path changes；
+- `Query_result_mq::send_data()` wire-format changes；
+- `Exchange_sort` `cmp_ref()` comparator；
+- `file->position(record)` calls；
+- `Gather_operator::init()` default `Exchange_sort` selection；
+- `ParallelScanIterator::Read()` ORDER BY path；
+- `pq_optimizer.*` readiness or `HAS_ORDER_BY` serial-boundary relaxation；
+- handler/InnoDB, AccessPath, worker launch, executor, sysvar, or public
+  counter changes。
+
+Hard gates:
+
+- `rowid_tiebreak_ready=false`；
+- `default_ordered_read_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`。
+
+Validation for E5r-3a:
+
+- docs-only；
+- `git diff --check` before commit；
+- no build/MTR required unless source or test files change。
+
+Design/Source Review - M11-E5r-3a:
+
+- Review Agent verdict: `ACCEPT` for design-only；
+- confirmed current `PQblockScanIterator::Read()` has no `position(record)`
+  call；
+- confirmed current `Query_result_mq::send_data()` does not carry handler refs；
+- confirmed current `Exchange_sort` row-id handling remains private/controlled
+  and does not call `cmp_ref()`；
+- confirmed E5r-3b, if any, must remain private non-default validation/shape
+  only；
+- confirmed real execution/comparator coding remains blocked。
 
 ## Risk Areas
 
