@@ -4,9 +4,9 @@
 
 Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage accepted；
 M11-F5a secondary MIN / optimizer shortcut source inventory completed and
-accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic implemented and
-under Code / Docs / Test Review；real worker-side ICP positive row production
-remains blocked。
+accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic completed and
+committed；next task is F5-A reverse boundary contract docs-first；real
+worker-side ICP positive row production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -1466,7 +1466,7 @@ Recommended F5a-1 Task Shape:
 #### Proposed M11-F5a-1: Debug-only Optimizer Shortcut Diagnostic Taskbook
 
 Status: implemented；build and MTR validation passed；Code / Docs / Test Review
-pending。
+accepted；committed as `377de6edd70`。
 
 Goal:
 
@@ -1617,6 +1617,13 @@ Validation:
 - `cd build-ninja/mysql-test && ./mtr --suite=parallel_query --parallel=1`
   passed, 89/89。
 
+Code / Docs / Test Review:
+
+- Review Agent verdict: `ACCEPT`；
+- accepted boundaries: DBUG-only hook and `#ifndef NDEBUG` status variables；
+- non-blocking risk: release builds intentionally do not expose the four
+  debug-only status variables；`unsupported` counter is not asserted by MTR。
+
 Triage Review Revision:
 
 - 初始 Review Agent verdict: `REVISE`；
@@ -1629,6 +1636,164 @@ Triage Review Revision:
   只能在后续单独 review 批准后作为只读诊断进入；
 - 已修订：BLOB/TEXT/JSON/GEOMETRY、fixed-point、hostile
   read_set/write_set shape 明确保留在 global guard / backlog。
+
+#### Proposed M11-F5-A: Reverse Boundary Contract Taskbook
+
+Status: docs-only taskbook drafted；waiting Design / Source / Test Review。
+
+Goal:
+
+- 基于当前分支和商用参考实现，明确 reverse positive range/ref/index scan
+  是否具备进入当前分支的前置条件；
+- 固化当前阶段的边界：先做 reverse boundary / direction / ordering
+  contract，不打开用户可见 reverse PQ 正例；
+- 为后续可执行子任务选择最小安全路径：debug-only reject /
+  diagnostic，而不是直接复制商用 reverse worker path。
+
+Current Branch Facts:
+
+- visible ORDER BY 仍由 `PQUnsuiteReason::HAS_ORDER_BY` 在
+  `pq_optimizer.cc` 统一串行拒绝；
+- `TryCreatePQSecondaryCoveringRangeIterator()` 对
+  `param.reverse` fail-closed，当前不创建 reverse secondary range PQ
+  iterator；
+- `TryCreatePQSecondaryCoveringRefIterator()` 已有
+  `Parallel_secondary_reverse_reject_probes` 和
+  `Parallel_secondary_reverse_ref_reject_probes`，只在 reverse ref reject
+  分支增长；
+- `pq_commercial_ref_icp` 的 M9-F2 已验证 reverse range / index / ref
+  SQL shape 不增长 `Parallel_queries_executed`、
+  `Parallel_workers_launched`、`Parallel_ranges_built`、
+  `Parallel_ranges_dispatched`、`Parallel_secondary_rows_produced`；
+- reverse range / index 当前没有 access-path-level reject counter，因为
+  这些 shape 可能在 `access_path.cc` 阶段选择串行 reverse iterator，未稳定
+  进入 PQ secondary range factory。
+
+Current Branch Explorer Findings:
+
+- reverse range / index / ref 的用户可见 SQL shape 已有负向覆盖；
+- reverse ref 有 factory-level reject counters；
+- reverse range / index 没有专门 counter，原因是它们可能先被
+  access path / serial reverse iterator 处理，当前不应为了观测改变
+  iterator selection；
+- `pq_commercial_order_by` 明确要求 visible ORDER BY 继续 serial，且
+  `Parallel_queries_executed`、worker、range counters 不增长。
+
+Commercial Reference Findings:
+
+- 商用参考仓确认支持真实 PQ reverse positive path：
+  - `pq_range_scan_reverse.test` 覆盖 reverse range 和 secondary range；
+  - `pq_reverse_index_scan.test` 覆盖 reverse index scan、DESC index 和
+    reverse-sorted group merge；
+  - `pq_ref_reverse_scan.test` 覆盖 reverse ref；
+  - `pq_index_scan_desc.test` 覆盖 range + group/order desc；
+  - 对应结果包含 `Parallel execute`、`Backward index scan`、`range` /
+    `ref` / `index` 等正例 evidence。
+- 商用 SQL 层关键依赖：
+  - `SetupPQTab()` 传播 `QEP_TAB::m_reversed_access` 并调用
+    `ha_set_reverse_scan()`；
+  - `InitPQTab()` 对 `INDEX_RANGE_SCAN.reverse` 调用
+    `ReverseIndexRangeScanIterator::shared_reset()`；
+  - `mark_desc_groups()` 修正 reverse-sorted worker output 的 streaming /
+    group merge 方向；
+  - `PQblockScanIterator::Read()` / `PQRefIterator::Read()` 真实调用
+    worker row path，而当前分支对应路径仍是 stub / blocked。
+- 商用 InnoDB 层关键依赖：
+  - `pq_index_scan_init()` reverse index scan 以 `index_last()` 起步；
+  - `pq_range_scan_init()` 使用 reverse start/end boundary conversion，
+    包括 `HA_READ_KEY_OR_PREV`、`HA_READ_BEFORE_KEY` 和
+    `end_key == nullptr` 时的 `index_last()`；
+  - `pq_ref_build_ranges()` / `pq_ref_scan_init()` 处理 reverse ref
+    boundary；
+  - `row0pread_pq.cc` 的 reverse path 使用反向 page cursor movement 和
+    out-of-range 比较。
+- 商用结果合并依赖：
+  - worker output 必须有稳定 rowid；
+  - `Exchange_sort` heap compare 先比较 sort key，再用
+    `file->cmp_ref(rowid0, rowid1)` tie-break；
+  - 这些依赖当前分支的 production worker MQ row frame 和 visible
+    Gather Merge 尚未准备好。
+
+Allowed Files:
+
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Forbidden Files:
+
+- `sql/**`
+- `storage/**`
+- `mysql-test/**`
+- build scripts and generated result files
+
+Design Requirements:
+
+- 明确 reverse range、reverse index scan、reverse ref 的当前分支入口分别
+  在哪里被拒绝；
+- 明确 reverse positive path 至少需要的 ordering contract：
+  - scan direction；
+  - lower / upper boundary inclusive semantics；
+  - duplicate key 的 rowid tie-break；
+  - worker 间结果顺序；
+  - 与 `ORDER BY ... DESC` / `LIMIT` 的交互；
+- 明确当前不允许把 visible ORDER BY 从 `HAS_ORDER_BY` 中放开；
+- 明确当前不允许调用真实 `pq_worker_scan_next()` 或接
+  `PQRefIterator::Read()` / `PQblockScanIterator::Read()`；
+- 明确当前不允许把 reverse 与 ICP、partition、MVI、native
+  `Record_buffer` positive path 合并；
+- 给出后续最小 coding 候选，默认必须是 debug-only diagnostic /
+  reject counter，不是 positive gate。
+
+Hard Stops:
+
+- 如果商用 reverse tests 依赖真实 ORDER BY / Gather Merge，则当前阶段
+  只能记录 blocker；
+- 如果当前分支无法稳定触达 reverse range/index PQ factory，则不得为了
+  counter 改变 iterator selection；
+- 如果需要改 `access_path.cc`、handler public API、InnoDB
+  `row0pread_pq.cc` 或 worker/MQ row path，本阶段停止并拆新设计任务；
+- 任何新增诊断都必须证明 PQ execution / worker / range /
+  secondary-row counters 不增长。
+
+F5-A Decision:
+
+- 不进入 reverse positive gate；
+- 不迁移商用 `pq_range_scan_reverse`、`pq_reverse_index_scan`、
+  `pq_ref_reverse_scan`、`pq_index_scan_desc` 的 positive expectation；
+- 商用 reverse path 只作为后续迁移目标和 invariants 来源；
+- 下一步若继续 F5-A1，只允许 debug-only negative / diagnostic：
+  - 保持 `HAS_ORDER_BY` serial boundary；
+  - 识别 reverse range / index / ref rejected shape；
+  - 不改变 iterator selection；
+  - 不增长 PQ execution / worker / range / secondary-row counters。
+
+Validation:
+
+- 本阶段只做文档 review，不运行 build/MTR；
+- Design / Source / Test Review Agent 必须返回 `ACCEPT` 后，才能提交；
+- 若 review 认为需要编码，必须另起 M11-F5-A1 任务书，单独定义
+  Allowed / Forbidden files、MTR window 和 review gate。
+
+Agent Review Prompt:
+
+请作为 M11-F5-A Design / Source / Test Review Agent，只读审查本任务书
+和相关源码 / 测试：
+
+1. 当前分支 reverse range/index/ref 的 reject 边界是否描述准确；
+2. F5-A 是否应保持 docs-only boundary contract，还是可以进入
+   debug-only diagnostic；
+3. 是否存在任何条件允许直接打开 reverse positive path；
+4. Allowed / Forbidden files 和 Hard Stops 是否足够防止误开 ORDER BY、
+   worker/MQ、InnoDB reverse cursor、ICP、partition、MVI 或 native
+   `Record_buffer`；
+5. 下一步最小安全任务是什么。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Safe next task recommendation
 
 ## 必须保留的 Guard
 
