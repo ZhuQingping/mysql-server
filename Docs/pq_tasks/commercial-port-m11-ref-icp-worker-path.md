@@ -1302,28 +1302,32 @@ F5-B: MVI positive unique filter
 
 - 商用能力：`HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER` /
   `HA_EXTRA_DISABLE_UNIQUE_RECORD_FILTER`；
-- 当前状态：MVI 仍作为 wrong-result 高风险 shape blocked；F5-B inventory
-  in progress；
+- 当前状态：F5-B MVI inventory / design completed and committed as
+  `91415c38b07`；F5-B1 debug-only MVI reject diagnostic completed and
+  committed as `58014c5b0a9`；MVI unique filter positive path remains
+  blocked；
 - 主要前置：
   - single-table MVI access path 与 duplicate elimination contract；
   - worker-local unique filter lifecycle；
   - cleanup on ERROR/KILL/early EOF；
   - result ordering 与 duplicate counter 不影响 existing PQ counters；
-- 首个可执行任务建议：MVI guard/read-only source inventory；不得打开
-  positive unique filter。
+- 结论：只保留 fail-closed guard / diagnostic；不得打开 positive unique
+  filter，除非后续新阶段补齐 worker-local unique filter lifecycle。
 
 F5-C: Partition positive full/range/ref/dependent-ref
 
 - 商用能力：partition-aware leader/worker scan init、partition range ctx；
-- 当前状态：partition positive path blocked；F5-C ownership design in
-  progress；
+- 当前状态：F5-C partition ownership design completed and committed as
+  `011cec1e30f`；F5-C1 debug-only partition reject diagnostic completed and
+  committed as `df74acaf881`；partition positive path remains blocked；
 - 主要前置：
   - worker TABLE/handler/prebuilt ownership 覆盖 `ha_innopart`；
   - per-partition read view、part id、range dispatch、cleanup 顺序；
   - partition + ref/dependent ref key ownership；
   - partition + native `Record_buffer` 继续后置；
-- 首个可执行任务建议：`ha_innopart` worker ownership design + debug-only
-  partition reject diagnostic。
+- 结论：只保留 ownership design / reject diagnostic；不得打开
+  `ha_innopart` positive worker path，除非后续新阶段补齐 per-partition
+  ownership、read view、range dispatch and cleanup contracts。
 
 F5-D: Secondary index MIN / optimizer shortcut
 
@@ -1341,8 +1345,11 @@ F5-D: Secondary index MIN / optimizer shortcut
 F5-E: ICP + native `Record_buffer` combined path
 
 - 商用能力：worker-side ICP + InnoDB native record buffer batch read；
-- 当前状态：M11-F3 只完成 worker ICP contract + negative smoke；
-  M11-F4 只完成 native buffer contract + null diagnostic；
+- 当前状态：F5-E combined path boundary design completed and committed as
+  `e74fd2fe7c3`；F5-E1 debug-only combined negative diagnostic completed and
+  committed as `eefc952df22`；F5-E2 ICP sentinel restore cleanup completed and
+  committed as `f4d0070b610`；worker-side ICP + native `Record_buffer`
+  positive row production remains blocked；
 - 主要前置：
   - worker-owned ICP clone/refix positive path；
   - native `Record_buffer` attach after worker scan init；
@@ -1350,9 +1357,15 @@ F5-E: ICP + native `Record_buffer` combined path
   - non-covering clustered lookup + batch cache consistency；
 - BLOB/TEXT/JSON/GEOMETRY、fixed-point、hostile read_set/write_set
   shape 仍保持 global guard，不允许随 combined path 混入。
-- 首个可执行任务建议：combined-path design only；严禁直接编码。
+- 结论：当前只保留 boundary design、combined negative diagnostic 和 debug
+  sentinel cleanup；不得打开 worker-side ICP + native `Record_buffer`
+  positive execution，除非后续新阶段补齐 clone/refix、native buffer
+  ownership、secondary visibility、range/ctx EOF and cleanup contracts。
 
-#### Proposed Priority
+#### Historical F5 Priority
+
+This priority list was used before F5-B/F5-C/F5-E completion. The current
+source of truth is `M11-F5 Closure Audit` below.
 
 1. F5-C partition worker ownership design：跨 handler/InnoDB，保持 docs-first；
 2. F5-B MVI inventory：wrong-result 风险高，先只读调研；
@@ -1964,6 +1977,103 @@ Review Prompt:
 - Required fixes before commit
 - Safe next task recommendation
 
+#### M11-F5 Closure Audit
+
+Status: completed；Docs / Source / Task Review passed。
+
+Purpose:
+
+- 收口 M11-F5 backlog，避免后续把已接受的 design / diagnostic /
+  blocked boundary 误读为可继续平移正向执行；
+- 明确 F5 当前阶段只完成商用路径差异识别和负向护栏，不完成正向
+  worker-side ref / ICP / native `Record_buffer` path；
+- 后续若要打开任何 positive path，必须作为新阶段重新设计并重新 review。
+
+Completed F5 Items:
+
+- F5-D / F5a secondary MIN / optimizer shortcut:
+  - source inventory completed；
+  - F5a-1 debug-only optimizer shortcut diagnostic committed as
+    `377de6edd70`；
+  - positive secondary MIN shortcut execution remains blocked；
+- F5-A reverse boundary:
+  - reverse boundary contract committed as `e799008575e`；
+  - F5-A1 recorded `RECORD_BLOCKED` in `43ea9ea3a06`；
+  - reverse positive range/ref/index scan remains blocked；
+- F5-C partition ownership:
+  - partition worker ownership design committed as `011cec1e30f`；
+  - C1 partition reject diagnostic committed as `df74acaf881`；
+  - partition positive full/range/ref/dependent-ref path remains blocked；
+- F5-B MVI unique filter:
+  - MVI inventory / design committed as `91415c38b07`；
+  - B1 MVI reject diagnostic committed as `58014c5b0a9`；
+  - MVI unique filter positive path remains blocked；
+- F5-E ICP + native `Record_buffer` combined path:
+  - combined path boundary design committed as `e74fd2fe7c3`；
+  - E1 combined negative diagnostic committed as `eefc952df22`；
+  - E2 ICP sentinel restore cleanup committed as `f4d0070b610`；
+  - worker-side ICP + native `Record_buffer` positive row production remains
+    blocked。
+
+Current Preserved Hard Stops:
+
+- no `set_record_buffer()` on PQ workers；
+- no `pq_worker_scan_next()` enablement；
+- no `PQRefIterator::Read()` or `PQblockScanIterator::Read()` positive
+  worker row production；
+- no commercial/F5 `PQRefIterator` / `PQblockScanIterator` / combined-path MQ
+  token or worker row-frame production；
+- no `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER` for MVI；
+- no `ha_innopart` positive worker path；
+- no reverse positive scan；
+- no secondary MIN optimizer shortcut positive PQ execution；
+- no worker-side ICP clone / refix / pushed condition positive execution。
+
+Safe Next Phase Options:
+
+- review-only closure report for M11-F；
+- start a new design phase for one positive path only, with fresh ownership,
+  cleanup, read-view, fallback-before-row, ERROR/KILL and MTR contracts；
+- continue ORDER BY backlog separately under M11-E docs, not mixed into M11-F。
+
+Closure Review Prompt:
+
+请作为 M11-F5 Closure Docs / Source / Task Review Agent，只读审查本 closure
+audit 和相关已提交任务：
+
+1. F5-A/B/C/D/E 的 completed / blocked 状态是否与当前文档和 commits 一致；
+2. closure 是否准确表达当前只完成 design / diagnostic / negative guard，而
+   不是 positive commercial path；
+3. hard stops 是否覆盖 native `Record_buffer`、worker-side ICP、MVI、
+   partition、reverse、secondary MIN 和 worker/MQ row production；
+4. safe next phase options 是否足够防止把不同 positive paths 混在一起；
+5. 是否还有必须写入 closure 的剩余 F5 风险。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Required fixes before commit
+- Safe next task recommendation
+
+Closure Review Result:
+
+- Initial verdict: `REVISE`；
+- blocking findings:
+  - adjacent F5-B text still said inventory in progress；
+  - adjacent F5-C text still said ownership design in progress；
+  - adjacent F5-E text did not reflect F5-E design / E1 / E2 completion；
+- fixes:
+  - updated F5-B/F5-C/F5-E adjacent backlog paragraphs to match committed
+    design / diagnostic / cleanup state；
+  - scoped worker/MQ hard stop wording to commercial/F5
+    `PQRefIterator` / `PQblockScanIterator` / combined-path production；
+  - marked old F5 proposed priority as historical；
+  - added F5-B1 commit id to README；
+- final verdict: `ACCEPT`；
+- required fixes before commit: None。
+
 Review Prompt:
 
 请作为 M11-F5-E1 Code / Docs / Test Review Agent，只读审查当前 patch：
@@ -2187,8 +2297,8 @@ Review:
 
 #### Proposed M11-F5-C1: Debug-only Partition Reject Diagnostic Taskbook
 
-Status: implemented；build and MTR validation passed；waiting Code / Docs /
-Test Review。
+Status: completed；build, MTR validation, Code / Docs / Test Review passed；
+committed as `df74acaf881`。
 
 Goal:
 
