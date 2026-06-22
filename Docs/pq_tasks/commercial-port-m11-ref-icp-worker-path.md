@@ -2,9 +2,9 @@
 
 ## 状态
 
-Status: M11-F0/F1a/F2/F3 completed；next task is M11-F4 Native
-Record_buffer / Prefetch Worker-owned Adapter design；real worker-side ICP
-positive row production remains blocked。
+Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage under review；
+next task is M11-F5a secondary MIN / optimizer shortcut docs-only source
+inventory；real worker-side ICP positive row production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -996,7 +996,8 @@ Code / Docs / Test Review:
 
 ### M11-F4: Native Record_buffer / Prefetch Worker-owned Adapter
 
-Status: F4b completed / Code-Docs-Test Review accepted；ready to commit。
+Status: F4b completed / Code-Docs-Test Review accepted / committed as
+`23e3e9d57b8`。
 
 建议性质：docs-only contract first。`Record_buffer` / prefetch 是性能路径，
 不是当前 correctness 前置。F4 不直接打开 native `Record_buffer` positive
@@ -1264,7 +1265,10 @@ Code / Docs / Test Review:
 
 ### M11-F5: Edge Positive Paths Backlog
 
-继续 blocked，后续单独阶段：
+Status: backlog triage taskbook created；docs-only / no source edits。
+
+F5 目标不是打开正例，而是把 M11-F 之后仍未平移的商用 edge paths 分组、
+排序、明确前置条件和 hard stops。以下路径继续 blocked，后续必须单独阶段：
 
 - MVI positive unique filter；
 - reverse positive range/ref/index scan；
@@ -1272,12 +1276,148 @@ Code / Docs / Test Review:
 - secondary index MIN / optimizer shortcut；
 - ICP + native `Record_buffer` 组合。
 
+#### Backlog Classes
+
+F5-A: Reverse positive range/ref/index scan
+
+- 商用能力：reverse range/index/ref scan、ORDER-sensitive worker result；
+- 当前状态：reverse ref reject probe 已有，visible ORDER BY 仍 blocked；
+- 主要前置：
+  - M11-E ORDER BY / Exchange_sort visible path 达到可执行；
+  - reverse range boundary、direction、tie-break rowid、worker result order
+    contract 单独验证；
+  - no partition、no ICP、no native `Record_buffer` 首批；
+- 首个可执行任务建议：docs-only reverse boundary contract，随后
+  debug-only reverse reject/diagnostic，不直接 positive。
+
+F5-B: MVI positive unique filter
+
+- 商用能力：`HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER` /
+  `HA_EXTRA_DISABLE_UNIQUE_RECORD_FILTER`；
+- 当前状态：MVI 仍作为 wrong-result 高风险 shape blocked；
+- 主要前置：
+  - single-table MVI access path 与 duplicate elimination contract；
+  - worker-local unique filter lifecycle；
+  - cleanup on ERROR/KILL/early EOF；
+  - result ordering 与 duplicate counter 不影响 existing PQ counters；
+- 首个可执行任务建议：MVI guard/read-only source inventory；不得打开
+  positive unique filter。
+
+F5-C: Partition positive full/range/ref/dependent-ref
+
+- 商用能力：partition-aware leader/worker scan init、partition range ctx；
+- 当前状态：partition positive path blocked；
+- 主要前置：
+  - worker TABLE/handler/prebuilt ownership 覆盖 `ha_innopart`；
+  - per-partition read view、part id、range dispatch、cleanup 顺序；
+  - partition + ref/dependent ref key ownership；
+  - partition + native `Record_buffer` 继续后置；
+- 首个可执行任务建议：`ha_innopart` worker ownership design + debug-only
+  partition reject diagnostic。
+
+F5-D: Secondary index MIN / optimizer shortcut
+
+- 商用能力：secondary MIN / shortcut access path；
+- 当前状态：secondary MIN blocked，避免 optimizer shortcut 绕过 PQ gates；
+- 主要前置：
+  - optimizer path 识别与 fail-closed reason；
+  - aggregate / MIN shortcut 与 worker row production counter 关系；
+  - no reverse/no partition/no record-buffer 首批；
+- 首个可执行任务建议：docs-only shortcut source inventory，先确认 hook
+  point；debug-only counter 必须等 hook-point review 后再编码。
+
+F5-E: ICP + native `Record_buffer` combined path
+
+- 商用能力：worker-side ICP + InnoDB native record buffer batch read；
+- 当前状态：M11-F3 只完成 worker ICP contract + negative smoke；
+  M11-F4 只完成 native buffer contract + null diagnostic；
+- 主要前置：
+  - worker-owned ICP clone/refix positive path；
+  - native `Record_buffer` attach after worker scan init；
+  - `ICP_OUT_OF_RANGE` 与 `Record_buffer::out_of_range` 双边界；
+  - non-covering clustered lookup + batch cache consistency；
+- BLOB/TEXT/JSON/GEOMETRY、fixed-point、hostile read_set/write_set
+  shape 仍保持 global guard，不允许随 combined path 混入。
+- 首个可执行任务建议：combined-path design only；严禁直接编码。
+
+#### Proposed Priority
+
+1. F5-D secondary MIN / optimizer shortcut source inventory：最小且主要在
+   optimizer guard / diagnostic 设计层，适合先补防线；
+2. F5-A reverse boundary contract：依赖 ORDER BY 但可先设计，不打开正例；
+3. F5-C partition worker ownership design：跨 handler/InnoDB，保持 docs-first；
+4. F5-B MVI inventory：wrong-result 风险高，先只读调研；
+5. F5-E ICP + native `Record_buffer` combined design：依赖 F3/F4 positive
+   path，最后处理。
+
+#### Proposed M11-F5a: Secondary MIN / Optimizer Shortcut Source Inventory
+
+性质：docs-only design/source inventory。debug-only coding 只有在 hook-point
+review 证明检测点不会错过 shortcut，也不会改变 MIN/MAX shortcut 语义后才
+允许进入。
+
+必须调研：
+
+- `sql/sql_optimizer.cc` 中 `optimize_aggregated_query()` 调用点；
+- `sql/opt_sum.cc` 中 aggregate shortcut 处理；
+- `sql/opt_sum.cc` 中 `find_key_for_maxmin()` / MIN/MAX key shortcut path；
+- `sql/parallel_query/pq_optimizer.cc` 中现有 PQ eligibility / fail-closed
+  reason 是否能观测 shortcut 后状态；
+- 商用实现是否对 secondary MIN / optimizer shortcut 有专门 guard 或测试；
+- 现有 `pq_commercial_ref_icp` / `pq_not_support` 是否已有可复用 SQL shape。
+
+允许修改：
+
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+禁止：
+
+- 不修改 `sql/**`、`storage/**`、`mysql-test/**`；
+- 不在 `sql/opt_sum.cc` 添加 hook，除非后续单独 review 批准只读诊断；
+- 不打开 secondary MIN positive row production；
+- 不改 aggregate/min optimizer shortcut 语义；
+- 不改 InnoDB row read；
+- 不接 worker/MQ row path；
+- 不混入 reverse/partition/MVI/native `Record_buffer`。
+
+验收：
+
+- 明确 F5a 后续 coding hook-point 是 `opt_sum.cc` 前置只读诊断、
+  `pq_optimizer.cc` 后置状态诊断，还是两者都需要；
+- 明确目标 SQL shape 与现有 MTR 归属；
+- 明确后续 debug-only coding allowed/forbidden files；
+- Design / Docs / Source Review Agent 返回 `ACCEPT`。
+
+后续 coding 候选验收，需等 F5a source inventory accepted 后再启用：
+
+- shortcut/min-like unsupported shape 可观测；
+- `Parallel_queries_executed`、`Parallel_workers_launched`、
+  `Parallel_ranges_built`、`Parallel_ranges_dispatched`、
+  `Parallel_secondary_rows_produced` 不增长；
+- targeted MTR、`pq_stats`、完整 suite 通过；
+- Code / Docs / Test Review Agent 返回 `ACCEPT`。
+
+Triage Review Revision:
+
+- 初始 Review Agent verdict: `REVISE`；
+- blocking finding: F5a 不能直接进入 debug-only coding，必须先确认
+  `sql/sql_optimizer.cc` 调用 `optimize_aggregated_query()`、
+  `sql/opt_sum.cc` aggregate shortcut / `find_key_for_maxmin()` 与
+  `sql/parallel_query/pq_optimizer.cc` 后置状态之间的可观测边界；
+- 已修订：F5a 降级为 docs-only source inventory，`sql/**`、
+  `storage/**`、`mysql-test/**` 全部 forbidden；`sql/opt_sum.cc` hook
+  只能在后续单独 review 批准后作为只读诊断进入；
+- 已修订：BLOB/TEXT/JSON/GEOMETRY、fixed-point、hostile
+  read_set/write_set shape 明确保留在 global guard / backlog。
+
 ## 必须保留的 Guard
 
 - visible ORDER BY 继续由 `HAS_ORDER_BY` 串行拒绝；
 - M9-B3/C2/D3d/E1c-2a 正例 counter window 不能回退；
-- M9-F MVI/reverse/partition/secondary MIN/BLOB hostile shapes 继续不增长
-  PQ execution / worker / range / secondary row counters；
+- M9-F MVI/reverse/partition/secondary MIN/BLOB/fixed-point/read_set/write_set
+  hostile shapes 继续不增长 PQ execution / worker / range / secondary row
+  counters；
 - unsupported ICP/ref/dependent-ref shape 继续不增长
   `Parallel_queries_executed`、`Parallel_workers_launched`、
   `Parallel_ranges_built`、`Parallel_ranges_dispatched`、
