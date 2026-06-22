@@ -1251,12 +1251,19 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     return true;
   }
 
+  bool ownership_mismatch_smoke = false;
+  DBUG_EXECUTE_IF("pq_worker_ownership_mismatch_smoke", {
+    /* Force the InnoDB ownership gate to reject this debug-only smoke. */
+    ownership_mismatch_smoke = true;
+    worker->m_open_ctx.worker_handler = leader_table->file;
+  });
+
   if (worker->m_open_ctx.worker_handler == nullptr ||
       worker->m_open_ctx.worker_handler->pq_worker_scan_init(
           &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
       worker->m_worker_ctx == nullptr) {
     cleanup();
-    return true;
+    return !ownership_mismatch_smoke;
   }
 
   failed = false;

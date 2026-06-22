@@ -636,6 +636,79 @@ Code / Task Review:
   assertions；
 - recommended next task: M11-F2b debug-only ownership mismatch negative smoke。
 
+#### M11-F2b: Worker Ownership Mismatch Negative Smoke
+
+Status: completed / Code-Task Review accepted。
+
+目标：
+
+- 增加 debug-only negative smoke，证明 worker open context 的 handler/prebuilt
+  ownership 不匹配时，`pq_worker_scan_init()` fail-closed；
+- 负例必须不增长 `Parallel_worker_attach_smoke_success`；
+- 负例必须不增长 `Parallel_queries_executed`、
+  `Parallel_workers_launched`、`Parallel_ranges_dispatched`、
+  `Parallel_secondary_rows_produced`；
+- 用户 SELECT 仍走串行结果，不因 debug-only ownership rejection 报错。
+
+Changed files:
+
+- `sql/parallel_query/sql_parallel.cc`
+- `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`
+- `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- Added DBUG flag `pq_worker_ownership_mismatch_smoke` inside
+  `Gather_operator::run_worker_attach_contract_smoke()`；
+- the flag deliberately points the worker open context handler at the leader
+  handler before `pq_worker_scan_init()`；
+- the InnoDB ownership gate rejects the mismatch before range dispatch；
+- the debug-only helper treats this expected rejection as smoke success after
+  cleanup, without incrementing attach success；
+- no public execution path is changed。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_worker_attach_contract_smoke --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_worker_attach_contract_smoke --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- `mysqld` build passed；
+- targeted record/replay passed；
+- full `parallel_query` suite passed: 89/89；
+- mismatch window produced:
+  `mismatch_attempt_delta=1`、`mismatch_success_delta=0`、
+  `mismatch_cleanup_delta=1`、
+  `mismatch_queries_executed_delta=0`、
+  `mismatch_workers_launched_delta=0`、
+  `mismatch_ranges_dispatched_delta=0`、
+  `mismatch_secondary_rows_delta=0`。
+
+Code / Task Review:
+
+- Review Agent verdict: `ACCEPT`；
+- blocking findings: none；
+- confirmed DBUG injection is scoped to `run_worker_attach_contract_smoke()`
+  and cannot affect normal attach/callback/threaded paths；
+- confirmed mismatch is rejected before worker ctx allocation and range
+  dispatch；
+- confirmed cleanup closes worker TABLE and destroys worker THD without
+  calling scan_end on a null worker ctx；
+- confirmed MTR covers attempts/success/cleanup/executed/workers/ranges/
+  secondary rows；
+- confirmed no worker ref/ICP row production or other positive blocked path
+  was opened。
+
 #### M11-F2 Agent Task Prompt
 
 请作为 M11-F2 Design / Source Review Agent，只读审查本任务书和相关源码：
