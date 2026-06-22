@@ -1794,6 +1794,118 @@ Review Result:
   `set_record_buffer()`、no `pq_worker_scan_next()` enablement、no worker row
   production, and explicit zero-counter assertions。
 
+#### Proposed M11-F5-E1: Debug-only ICP + Record_buffer Negative Diagnostic
+
+Status: completed；build, targeted MTR, full suite validation, and Code /
+Docs / Test Review passed。
+
+Goal:
+
+- 用一个 debug-only worker attach smoke 同时证明：
+  - worker `ha_get_record_buffer()` 仍为 null；
+  - leader-owned ICP sentinel 会在 `pq_worker_scan_init()` 成功前被拒绝；
+  - reject 发生前不增长 worker launch、range dispatch 或 secondary row
+    production counters；
+- 不打开 worker-side ICP + native `Record_buffer` positive path。
+
+Implementation:
+
+- 新增 status counter
+  `Parallel_worker_icp_record_buffer_reject_probes`；
+- 在 `Gather_operator::run_worker_attach_contract_smoke()` 增加
+  `pq_worker_icp_record_buffer_negative_smoke` DBUG 分支；
+- 分支在 worker TABLE open 之后、`pq_worker_scan_init()` 之前执行：
+  - 先观察 worker handler native `Record_buffer`，增长已有
+    `Parallel_worker_record_buffer_null_probes` 或
+    `Parallel_worker_record_buffer_nonnull_probes`；
+  - 注入 leader-owned ICP sentinel，复用 InnoDB worker ICP ownership gate；
+  - 仅当 `pq_worker_scan_init()` fail-closed 时增长
+    `Parallel_worker_icp_record_buffer_reject_probes`；
+  - cleanup 恢复 leader handler `pushed_idx_cond` / keyno。
+
+Allowed Files:
+
+- `sql/parallel_query/sql_parallel.h`
+- `sql/parallel_query/sql_parallel.cc`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`
+- `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+
+Hard Stops Preserved:
+
+- 不调用 `set_record_buffer()`；
+- 不启用 `pq_worker_scan_next()`；
+- 不修改 handler / InnoDB positive scan behavior；
+- 不打开 `PQRefIterator::Read()` 或 `PQblockScanIterator::Read()`；
+- 不 clone/refix `pushed_idx_cond`、`pq_cond`、`Item_field` 或 ref key
+  Items；
+- 不产生 worker row，不 enqueue MQ token，不增长
+  `Parallel_queries_executed`、`Parallel_workers_launched`、
+  `Parallel_ranges_dispatched`、`Parallel_secondary_rows_produced`。
+
+Test Contract:
+
+- `pq_worker_attach_contract_smoke` 新增 combined negative DBUG window：
+  - `Parallel_worker_icp_record_buffer_reject_probes` delta `>= 1`；
+  - `Parallel_worker_record_buffer_null_probes` delta `>= 1`；
+  - `Parallel_worker_record_buffer_nonnull_probes` delta `0`；
+  - attach attempts / cleanup delta `>= 1`；
+  - attach success delta `0`；
+  - queries executed / workers launched / ranges dispatched / secondary rows
+    produced deltas all `0`；
+- `pq_stats` 更新状态变量数量和变量列表。
+
+Validation:
+
+- RED check passed: before implementation, new MTR window failed with
+  reject/null probe deltas `0`, attach success `1`, and ranges dispatched `1`；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `pq_worker_attach_contract_smoke --record` executed SQL successfully but MTR
+  failed at final log-to-result copy with errno 1；result was mechanically
+  synced from the generated log；
+- `pq_worker_attach_contract_smoke` replay passed；
+- `pq_stats` replay passed；
+- full `parallel_query` suite passed 89/89。
+
+Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: None；
+- Non-blocking risk:
+  - if both `pq_worker_icp_record_buffer_negative_smoke` and
+    `pq_worker_icp_ownership_mismatch_smoke` are manually enabled together,
+    the second block can overwrite the saved ICP state；F5-E1 test enables only
+    the new combined negative flag, so this is not blocking；
+- Required fixes before commit: None；
+- Safe next task: commit F5-E1 as debug-only negative diagnostic；keep the next
+  task constrained to review / cleanup or another negative contract, and do
+  not open worker-side ICP + native `Record_buffer` positive execution。
+
+Review Prompt:
+
+请作为 M11-F5-E1 Code / Docs / Test Review Agent，只读审查当前 patch：
+
+1. 新 DBUG 分支是否只在 worker TABLE open 后、`pq_worker_scan_init()`
+   成功前执行，并且不会调用 `set_record_buffer()` 或产生 worker row；
+2. `Parallel_worker_icp_record_buffer_reject_probes` 的语义是否准确：只表示
+   combined negative diagnostic reject probe，不表示 positive combined
+   execution；
+3. 是否能保证 reject 前不增长 `Parallel_workers_launched`、
+   `Parallel_ranges_dispatched`、`Parallel_secondary_rows_produced`；
+4. cleanup 是否恢复 leader ICP sentinel；
+5. 测试和文档是否覆盖 F5-E 的 hard stops。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Required fixes before commit
+- Safe next task recommendation
+
 Agent Review Prompt:
 
 请作为 M11-F5-E Design / Source / Test Review Agent，只读审查本任务书和

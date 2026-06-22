@@ -9,7 +9,15 @@
   已通过 Design / Source / Test Review；两个 Explorer 均返回
   `DESIGN_ONLY`，当前只写任务书和状态机，不打开 worker-side ICP +
   native buffer positive path；review 建议把 `ICP_NO_MATCH` 到 retryable
-  `DB_NOT_FOUND` 的中间状态写入 contract，已补充。M11-F5-C1
+  `DB_NOT_FOUND` 的中间状态写入 contract，已补充。M11-F5-E1 debug-only
+  combined negative diagnostic 已完成本地实现：新增
+  `Parallel_worker_icp_record_buffer_reject_probes`，在 worker attach smoke
+  中同时证明 worker native `Record_buffer` 仍为 null、ICP ownership mismatch
+  在成功 scan 前拒绝，并保持 workers/ranges/secondary rows 为 0；`mysqld`
+  build、`pq_worker_attach_contract_smoke` replay、`pq_stats` replay 和完整
+  `parallel_query` suite 89/89 通过，Code / Docs / Test Review 返回
+  `ACCEPT`。
+  M11-F5-C1
   debug-only partition reject diagnostic 已通过 Code / Docs / Test Review
   并提交为 `df74acaf881`；新增 `Parallel_partition_reject_probes`，只在
   `pq_check_single_table()` 的 single-table `PARTITIONED_TABLE` reject 点
@@ -261,8 +269,8 @@
   - M9-D3d: user-visible leader-local dependent ref gate 已完成；只允许 two-table/simple/no group/having/no reverse/covering secondary dependent ref；`d3d_ref_probe_attempts_delta=5`、`d3d_ref_empty_probes_delta=1`、`d3d_ref_rows_produced_delta=7`、`d3d_executed_delta=1`；`workers/ranges=0`；新增 serial baseline / unsorted D3d order check 和 fallback-after-buffer debug MTR；`mysqld` build、targeted record/replay、完整 `parallel_query` suite 74/74 通过；Review Agent 复审 `ACCEPT`。
   - M9-D3d commit: `6944472cb7e Add PQ M9D dependent ref leader gate`
   - M9-E: ICP Pushdown taskbook 已创建并通过 Design Review；M9-E0 ICP negative guard 已完成编码和验证：secondary range ICP `EXPLAIN` 稳定显示 `Using index condition`，constant ref / dependent ref 保留 adjacent boundary guard，negative window `executed/workers/ranges/secondary_rows = 0`；`mysqld` build、targeted record/replay、完整 `parallel_query` suite 74/74 通过；Code/Task Review Agent 首轮 `REVISE`，修正文档残留后复审 `ACCEPT`；M9-E1a 两个只读 Explorer 均建议先做 leader-local ICP contract/blocking design，不直接编码，Design Review Agent 返回 `ACCEPT`；M9-E1b coding taskbook 已通过 review，但 covering `k_v_idx` / `k_pad_idx` 候选均只产生 `Using where; Using index`，没有 stable strict-covering `Using index condition` 正例；源码探测改动已移除；M9-E1c explorer 建议下一步做 non-covering ICP + clustered lookup contract design，不直接编码，Design Review Agent 返回 `ACCEPT`；M9-E1c-0 detailed contract 通过 Design Review；M9-E1c-1 debug-only one-record smoke 已完成；M9-E1c-2a user-visible non-covering ICP range gate 已完成并通过 Code/Task Review；完整 `parallel_query` suite 74/74 通过；M9-E2 constant covering ref ICP 设计任务书已通过 Design Review；M9-E2-0 access-shape read-only confirmation 已完成，覆盖 ref 候选无法稳定产生 `Using index condition`，非覆盖 ref 才能产生 `type=ref` + `Using index condition`，因此 E2-1/E2-2 编码 blocked。
-- Next recommended action: 提交 M11-F5-E docs-only 任务书；随后如果继续
-  编码，只能进入 M11-F5-E1 debug-only combined negative diagnostic。
+- Next recommended action: 提交 M11-F5-E1；随后继续下一个 review /
+  cleanup 或 negative contract，不打开 positive combined execution。
   继续禁止直接打开 native `Record_buffer` positive path、
   `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、真实
   `pq_worker_scan_next()`、worker-side ICP positive row production、MVI

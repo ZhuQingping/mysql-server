@@ -10057,6 +10057,8 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_record_buffer_null_probes,
                                   worker_record_buffer_null_probes)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_record_buffer_nonnull_probes,
                                   worker_record_buffer_nonnull_probes)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_icp_record_buffer_reject_probes,
+                                  worker_icp_record_buffer_reject_probes)
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
@@ -11988,6 +11990,9 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_record_buffer_null_probes",
      (char *)&show_pq_worker_record_buffer_null_probes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_icp_record_buffer_reject_probes",
+     (char *)&show_pq_worker_icp_record_buffer_reject_probes, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_handler_smoke_runs",
      (char *)&show_pq_worker_handler_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},

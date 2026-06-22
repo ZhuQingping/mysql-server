@@ -1198,6 +1198,7 @@ bool Gather_operator::run_worker_attach_contract_smoke(
   bool failed = true;
   bool ownership_mismatch_smoke = false;
   bool icp_ownership_mismatch_smoke = false;
+  bool icp_record_buffer_negative_smoke = false;
   Item *saved_leader_pushed_idx_cond = nullptr;
   uint saved_leader_pushed_idx_cond_keyno = MAX_KEY;
   auto cleanup = [&]() {
@@ -1278,6 +1279,26 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     return false;
   });
 
+  DBUG_EXECUTE_IF("pq_worker_icp_record_buffer_negative_smoke", {
+    if (worker->m_open_ctx.worker_handler != nullptr &&
+        worker->m_open_ctx.worker_handler->ha_get_record_buffer() != nullptr) {
+      pq_global_stats.worker_record_buffer_nonnull_probes.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats.worker_record_buffer_null_probes.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+
+    icp_record_buffer_negative_smoke = true;
+    icp_ownership_mismatch_smoke = true;
+    saved_leader_pushed_idx_cond = leader_table->file->pushed_idx_cond;
+    saved_leader_pushed_idx_cond_keyno =
+        leader_table->file->pushed_idx_cond_keyno;
+    leader_table->file->pushed_idx_cond =
+        reinterpret_cast<Item *>(leader_table);
+    leader_table->file->pushed_idx_cond_keyno = leader_table->s->primary_key;
+  });
+
   DBUG_EXECUTE_IF("pq_worker_ownership_mismatch_smoke", {
     /* Force the InnoDB ownership gate to reject this debug-only smoke. */
     ownership_mismatch_smoke = true;
@@ -1303,6 +1324,10 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       worker->m_open_ctx.worker_handler->pq_worker_scan_init(
           &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
       worker->m_worker_ctx == nullptr) {
+    if (icp_record_buffer_negative_smoke) {
+      pq_global_stats.worker_icp_record_buffer_reject_probes.fetch_add(
+          1, std::memory_order_relaxed);
+    }
     cleanup();
     return !(ownership_mismatch_smoke || icp_ownership_mismatch_smoke);
   }
