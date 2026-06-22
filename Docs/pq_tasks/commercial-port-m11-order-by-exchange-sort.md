@@ -8923,6 +8923,89 @@ Validation:
 - before E6a source coding, write the E6a taskbook and request Code / Docs /
   Test Review。
 
+### M11-E6a: Worker Handler-ref Positive Contract
+
+Status: taskbook draft in progress；no source changes yet。
+
+Goal:
+
+- 建立商用 ORDER BY stable tie-break 的第一个最小正路径契约；
+- 在 private/debug-only 路径中证明 worker 当前 row 可以调用
+  `handler::position(record)` 生成真实 `handler::ref`；
+- 证明该 ref 会被深拷贝并且可由同一 opened divided-table handler 的
+  `cmp_ref()` 消费；
+- 保持 visible ORDER BY PQ 关闭。
+
+Non-goals:
+
+- 不实现 `Query_result_mq` handler-ref wire；
+- 不改变 `PQWR` field-value frame；
+- 不接 `Exchange_sort` default heap reader；
+- 不设置 `rowid_tiebreak_ready=true`；
+- 不放开 `HAS_ORDER_BY`；
+- 不迁移商用 Filesort/Sort_param/default ordered `Read()`。
+
+Proposed private contract:
+
+1. 在受控 DBUG-only smoke 中准备一个真实 InnoDB worker/opened table
+   window，读取一条当前 row；
+2. 调用 worker handler `position(record)`，要求 `file->ref_length > 0`；
+3. 将 `file->ref` 按 `ref_length` 深拷贝到 private owner buffer；
+4. 允许 worker handler 前进或结束，owner buffer 必须仍保持有效；
+5. 在 leader/private validation helper 中用相同表形态的 opened handler
+   调用 `cmp_ref(copied_ref, copied_ref)`，期望返回 `0`；
+6. negative windows 必须覆盖：无当前 row、`ref_length == 0`、未深拷贝、
+   handler detached / failed scan 时不计 success。
+
+Allowed files for E6a code:
+
+- `sql/parallel_query/pq_iterators.{h,cc}`：
+  - private DBUG-only smoke entry；
+  - worker current-row `position(record)` probe；
+  - no visible `Read()` behavior change；
+- `sql/parallel_query/exchange_sort.{h,cc}`：
+  - private handler-ref owner / validation helper；
+  - `cmp_ref(ref, ref) == 0` smoke only；
+  - no default comparator replacement；
+- `sql/parallel_query/query_result_mq.{h,cc}`：
+  - E6a only permits explicit no-wire assertion / helper comment；
+  - no handler-ref payload copy or frame format change；
+- `sql/parallel_query/sql_parallel.{h,cc}` and `sql/mysqld.cc`：
+  - only if a new status counter or DBUG smoke dispatcher is required；
+- focused MTR under `mysql-test/suite/parallel_query/`。
+
+Forbidden files / behavior:
+
+- `sql/parallel_query/pq_optimizer.*` visible eligibility changes；
+- `sql/sql_optimizer.*`、`sql/sql_executor.*`、`sql/join_optimizer/**`；
+- `sql/handler.*` and `storage/innobase/**` unless a separate reviewed
+  handler/InnoDB boundary task is opened；
+- `Query_result_mq` handler-ref wire；
+- default `Gather_operator` `Exchange_sort` selection；
+- visible ORDER BY result changes；
+- naked `memcmp(ref)` comparator。
+
+TDD plan:
+
+- RED: add a DBUG-only MTR window that requests the E6a worker handler-ref
+  positive contract and expects:
+  - attempts delta >= 1；
+  - success delta >= 1；
+  - copied ref length > 0；
+  - `cmp_ref(ref, ref) == 0` validation success；
+  - visible ORDER BY still reports `Not parallel HAS_ORDER_BY`；
+  - `Parallel_queries_executed` / `Parallel_workers_launched` /
+    `Parallel_ranges_dispatched` deltas remain 0 outside the private smoke。
+- Before implementation this RED should fail on missing/zero E6a success；
+- GREEN: implement the private contract only；
+- replay the focused MTR and then full `parallel_query` suite。
+
+Required review after E6a coding:
+
+- Code Review: confirm no visible ORDER BY gate opened and no MQ wire slipped in；
+- Docs Review: confirm E6a/E6b/E6c boundaries remain separate；
+- Test Review: confirm no-DBUG and visible ORDER BY negative windows remain。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
