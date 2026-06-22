@@ -8591,8 +8591,7 @@ Planning/Source Review - M11-E5r-4:
 
 ### M11-E5r-5: MQ Handler-ref Wire Contract Design
 
-Status: design-only taskbook drafted from independent Planning/Source Review；
-ready for docs-only commit。
+Status: committed as `88713346078`；design-only taskbook accepted。
 
 Goal:
 
@@ -8694,6 +8693,98 @@ Planning/Source Review - M11-E5r-5:
 - confirmed E5r-5a is not useful before the MQ wire design is accepted；
 - confirmed E5r-6 worker production design is riskier and should follow the MQ
   wire contract。
+
+### M11-E5r-6: Worker position(record) Production Design
+
+Status: design-only taskbook drafted from independent Planning/Source Review；
+ready for docs-only commit。
+
+Goal:
+
+- document the worker-side preconditions before any real
+  `file->position(record)` coding；
+- define when a worker may produce handler ref bytes；
+- define failure paths that must not produce refs；
+- keep `PQblockScanIterator::Read()`, `Query_result_mq`, comparator, and
+  visible ORDER BY PQ unchanged。
+
+Current branch findings:
+
+- `PQblockScanIterator::Init()` / `Read()` still fail closed and do not call
+  `file->position(record)`；
+- `Query_result_mq::send_data()` still encodes only field-value `PQWR` ROW
+  payloads and has no handler-ref wire；
+- E5r-5 accepted the MQ handler-ref wire contract only as docs；
+- no current path combines worker row read, handler ref production, MQ
+  deep-copy, and leader comparator compatibility。
+
+Worker production preconditions:
+
+- worker must have successfully read a row；
+- `record` must be the worker handler's current row image；
+- worker `TABLE`, handler, handler prebuilt state, read view, and iterator
+  ownership must remain valid；
+- stable-output requirement must be explicit before requesting refs；
+- handler `ref_length` must be known, nonzero, and validated；
+- worker must not be detached, killed, at EOF, or in an error path；
+- worker must not allow handler state to advance before MQ deep-copies the ref。
+
+Forbidden worker paths:
+
+- no `position(record)` on init failure；
+- no `position(record)` on read failure；
+- no `position(record)` on EOF；
+- no `position(record)` after detach or kill is observed；
+- no ref emission when `ref_length` is zero or mismatched；
+- no fallback to synthetic row ids for visible stable ORDER BY。
+
+Future coding prerequisites:
+
+- MQ handler-ref wire contract must have a reviewed source implementation；
+- worker row-production ownership must be proven for the specific iterator；
+- handler ref lifetime must be connected to the MQ deep-copy point；
+- leader handler compatibility must be separately reviewed；
+- comparator readiness must remain false until all prerequisites are linked and
+  tested。
+
+Allowed files for E5r-6:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Forbidden:
+
+- `sql/parallel_query/pq_iterators.*`；
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/exchange_sort.*`；
+- `Gather_operator` / `exchange.*`；
+- `pq_optimizer.*`, `HAS_ORDER_BY` gate, AccessPath, handler/InnoDB, executor,
+  sysvar, or public counter changes；
+- visible ORDER BY PQ, `cmp_ref()` comparator, or `file->position(record)`
+  calls。
+
+Hard gates:
+
+- `rowid_tiebreak_ready=false`；
+- `default_ordered_read_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`。
+
+Validation for E5r-6:
+
+- docs-only；
+- `git diff --check` before commit；
+- no build/MTR required unless source or test files change。
+
+Planning/Source Review - M11-E5r-6:
+
+- Review Agent verdict: `ACCEPT` for docs-only design；
+- recommended E5r-6 as the next smallest safe task after E5r-5；
+- confirmed current `PQblockScanIterator::Read()` still fails closed；
+- confirmed current `Query_result_mq::send_data()` still has no handler-ref
+  wire；
+- confirmed direct worker `file->position(record)` coding is still blocked；
+- confirmed no build/MTR is required for docs-only E5r-6。
 
 ## Risk Areas
 
