@@ -4,8 +4,9 @@
 
 Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage accepted；
 M11-F5a secondary MIN / optimizer shortcut source inventory completed and
-accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic taskbook under
-review；real worker-side ICP positive row production remains blocked。
+accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic implemented and
+under Code / Docs / Test Review；real worker-side ICP positive row production
+remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -1464,8 +1465,8 @@ Recommended F5a-1 Task Shape:
 
 #### Proposed M11-F5a-1: Debug-only Optimizer Shortcut Diagnostic Taskbook
 
-Status: taskbook created；Design / Code-Boundary Review pending；no source
-edits yet。
+Status: implemented；build and MTR validation passed；Code / Docs / Test Review
+pending。
 
 Goal:
 
@@ -1590,6 +1591,31 @@ Acceptance:
 - no changes to optimizer shortcut selection, handler index read semantics,
   `read_set` restore semantics, PQ eligibility, worker/MQ path, or InnoDB path；
 - complete suite remains green。
+
+Implementation Summary:
+
+- Added debug-only `PQ_global_stats` counters for opt_sum MIN/MAX shortcut
+  attempts / success / empty / unsupported in `sql_parallel.h`；
+- Added debug-only SHOW STATUS helper / entries in `mysqld.cc` under
+  `#ifndef NDEBUG` so release builds do not gain user-visible status variables；
+- Added `DBUG_EXECUTE_IF("pq_opt_sum_minmax_shortcut_smoke", ...)` guarded
+  counter increments around the existing `opt_sum.cc` MIN/MAX field shortcut
+  path；
+- Extended `pq_commercial_ref_icp` M9-F4 window to cover bare MIN, ranged MIN,
+  empty MIN, and adjacent `ORDER BY ... LIMIT 1` while verifying PQ execution
+  counters remain zero；
+- Updated `pq_stats.result` for the debug-build-only status variable list.
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `cd build-ninja/mysql-test && ./mtr parallel_query.pq_commercial_ref_icp --record`
+  passed；
+- `cd build-ninja/mysql-test && ./mtr parallel_query.pq_stats --record` passed；
+- `cd build-ninja/mysql-test && ./mtr parallel_query.pq_commercial_ref_icp parallel_query.pq_stats`
+  passed；
+- `cd build-ninja/mysql-test && ./mtr --suite=parallel_query --parallel=1`
+  passed, 89/89。
 
 Triage Review Revision:
 

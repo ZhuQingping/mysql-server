@@ -9914,6 +9914,16 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_rows_produced,
                                     secondary_rows_produced)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_rows_materialized_smoke,
                                     secondary_rows_materialized_smoke)
+#ifndef NDEBUG
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(opt_sum_minmax_shortcut_probe_attempts,
+                                    opt_sum_minmax_shortcut_probe_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(opt_sum_minmax_shortcut_probe_success,
+                                    opt_sum_minmax_shortcut_probe_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(opt_sum_minmax_shortcut_probe_empty,
+                                    opt_sum_minmax_shortcut_probe_empty)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(opt_sum_minmax_shortcut_probe_unsupported,
+                                    opt_sum_minmax_shortcut_probe_unsupported)
+#endif
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_record_buffer_null_probes,
                                     secondary_record_buffer_null_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_record_buffer_nonnull_probes,
@@ -11926,6 +11936,20 @@ SHOW_VAR status_vars[] = {
     {"Parallel_secondary_rows_materialized_smoke",
      (char *)&show_pq_secondary_rows_materialized_smoke, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+#ifndef NDEBUG
+    {"Parallel_opt_sum_minmax_shortcut_probe_attempts",
+     (char *)&show_pq_opt_sum_minmax_shortcut_probe_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_opt_sum_minmax_shortcut_probe_empty",
+     (char *)&show_pq_opt_sum_minmax_shortcut_probe_empty, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_opt_sum_minmax_shortcut_probe_success",
+     (char *)&show_pq_opt_sum_minmax_shortcut_probe_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_opt_sum_minmax_shortcut_probe_unsupported",
+     (char *)&show_pq_opt_sum_minmax_shortcut_probe_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+#endif
     {"Parallel_secondary_record_buffer_null_probes",
      (char *)&show_pq_secondary_record_buffer_null_probes, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

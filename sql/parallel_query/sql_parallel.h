@@ -266,6 +266,12 @@ struct PQ_global_stats {
   std::atomic<uint64> secondary_ranges_built{0};  ///< Secondary ranges built
   std::atomic<uint64> secondary_rows_produced{0};  ///< Secondary rows produced
   std::atomic<uint64> secondary_rows_materialized_smoke{0};  ///< Mat smoke rows
+#ifndef NDEBUG
+  std::atomic<uint64> opt_sum_minmax_shortcut_probe_attempts{0};
+  std::atomic<uint64> opt_sum_minmax_shortcut_probe_success{0};
+  std::atomic<uint64> opt_sum_minmax_shortcut_probe_empty{0};
+  std::atomic<uint64> opt_sum_minmax_shortcut_probe_unsupported{0};
+#endif
   std::atomic<uint64> secondary_record_buffer_null_probes{0};  ///< Native RB null
   std::atomic<uint64> secondary_record_buffer_nonnull_probes{0};  ///< Native RB set
   std::atomic<uint64> secondary_visibility_attempts{0};  ///< Visibility probes
@@ -526,6 +532,13 @@ struct PQ_global_stats {
     secondary_ranges_built.store(0, std::memory_order_relaxed);
     secondary_rows_produced.store(0, std::memory_order_relaxed);
     secondary_rows_materialized_smoke.store(0, std::memory_order_relaxed);
+#ifndef NDEBUG
+    opt_sum_minmax_shortcut_probe_attempts.store(0, std::memory_order_relaxed);
+    opt_sum_minmax_shortcut_probe_success.store(0, std::memory_order_relaxed);
+    opt_sum_minmax_shortcut_probe_empty.store(0, std::memory_order_relaxed);
+    opt_sum_minmax_shortcut_probe_unsupported.store(0,
+                                                    std::memory_order_relaxed);
+#endif
     secondary_record_buffer_null_probes.store(0, std::memory_order_relaxed);
     secondary_record_buffer_nonnull_probes.store(0, std::memory_order_relaxed);
     secondary_visibility_attempts.store(0, std::memory_order_relaxed);

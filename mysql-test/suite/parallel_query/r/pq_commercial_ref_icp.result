@@ -1321,6 +1321,19 @@ SET @f4_min_secondary_rows_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @f4_min_shortcut_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_attempts');
+SET @f4_min_shortcut_success_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_success');
+SET @f4_min_shortcut_empty_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_empty');
+SET SESSION debug="d,pq_opt_sum_minmax_shortcut_smoke";
 EXPLAIN SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx);
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	#	NULL	Select tables optimized away
@@ -1335,6 +1348,15 @@ SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
 WHERE j < 30;
 MIN(j)
 10
+EXPLAIN SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
+WHERE j < 0;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	#	NULL	No matching min/max row
+SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
+WHERE j < 0;
+MIN(j)
+NULL
+SET SESSION debug="";
 EXPLAIN SELECT id, i, j FROM pq_ref_icp_min FORCE INDEX(j_idx)
 WHERE j < 30 ORDER BY j LIMIT 1;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
@@ -1368,9 +1390,24 @@ AS f4_min_ranges_dispatched_delta,
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_secondary_rows_produced') -
 @f4_min_secondary_rows_before
-AS f4_min_secondary_rows_delta;
-f4_min_executed_delta	f4_min_workers_delta	f4_min_ranges_built_delta	f4_min_ranges_dispatched_delta	f4_min_secondary_rows_delta
-0	0	0	0	0
+AS f4_min_secondary_rows_delta,
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_attempts') -
+@f4_min_shortcut_attempts_before) >= 3
+AS f4_min_shortcut_attempts_seen,
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_success') -
+@f4_min_shortcut_success_before) >= 2
+AS f4_min_shortcut_success_seen,
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_empty') -
+@f4_min_shortcut_empty_before) >= 1
+AS f4_min_shortcut_empty_seen;
+f4_min_executed_delta	f4_min_workers_delta	f4_min_ranges_built_delta	f4_min_ranges_dispatched_delta	f4_min_secondary_rows_delta	f4_min_shortcut_attempts_seen	f4_min_shortcut_success_seen	f4_min_shortcut_empty_seen
+0	0	0	0	0	1	1	1
 SET @executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status

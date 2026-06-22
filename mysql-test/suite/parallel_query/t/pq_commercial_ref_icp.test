@@ -1346,7 +1346,20 @@ SET @f4_min_secondary_rows_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @f4_min_shortcut_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_attempts');
+SET @f4_min_shortcut_success_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_success');
+SET @f4_min_shortcut_empty_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_empty');
 
+SET SESSION debug="d,pq_opt_sum_minmax_shortcut_smoke";
 --disable_warnings
 --replace_column 10 #
 EXPLAIN SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx);
@@ -1360,6 +1373,15 @@ EXPLAIN SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
 --enable_warnings
 SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
   WHERE j < 30;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
+  WHERE j < 0;
+--enable_warnings
+SELECT MIN(j) FROM pq_ref_icp_min FORCE INDEX(j_idx)
+  WHERE j < 0;
+SET SESSION debug="";
 
 --disable_warnings
 --replace_column 10 #
@@ -1394,7 +1416,22 @@ SELECT
       FROM performance_schema.global_status
       WHERE variable_name = 'Parallel_secondary_rows_produced') -
       @f4_min_secondary_rows_before
-    AS f4_min_secondary_rows_delta;
+    AS f4_min_secondary_rows_delta,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_attempts') -
+      @f4_min_shortcut_attempts_before) >= 3
+    AS f4_min_shortcut_attempts_seen,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_success') -
+      @f4_min_shortcut_success_before) >= 2
+    AS f4_min_shortcut_success_seen,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_opt_sum_minmax_shortcut_probe_empty') -
+      @f4_min_shortcut_empty_before) >= 1
+    AS f4_min_shortcut_empty_seen;
 
 SET @executed_before = (
   SELECT CAST(variable_value AS UNSIGNED)

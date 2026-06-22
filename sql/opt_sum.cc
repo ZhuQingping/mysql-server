@@ -73,6 +73,9 @@
 #include "sql/item_func.h"
 #include "sql/item_sum.h"  // Item_sum
 #include "sql/key.h"       // key_cmp_if_same
+#ifndef NDEBUG
+#include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
+#endif
 #include "sql/sql_bitmap.h"
 #include "sql/sql_class.h"
 #include "sql/sql_const.h"
@@ -467,7 +470,7 @@ bool optimize_aggregated_query(THD *thd, Query_block *select,
           if (expr->type() == Item::FIELD_ITEM) {
             uchar key_buff[MAX_KEY_LENGTH];
             Index_lookup ref;
-            uint range_fl, prefix_len;
+            uint range_fl = 0, prefix_len = 0;
 
             ref.key_buff = key_buff;
             Item_field *item_field = down_cast<Item_field *>(expr);
@@ -492,6 +495,15 @@ bool optimize_aggregated_query(THD *thd, Query_block *select,
             */
             assert(!table->file->inited);
 
+#ifndef NDEBUG
+            bool pq_opt_sum_minmax_shortcut_smoke = false;
+            DBUG_EXECUTE_IF("pq_opt_sum_minmax_shortcut_smoke",
+                            pq_opt_sum_minmax_shortcut_smoke = true;);
+            auto pq_opt_sum_minmax_inc = [](std::atomic<uint64> &counter) {
+              counter.fetch_add(1, std::memory_order_relaxed);
+            };
+#endif
+
             /*
               Look for a partial key that can be used for optimization.
               If we succeed, ref.key_length will contain the length of
@@ -500,9 +512,21 @@ bool optimize_aggregated_query(THD *thd, Query_block *select,
               Type of range for the key part for this field will be
               returned in range_fl.
             */
-            if ((inner_tables & tr->map()) ||
-                !find_key_for_maxmin(is_max, &ref, item_field, conds, &range_fl,
-                                     &prefix_len)) {
+            const bool pq_opt_sum_minmax_key_found =
+                !(inner_tables & tr->map()) &&
+                find_key_for_maxmin(is_max, &ref, item_field, conds, &range_fl,
+                                    &prefix_len);
+#ifndef NDEBUG
+            if (pq_opt_sum_minmax_shortcut_smoke) {
+              pq_opt_sum_minmax_inc(
+                  pq_global_stats.opt_sum_minmax_shortcut_probe_attempts);
+              if (!pq_opt_sum_minmax_key_found) {
+                pq_opt_sum_minmax_inc(
+                    pq_global_stats.opt_sum_minmax_shortcut_probe_unsupported);
+              }
+            }
+#endif
+            if (!pq_opt_sum_minmax_key_found) {
               aggr_impossible = true;
               break;
             }
@@ -546,6 +570,21 @@ bool optimize_aggregated_query(THD *thd, Query_block *select,
               error = HA_ERR_KEY_NOT_FOUND;
             table->set_keyread(false);
             table->file->ha_index_end();
+#ifndef NDEBUG
+            if (pq_opt_sum_minmax_shortcut_smoke) {
+              if (!error) {
+                pq_opt_sum_minmax_inc(
+                    pq_global_stats.opt_sum_minmax_shortcut_probe_success);
+              } else if (error == HA_ERR_KEY_NOT_FOUND ||
+                         error == HA_ERR_END_OF_FILE) {
+                pq_opt_sum_minmax_inc(
+                    pq_global_stats.opt_sum_minmax_shortcut_probe_empty);
+              } else {
+                pq_opt_sum_minmax_inc(
+                    pq_global_stats.opt_sum_minmax_shortcut_probe_unsupported);
+              }
+            }
+#endif
             if (error) {
               if (error == HA_ERR_KEY_NOT_FOUND ||
                   error == HA_ERR_END_OF_FILE) {
