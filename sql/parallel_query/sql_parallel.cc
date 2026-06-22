@@ -1200,6 +1200,8 @@ bool Gather_operator::run_worker_attach_contract_smoke(
   bool ownership_mismatch_smoke = false;
   bool icp_ownership_mismatch_smoke = false;
   bool icp_record_buffer_negative_smoke = false;
+  bool handler_ref_cmp_smoke_pending = false;
+  std::vector<uchar> handler_ref_cmp_smoke_ref;
   Item *saved_leader_pushed_idx_cond = nullptr;
   uint saved_leader_pushed_idx_cond_keyno = MAX_KEY;
   auto install_leader_icp_sentinel = [&]() {
@@ -1408,10 +1410,36 @@ bool Gather_operator::run_worker_attach_contract_smoke(
         copied_ref.size(), std::memory_order_relaxed);
     pq_global_stats.orderby_worker_handler_ref_cmp_equal.fetch_add(
         1, std::memory_order_relaxed);
+
+    DBUG_EXECUTE_IF("pq_orderby_handler_ref_comparator_smoke", {
+      pq_global_stats.orderby_handler_ref_cmp_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+      handler_ref_cmp_smoke_ref = copied_ref;
+      handler_ref_cmp_smoke_pending = true;
+    });
   });
 
   failed = false;
   cleanup();
+  if (handler_ref_cmp_smoke_pending) {
+    if (leader_table == nullptr || leader_table->file == nullptr ||
+        handler_ref_cmp_smoke_ref.empty() ||
+        leader_table->file->cmp_ref(handler_ref_cmp_smoke_ref.data(),
+                                    handler_ref_cmp_smoke_ref.data()) != 0) {
+      pq_global_stats.orderby_handler_ref_cmp_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+
+    pq_global_stats.orderby_handler_ref_cmp_success.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_handler_ref_cmp_bytes.fetch_add(
+        handler_ref_cmp_smoke_ref.size(), std::memory_order_relaxed);
+    pq_global_stats.orderby_handler_ref_cmp_equal.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_handler_ref_cmp_post_cleanup_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
   pq_global_stats.worker_attach_smoke_success.fetch_add(
       1, std::memory_order_relaxed);
   return false;

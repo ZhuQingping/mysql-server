@@ -9213,6 +9213,152 @@ Completion Report - M11-E6b:
     integration；
   - visible ORDER BY PQ remains blocked。
 
+### M11-E6c: Private cmp_ref Comparator Contract
+
+Status: implementation completed locally；Code / Docs / Test Review accepted。
+
+Goal:
+
+- 在 E6a 已证明 real worker `position(record)` / deep-copied handler ref、
+  E6b 已证明 private `PQOF` handler-ref wire 后，验证 equal sort-key 下的
+  stable tie-break 可以调用 handler `cmp_ref()`；
+- 只做 private / DBUG-only comparator contract；
+- 保持当前 `Exchange_sort` 默认 cached comparator、heap reader、visible ORDER
+  BY PQ 和 `HAS_ORDER_BY` serial boundary 不变。
+
+Commercial reference:
+
+- worker row path：`PQblockScanIterator::Read()` 在需要 stable rowid 时调用
+  `table()->file->position(m_record)`，生成 `file->ref`；
+- worker MQ path：`Query_result_mq::send_data()` 在商用实现中把
+  `file->ref_length` 字节作为 stable rowid/ref 传输；
+- leader ORDER BY path：`Exchange_sort` 在 sort-key 相等时调用
+  `file->cmp_ref(row_id_0, row_id_1) < 0`，而不是裸 `memcmp(row_id)`。
+
+Current-branch findings:
+
+- `pq_orderby_cached_compare_records()` 当前在 sort-key 相等时比较
+  `std::vector<uchar> row_id`，这是 controlled-smoke 语义，不等价于
+  handler `cmp_ref()`；
+- `PQ_orderby_cached_record::row_id` 是 owning `std::vector<uchar>`；
+  `pq_copy_decoded_orderby_frame()` 已 deep-copy decoded `row_id`；
+- E6b 的 decoded bytes deep-copy 证明仍局限在 helper 内；E6c 若要表达
+  comparator ownership，必须显式验证 copied refs 在 worker cleanup 后仍可由
+  still-open handler `cmp_ref()` 消费。
+
+Allowed files for E6c code:
+
+- `sql/parallel_query/exchange_sort.{h,cc}`：
+  - private comparator helper/smoke only；
+  - may add a sibling comparator helper that uses handler `cmp_ref()` for
+    equal sort-key rows；
+  - must not replace the default cached comparator or heap reader comparator；
+- `sql/parallel_query/sql_parallel.{h,cc}`：
+  - may reuse the E6a/E6b worker attach window to obtain real copied handler
+    refs and call the private comparator helper；
+- `sql/mysqld.cc`：
+  - only for new E6c status counters；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- `Docs/pq_tasks/README.md` and this taskbook。
+
+Forbidden files / behavior:
+
+- `sql/parallel_query/query_result_mq.{h,cc}`；
+- `PQ_worker_result_frame_header` / `PQWR` changes；
+- `PQOF` header / flags format changes；
+- optimizer eligibility, `HAS_ORDER_BY`, readiness flags, visible ORDER BY PQ；
+- default `Gather_operator` `Exchange_sort` selection；
+- default cached comparator replacement；
+- `sql/handler.*` and `storage/innobase/**`。
+
+TDD plan:
+
+- RED: add DBUG-only MTR assertions for E6c private comparator counters:
+  - attempts delta >= 1；
+  - success delta >= 1；
+  - cmp_equal delta >= 1；
+  - post-cleanup cmp_ref success delta >= 1；
+  - decoded/deep-copied ref bytes delta > 0；
+  - unsupported delta == 0；
+  - no-DBUG/default-path E6c counters stay 0；
+  - visible ORDER BY guards continue to report `Not parallel HAS_ORDER_BY`。
+- Before implementation, RED must fail because E6c counters stay `0`；
+- GREEN: implement only private `cmp_ref()` comparator smoke；
+- Acceptance: the smoke must copy refs into owned buffers before worker scan /
+  worker table cleanup, run cleanup, then call `cmp_ref()` through a still-open
+  handler after that cleanup boundary. A comparator success before cleanup is
+  insufficient for E6c；
+- replay focused MTR, `pq_stats`, and full `parallel_query` suite。
+
+Required review after E6c coding:
+
+- Code Review: confirm default comparator / heap reader / visible ORDER BY are
+  unchanged；
+- Docs Review: confirm E6a/E6b/E6c boundaries remain separate；
+- Test Review: confirm E6c is DBUG-only and existing ORDER BY negative guards
+  remain。
+
+Completion Report - M11-E6c:
+
+- Status: implementation completed locally；Code / Docs / Test Review accepted；
+- Changed files:
+  - `sql/parallel_query/sql_parallel.{h,cc}`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`；
+  - `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- Implementation:
+  - added E6c status counters:
+    `Parallel_orderby_handler_ref_cmp_attempts`,
+    `Parallel_orderby_handler_ref_cmp_success`,
+    `Parallel_orderby_handler_ref_cmp_unsupported`,
+    `Parallel_orderby_handler_ref_cmp_bytes`,
+    `Parallel_orderby_handler_ref_cmp_equal`,
+    `Parallel_orderby_handler_ref_cmp_post_cleanup_success`；
+  - added DBUG-only `pq_orderby_handler_ref_comparator_smoke` inside the
+    existing E6a worker handler-ref positive window；
+  - the smoke copies the E6a real handler ref into an owned vector before
+    worker scan / worker table cleanup, runs the existing cleanup, then calls
+    `leader_table->file->cmp_ref(copied_ref, copied_ref)` through the still-open
+    leader handler after the cleanup boundary；
+  - no default cached comparator, heap reader, `Query_result_mq`, `PQWR`,
+    `PQOF` header / flags, optimizer eligibility, `HAS_ORDER_BY`, readiness
+    flag, or visible ORDER BY behavior was changed。
+- TDD evidence:
+  - RED: after adding E6c counters and MTR assertions but before implementation,
+    `pq_worker_attach_contract_smoke` failed because E6c attempts / success /
+    bytes / cmp-equal / post-cleanup deltas stayed `0`；
+  - GREEN: after implementation, `pq_worker_attach_contract_smoke` passed。
+- Validation:
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `pq_worker_attach_contract_smoke` passed；
+  - `pq_stats --record` SQL completed and hit the known final copy errno 1；
+    generated result log was copied manually；
+  - `pq_stats` replay passed；
+  - full `parallel_query` suite passed 89/89；
+  - `git diff --check` passed。
+- Review:
+  - Review Agent verdict: `ACCEPT`；
+  - confirmed `pq_orderby_handler_ref_comparator_smoke` is scoped to the
+    existing DBUG-only E6a worker handler-ref window；
+  - confirmed copied ref ownership crosses worker cleanup before leader
+    `cmp_ref(ref, ref)`；
+  - confirmed no diff in `Query_result_mq`, `PQWR` / `PQOF` frame headers,
+    optimizer eligibility, `HAS_ORDER_BY`, readiness flags, heap reader,
+    default comparator, handler, or InnoDB paths；
+  - confirmed docs do not claim real two-row ORDER BY comparator or visible
+    readiness。
+- Remaining boundary:
+  - E6c proves only private post-cleanup `cmp_ref(ref, ref)` consumption of an
+    owned copied handler ref；
+  - it does not replace the default byte-vector cached comparator and does not
+    open visible ORDER BY PQ；
+  - future visible ORDER BY work still needs a reviewed gate for real
+    sort-key-equal two-row ordering, default heap integration, and readiness
+    flags。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
