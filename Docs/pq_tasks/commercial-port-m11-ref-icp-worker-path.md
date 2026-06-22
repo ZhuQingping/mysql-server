@@ -4,7 +4,8 @@
 
 Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage accepted；
 M11-F5a secondary MIN / optimizer shortcut source inventory completed and
-under review；real worker-side ICP positive row production remains blocked。
+accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic taskbook under
+review；real worker-side ICP positive row production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -1460,6 +1461,135 @@ Recommended F5a-1 Task Shape:
   `Parallel_secondary_rows_produced = 0`；
 - 若新增 debug-only shortcut counters，只能表达 attempts / success /
   empty / unsupported，不得影响 release build 或 user-visible execution。
+
+#### Proposed M11-F5a-1: Debug-only Optimizer Shortcut Diagnostic Taskbook
+
+Status: taskbook created；Design / Code-Boundary Review pending；no source
+edits yet。
+
+Goal:
+
+- 在不改变 `opt_sum` MIN/MAX shortcut 语义、不打开 PQ positive execution
+  的前提下，为 secondary MIN optimizer shortcut 增加 DBUG-only 可观测
+  诊断；
+- 验证 shortcut-like SQL 不增长 PQ execution / worker / range /
+  secondary row counters；
+- 明确该路径是 optimizer shortcut guard，而不是商用 positive PQ
+  row-production path。
+
+Architecture:
+
+- `opt_sum.cc` 是唯一能可靠观测 `AGGR_COMPLETE` / `AGGR_EMPTY`
+  secondary MIN shortcut 的位置；
+- 诊断只允许在 DBUG build 中更新状态计数器，不改变 shortcut 是否启用、
+  handler index read、`TABLE::read_set` restore、`table->set_keyread()`、
+  `ha_index_init()` / `ha_index_end()` 顺序；
+- `pq_optimizer.cc` 后置 eligibility 不作为主 hook，只保留现有
+  fail-closed 计数器窗口作为负向验证。
+
+Allowed Files:
+
+- `sql/opt_sum.cc`
+- `sql/parallel_query/sql_parallel.h`，仅允许在 `PQ_global_stats` 新增
+  atomic counter 字段和 `reset()` 清零；
+- `sql/mysqld.cc`，仅允许新增 `#ifndef NDEBUG` 包裹的 SHOW STATUS
+  helper / `status_vars[]` entry；
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Forbidden Files:
+
+- `sql/sql_optimizer.cc`
+- `sql/parallel_query/pq_optimizer.cc`
+- `sql/parallel_query/pq_iterator.cc`
+- `sql/parallel_query/pq_iterators.cc`
+- `sql/parallel_query/sql_parallel.cc`
+- any new `sql/parallel_query/pq_stats.*`
+- `sql/CMakeLists.txt`
+- `sql/join_optimizer/**`
+- `sql/handler.*`
+- `storage/innobase/**`
+- any ORDER BY / Exchange_sort source file
+- any partition/MVI/native `Record_buffer` source file
+
+New Status Counters:
+
+- `Parallel_opt_sum_minmax_shortcut_probe_attempts`
+- `Parallel_opt_sum_minmax_shortcut_probe_success`
+- `Parallel_opt_sum_minmax_shortcut_probe_empty`
+- `Parallel_opt_sum_minmax_shortcut_probe_unsupported`
+
+Counter Semantics:
+
+- attempts：仅在 `DBUG_EXECUTE_IF("pq_opt_sum_minmax_shortcut_smoke", ...)`
+  开启且 MIN/MAX field shortcut candidate 到达 `find_key_for_maxmin()` 后
+  增长；
+- success：handler index read 成功，后续可进入 `AGGR_COMPLETE` 的
+  shortcut 增长；
+- empty：handler 返回 `HA_ERR_KEY_NOT_FOUND` / `HA_ERR_END_OF_FILE`，
+  后续可进入 `AGGR_EMPTY` 的 shortcut 增长；
+- unsupported：仅统计 debug hook 局部范围内、已经进入 MIN/MAX field
+  shortcut candidate 后，`find_key_for_maxmin()` 返回 false、handler
+  error、range check failure 或其他不会完成 shortcut 的结果；不要求统计
+  所有非 candidate aggregate 或非 field MIN/MAX；
+- 所有 counter 必须只在 debug hook 开启时变化；默认运行与 release
+  build 不改变行为；新增 SHOW STATUS helper 和 `status_vars[]` entry
+  必须用 `#ifndef NDEBUG` 包裹，避免 release build 增加用户可见状态变量。
+
+Implementation Steps:
+
+1. RED test:
+   - 在 `pq_commercial_ref_icp.test` 的 M9-F4 window 前后加入
+     `Parallel_opt_sum_minmax_shortcut_probe_*` delta 查询；
+   - 打开 `SET SESSION debug="d,pq_opt_sum_minmax_shortcut_smoke"`；
+   - 运行：
+     `cd build-ninja/mysql-test && ./mtr parallel_query.pq_commercial_ref_icp --record`；
+   - 预期初始 RED：新增状态变量不存在或 delta 不符合期望。
+
+2. Status plumbing:
+   - 在 `sql/parallel_query/sql_parallel.h` 的 `PQ_global_stats` 中新增四个
+     atomic counter；
+   - 在 `PQ_global_stats::reset()` 中清零；
+   - 在 `sql/mysqld.cc` 中新增 `#ifndef NDEBUG` 包裹的 SHOW STATUS
+     helper / `status_vars[]` entry；
+   - 更新 `pq_stats.result` 的 debug-build status variable expectation；
+   - 不复用 execution / worker / secondary rows counters。
+
+3. `opt_sum.cc` DBUG-only hook:
+   - hook 位置必须在 MIN/MAX field shortcut candidate 已确认、且
+     `find_key_for_maxmin()` / handler index read 结果可见的局部范围；
+   - 不新增 early return；
+   - 不改变任何变量值、bitmap、handler call order 或 error handling；
+   - 使用最小 helper 或局部 lambda 只做 counter increment。
+
+4. MTR guard:
+   - 复用 `pq_ref_icp_min`；
+   - 覆盖 bare `MIN(j)`、range `MIN(j) WHERE j < 30`、empty
+     `MIN(j) WHERE j < 0`、adjacent `ORDER BY j LIMIT 1`；
+   - 预期 shortcut counter 用布尔 delta 表达，避免前序测试污染：
+     `attempts_delta >= 3`、`success_delta >= 2`、`empty_delta >= 1`；
+   - 预期 PQ execution counters 仍全为 0：
+     `Parallel_queries_executed`、`Parallel_workers_launched`、
+     `Parallel_ranges_built`、`Parallel_ranges_dispatched`、
+     `Parallel_secondary_rows_produced`。
+
+5. Verification:
+   - `cmake --build build-ninja --target mysqld -j 16`
+   - `cd build-ninja/mysql-test && ./mtr parallel_query.pq_commercial_ref_icp`
+   - `cd build-ninja/mysql-test && ./mtr parallel_query.pq_stats --record`
+   - `cd build-ninja/mysql-test && ./mtr --suite=parallel_query --parallel=1`
+
+Acceptance:
+
+- Code / Docs / Test Review Agent returns `ACCEPT`；
+- no production behavior change when debug hook is absent；
+- no source changes outside Allowed Files；
+- no changes to optimizer shortcut selection, handler index read semantics,
+  `read_set` restore semantics, PQ eligibility, worker/MQ path, or InnoDB path；
+- complete suite remains green。
 
 Triage Review Revision:
 
