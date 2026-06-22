@@ -146,6 +146,15 @@ struct PQ_orderby_row_id_contract {
   bool stable_output_required{false};
 };
 
+struct PQ_orderby_handler_ref_lifetime_contract {
+  PQ_orderby_row_id_contract row_id_contract;
+  bool ref_length_verified{false};
+  bool ref_deep_copied{false};
+  bool worker_record_current{false};
+  bool handler_can_advance{false};
+  bool worker_detached{false};
+};
+
 struct PQ_orderby_worker_frame_producer_owner {
   MQueue_handle *handle{nullptr};
   uint32 worker_id{0};
@@ -254,6 +263,10 @@ bool pq_decode_orderby_frame(const void *raw_data, uint32 raw_len,
 bool pq_validate_orderby_row_id_contract(
     const PQ_orderby_decoded_frame *decoded,
     const PQ_orderby_row_id_contract &contract);
+
+bool pq_validate_orderby_handler_ref_lifetime_contract(
+    const PQ_orderby_decoded_frame *decoded,
+    const PQ_orderby_handler_ref_lifetime_contract &contract);
 
 class Exchange_sort final : public Exchange {
  public:

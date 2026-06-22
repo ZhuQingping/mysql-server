@@ -8371,6 +8371,137 @@ Design/Source Review - M11-E5r-3a:
   only；
 - confirmed real execution/comparator coding remains blocked。
 
+### M11-E5r-3b: Private Handler-ref Lifetime Validation Shape
+
+Status: implementation completed；focused MTR passed；Code/Doc/Test Re-review
+accepted；ready for commit。
+
+Goal:
+
+- encode the E5r-3a handler-ref lifetime requirements as a private validation
+  shape；
+- require handler-ref metadata to prove source, expected `ref_length`,
+  deep-copy, current worker record, and no detach/advance risk；
+- keep the helper disconnected from real worker `position(record)`, MQ ref
+  wire, `cmp_ref()`, and visible ORDER BY PQ。
+
+Implementation shape:
+
+- add `PQ_orderby_handler_ref_lifetime_contract`；
+- add `pq_validate_orderby_handler_ref_lifetime_contract()`；
+- reuse `PQ_orderby_row_id_contract` and
+  `pq_validate_orderby_row_id_contract()`；
+- validate the shape through existing private controlled smoke；
+- do not read handler `file->ref`；
+- do not call `file->position(record)`；
+- do not change `PQOF` or `PQWR` wire headers；
+- do not add public status variables or counters。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.h`；
+- `sql/parallel_query/exchange_sort.cc`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Forbidden:
+
+- worker `file->position(record)` calls；
+- `Query_result_mq::send_data()` carrying refs or changing `PQWR` wire；
+- `Exchange_sort` `handler::cmp_ref()` comparator；
+- `PQblockScanIterator::Read()` / `ParallelScanIterator::Read()` ORDER BY real
+  paths；
+- `Gather_operator::init()` default `Exchange_sort` selection；
+- `pq_optimizer.*` readiness or `HAS_ORDER_BY` serial-boundary relaxation；
+- handler/InnoDB, AccessPath, worker launch, executor, sysvar, or public
+  counter changes；
+- user-visible ORDER BY PQ。
+
+Hard gates:
+
+- `rowid_tiebreak_ready=false`；
+- `default_ordered_read_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`。
+
+Validation plan:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  - `pq_commercial_order_by_frames`；
+  - `pq_commercial_order_by`；
+  - `pq_stats`。
+- full `parallel_query` suite only if Code/Doc/Test Review requests it。
+
+Planning/Source Review - M11-E5r-3b:
+
+- Review Agent verdict: `ACCEPT`；
+- allowed a very narrow private non-default validation/shape helper；
+- recommended implementation only in `exchange_sort.*` and docs；
+- recommended not touching `query_result_mq.*` or `pq_iterators.*`；
+- confirmed compile and focused MTR are enough if the helper is wired only into
+  existing controlled smoke；
+- confirmed real handler-ref production, MQ ref wire, `cmp_ref()`, and visible
+  ORDER BY PQ remain blocked。
+
+Completion Report - M11-E5r-3b Coding:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.h`；
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added `PQ_orderby_handler_ref_lifetime_contract`；
+  - added `pq_validate_orderby_handler_ref_lifetime_contract()`；
+  - required `HANDLER_REF`, nonzero expected `ref_length`, stable output,
+    verified length, deep copy, current worker record, no handler advance, and
+    no worker detach；
+  - reused `pq_validate_orderby_row_id_contract()`；
+  - extended only the existing private controlled smoke；
+  - did not read handler `file->ref`；
+  - did not call `file->position(record)`；
+  - did not change `PQOF` or `PQWR` wire headers；
+  - did not add public status variables or counters。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed 4/4:
+    `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`
+    plus `shutdown_report`。
+- scope notes:
+  - no `cmp_ref()` comparator；
+  - no `Query_result_mq` ref wire-format change；
+  - no `PQblockScanIterator::Read()` / `ParallelScanIterator::Read()` /
+    `Gather_operator::init()` default path change；
+  - no optimizer readiness or `HAS_ORDER_BY` boundary change；
+  - no real handler ref ordering claim。
+
+Code/Doc/Test Review - M11-E5r-3b:
+
+- first Review Agent verdict: `REVISE`；
+- findings: no critical or important issues；
+- minor finding: README and taskbook status were stale after build/focused MTR；
+  fixed by this completion update；
+- review confirmed helper is fail-closed；
+- review confirmed the helper does not read `file->ref` or call
+  `position(record)`；
+- review confirmed no MQ wire/header/flags, public counter/status,
+  `Query_result_mq`, iterator, Gather, optimizer, or `HAS_ORDER_BY` changes；
+- review confirmed focused validation is sufficient and full `parallel_query`
+  suite is not required for this private controlled-smoke-only helper。
+
+Code/Doc/Test Re-review - M11-E5r-3b:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: no critical, important, or minor issues；
+- confirmed stale status was fixed；
+- confirmed technical boundary still holds；
+- confirmed no source changes to `file->ref` reads, `position(record)`,
+  `PQOF` / `PQWR` wire headers, `Query_result_mq`, iterators, Gather,
+  optimizer, `HAS_ORDER_BY`, or public counters/status。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

@@ -477,6 +477,39 @@ bool pq_orderby_row_id_contract_controlled_smoke() {
     return true;
   }
 
+  const PQ_orderby_handler_ref_lifetime_contract valid_lifetime{
+      {PQ_orderby_row_id_source::HANDLER_REF, sizeof(handler_ref), true},
+      true, true, true, false, false};
+  const PQ_orderby_handler_ref_lifetime_contract synthetic_lifetime{
+      {PQ_orderby_row_id_source::SYNTHETIC_SMOKE, 0, true},
+      true, true, true, false, false};
+  const PQ_orderby_handler_ref_lifetime_contract not_deep_copied{
+      {PQ_orderby_row_id_source::HANDLER_REF, sizeof(handler_ref), true},
+      true, false, true, false, false};
+  const PQ_orderby_handler_ref_lifetime_contract worker_not_current{
+      {PQ_orderby_row_id_source::HANDLER_REF, sizeof(handler_ref), true},
+      true, true, false, false, false};
+  const PQ_orderby_handler_ref_lifetime_contract handler_can_advance{
+      {PQ_orderby_row_id_source::HANDLER_REF, sizeof(handler_ref), true},
+      true, true, true, true, false};
+  const PQ_orderby_handler_ref_lifetime_contract worker_detached{
+      {PQ_orderby_row_id_source::HANDLER_REF, sizeof(handler_ref), true},
+      true, true, true, false, true};
+  if (pq_validate_orderby_handler_ref_lifetime_contract(&handler,
+                                                        valid_lifetime) ||
+      !pq_validate_orderby_handler_ref_lifetime_contract(
+          &handler, synthetic_lifetime) ||
+      !pq_validate_orderby_handler_ref_lifetime_contract(
+          &handler, not_deep_copied) ||
+      !pq_validate_orderby_handler_ref_lifetime_contract(
+          &handler, worker_not_current) ||
+      !pq_validate_orderby_handler_ref_lifetime_contract(
+          &handler, handler_can_advance) ||
+      !pq_validate_orderby_handler_ref_lifetime_contract(
+          &handler, worker_detached)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -574,6 +607,22 @@ bool pq_validate_orderby_row_id_contract(
   }
 
   return true;
+}
+
+bool pq_validate_orderby_handler_ref_lifetime_contract(
+    const PQ_orderby_decoded_frame *decoded,
+    const PQ_orderby_handler_ref_lifetime_contract &contract) {
+  if (contract.row_id_contract.source != PQ_orderby_row_id_source::HANDLER_REF ||
+      !contract.row_id_contract.stable_output_required ||
+      contract.row_id_contract.expected_ref_length == 0 ||
+      !contract.ref_length_verified || !contract.ref_deep_copied ||
+      !contract.worker_record_current || contract.handler_can_advance ||
+      contract.worker_detached) {
+    return true;
+  }
+
+  return pq_validate_orderby_row_id_contract(decoded,
+                                             contract.row_id_contract);
 }
 
 bool Exchange_sort::read_mq_message(MQMessageType &type, void **datap,
