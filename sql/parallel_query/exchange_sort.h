@@ -71,6 +71,12 @@ enum class PQ_orderby_frame_type : uint16 {
   ERROR = 3,
 };
 
+enum class PQ_orderby_row_id_source : uint8 {
+  NONE = 0,
+  SYNTHETIC_SMOKE = 1,
+  HANDLER_REF = 2,
+};
+
 enum class PQ_orderby_loader_status : uint8 {
   ROW = 1,
   FINISH,
@@ -132,6 +138,12 @@ struct PQ_orderby_decoded_frame {
   uint32 row_id_len{0};
   const uchar *sort_key{nullptr};
   uint32 sort_key_len{0};
+};
+
+struct PQ_orderby_row_id_contract {
+  PQ_orderby_row_id_source source{PQ_orderby_row_id_source::NONE};
+  uint32 expected_ref_length{0};
+  bool stable_output_required{false};
 };
 
 struct PQ_orderby_worker_frame_producer_owner {
@@ -238,6 +250,10 @@ bool pq_validate_orderby_frame(const void *raw_data, uint32 raw_len,
 
 bool pq_decode_orderby_frame(const void *raw_data, uint32 raw_len,
                              PQ_orderby_decoded_frame *decoded);
+
+bool pq_validate_orderby_row_id_contract(
+    const PQ_orderby_decoded_frame *decoded,
+    const PQ_orderby_row_id_contract &contract);
 
 class Exchange_sort final : public Exchange {
  public:

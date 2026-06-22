@@ -481,6 +481,31 @@ bool pq_decode_orderby_frame(const void *raw_data, uint32 raw_len,
   return false;
 }
 
+bool pq_validate_orderby_row_id_contract(
+    const PQ_orderby_decoded_frame *decoded,
+    const PQ_orderby_row_id_contract &contract) {
+  if (decoded == nullptr || decoded->type != PQ_orderby_frame_type::ROW) {
+    return true;
+  }
+
+  switch (contract.source) {
+    case PQ_orderby_row_id_source::NONE:
+      return contract.stable_output_required ||
+             contract.expected_ref_length != 0 || decoded->row_id != nullptr ||
+             decoded->row_id_len != 0;
+    case PQ_orderby_row_id_source::SYNTHETIC_SMOKE:
+      return !contract.stable_output_required ||
+             contract.expected_ref_length != 0 || decoded->row_id == nullptr ||
+             decoded->row_id_len == 0;
+    case PQ_orderby_row_id_source::HANDLER_REF:
+      return !contract.stable_output_required ||
+             contract.expected_ref_length == 0 || decoded->row_id == nullptr ||
+             decoded->row_id_len != contract.expected_ref_length;
+  }
+
+  return true;
+}
+
 bool Exchange_sort::read_mq_message(MQMessageType &type, void **datap,
                                     uint32 &data_len) {
   type = MQMessageType::FINISH;
@@ -2335,13 +2360,16 @@ bool Exchange_sort::run_orderby_frame_contract_smoke(uint32 *rows_read,
       const int64 expected_record = *rows_read == 0 ? record0 : record1;
       const uint32 expected_rowid = *rows_read == 0 ? rowid0 : rowid1;
       const int64 expected_sortkey = *rows_read == 0 ? sortkey0 : sortkey1;
+      const PQ_orderby_row_id_contract synthetic_contract{
+          PQ_orderby_row_id_source::SYNTHETIC_SMOKE, 0, true};
       failed =
           *rows_read >= 2 || decoded.record_image_len != sizeof(record0) ||
           decoded.row_id_len != sizeof(rowid0) ||
           decoded.sort_key_len != sizeof(sortkey0) ||
           memcmp(decoded.record_image, &expected_record, sizeof(record0)) != 0 ||
           memcmp(decoded.row_id, &expected_rowid, sizeof(rowid0)) != 0 ||
-          memcmp(decoded.sort_key, &expected_sortkey, sizeof(sortkey0)) != 0;
+          memcmp(decoded.sort_key, &expected_sortkey, sizeof(sortkey0)) != 0 ||
+          pq_validate_orderby_row_id_contract(&decoded, synthetic_contract);
       if (!failed) ++(*rows_read);
     } else if (decoded.type == PQ_orderby_frame_type::FINISH) {
       failed = decoded.record_image_len != 0 || decoded.row_id_len != 0 ||
@@ -2365,6 +2393,36 @@ bool Exchange_sort::run_orderby_frame_contract_smoke(uint32 *rows_read,
   if (!pq_validate_orderby_frame(&invalid, sizeof(invalid), &unused_header,
                                  &unused_payload)) {
     failed = true;
+  }
+
+  if (!failed) {
+    const PQ_orderby_row_id_contract missing_metadata{
+        PQ_orderby_row_id_source::NONE, 0, true};
+    const PQ_orderby_row_id_contract synthetic_with_ref_length{
+        PQ_orderby_row_id_source::SYNTHETIC_SMOKE, sizeof(rowid0), true};
+    const PQ_orderby_row_id_contract handler_ref_with_zero_length{
+        PQ_orderby_row_id_source::HANDLER_REF, 0, true};
+    const PQ_orderby_row_id_contract handler_ref_wrong_length{
+        PQ_orderby_row_id_source::HANDLER_REF, sizeof(rowid0) + 1, true};
+    PQ_orderby_decoded_frame synthetic_decoded;
+    failed =
+        pq_send_orderby_frame(&handle, PQ_orderby_frame_type::ROW, &record0,
+                              sizeof(record0), &rowid0, sizeof(rowid0),
+                              &sortkey0, sizeof(sortkey0));
+    if (!failed) {
+      void *raw_data = nullptr;
+      uint32 raw_len = 0;
+      failed = handle.receive(&raw_data, &raw_len) != MQ_SUCCESS ||
+               pq_decode_orderby_frame(raw_data, raw_len, &synthetic_decoded) ||
+               !pq_validate_orderby_row_id_contract(&synthetic_decoded,
+                                                    missing_metadata) ||
+               !pq_validate_orderby_row_id_contract(
+                   &synthetic_decoded, synthetic_with_ref_length) ||
+               !pq_validate_orderby_row_id_contract(
+                   &synthetic_decoded, handler_ref_with_zero_length) ||
+               !pq_validate_orderby_row_id_contract(
+                   &synthetic_decoded, handler_ref_wrong_length);
+    }
   }
 
   if (!failed) {
