@@ -500,8 +500,10 @@ class ha_innobase : public handler {
   /**
     Initialize InnoDB-specific Parallel Query worker scan state.
 
-    V2-3: worker row production is disabled until workers have independent
-    handler/prebuilt/trx/read-view state. Returns HA_ERR_UNSUPPORTED.
+    Creates a worker context only when the SQL layer has opened an independent
+    worker TABLE/handler and the handler owns its row_prebuilt_t. The public
+    pull-row API remains disabled; this is used by guarded callback/smoke
+    paths.
 
     @param[in]  open_ctx     Worker open context carrying THD/TABLE/handler.
     @param[out] worker_ctx   Output worker context (set to nullptr on error).
@@ -512,7 +514,7 @@ class ha_innobase : public handler {
   /**
     Pull one row for a PQ worker.
 
-    V2-3: disabled until worker-side mutable scan state is defined.
+    Disabled until worker-side mutable scan state is defined.
 
     @param[in]   worker_ctx  Worker context (must be typed InnoDB wrapper).
     @param[out]  record       MySQL row buffer (table->record[0]).

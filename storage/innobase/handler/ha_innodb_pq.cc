@@ -358,10 +358,9 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
 /**
   Initialize InnoDB PQ worker scan for clustered full scan.
 
-  V2-3: worker row production remains disabled. The current pull-row adapter
-  would use the leader handler's row_prebuilt_t, which is mutable cursor state
-  and is not safe to share with worker THDs. Return unsupported until a worker
-  handler/prebuilt/trx/read-view contract exists.
+  This entry only creates a worker context after the SQL layer has opened an
+  independent worker TABLE/handler. The public pull-row API remains disabled;
+  guarded callback/smoke paths use this context.
 
   @param[in]  open_ctx     Worker open context; used only for V2-8C gates
   @param[out] worker_ctx   Output worker context
@@ -383,6 +382,16 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
   }
 
   if (open_ctx->leader_ctx->kind() != PQ_Leader_context_kind::INNODB) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (m_prebuilt == nullptr || table != open_ctx->worker_table ||
+      open_ctx->worker_table->in_use != open_ctx->worker_thd ||
+      m_prebuilt->m_mysql_table != open_ctx->worker_table ||
+      m_prebuilt->m_mysql_handler != this ||
+      (open_ctx->leader_table != nullptr &&
+       (m_prebuilt->m_mysql_table == open_ctx->leader_table ||
+        m_prebuilt->m_mysql_handler == open_ctx->leader_table->file))) {
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 

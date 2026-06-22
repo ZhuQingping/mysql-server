@@ -517,7 +517,7 @@ Design Review:
 
 #### Proposed M11-F2a: Worker Ownership Contract Hardening
 
-Status: proposed next coding task after F2 Review ACCEPT。
+Status: Code-Task Review accepted；ready to commit。
 
 目标：
 
@@ -560,6 +560,81 @@ F2a 验收：
 - `mysqld` build 通过；
 - targeted MTR 和完整 `parallel_query` suite 通过；
 - Code/Task Review Agent 返回 `ACCEPT`。
+
+Completion Report - M11-F2a Coding:
+
+Changed files:
+
+- `storage/innobase/handler/ha_innodb.h`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_agg_result.test`
+- `mysql-test/suite/parallel_query/r/pq_agg_result.result`
+- `mysql-test/suite/parallel_query/t/pq_commercial_order_by.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_order_by.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- `ha_innobase::pq_worker_scan_init()` now hard-fails unsupported unless the
+  current InnoDB handler owns the worker TABLE/prebuilt pair:
+  `table == worker_table`、`worker_table->in_use == worker_thd`、
+  `m_prebuilt->m_mysql_table == worker_table`、
+  `m_prebuilt->m_mysql_handler == this`；
+- added explicit rejection if the worker prebuilt/handler points back to the
+  leader TABLE/handler；
+- updated InnoDB worker API comments to match the current state:
+  `pq_worker_scan_init()` may create guarded worker contexts, while the public
+  pull-row `pq_worker_scan_next()` API remains disabled；
+- did not open `PQRefIterator::Read()`、`PQblockScanIterator::Read()` positive
+  ref/ICP path、`pq_worker_scan_next()` row production、worker-side ICP
+  clone/refix、optimizer eligibility、partition/reverse/MVI/native
+  `Record_buffer`/ORDER BY positive paths；
+- `pq_agg_result` and `pq_commercial_order_by` now mask EXPLAIN `rows` with
+  `--replace_column 10 ROWS` because InnoDB small-table row estimates drifted
+  between 6/7 and 10/11 during full-suite runs while PQ assertions depend on
+  `Extra` diagnostics and counters, not optimizer row estimates.
+
+Validation:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_worker_attach_contract_smoke pq_worker_dop1 \
+  --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_agg_result pq_commercial_order_by \
+  --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_agg_result pq_commercial_order_by --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- `mysqld` build passed；
+- targeted worker ownership tests passed；
+- targeted EXPLAIN rows-mask record/replay passed；
+- full `parallel_query` suite passed: 89/89；
+- no worker-side ref/ICP row production enabled。
+
+Code / Task Review:
+
+- Review Agent verdict: `ACCEPT`；
+- blocking findings: none；
+- confirmed ownership gate is fail-closed and aligned with
+  `pq_open_worker_table()` independent worker TABLE/handler contract；
+- confirmed `ha_innodb.h` comments do not claim pull-row enablement；
+- confirmed forbidden paths remain closed:
+  `PQRefIterator::Read()`、`PQblockScanIterator::Read()` positive ref/ICP path、
+  `pq_worker_scan_next()` row production、worker-side ICP clone/refix、
+  optimizer eligibility、partition/reverse/MVI/native `Record_buffer` and
+  ORDER BY positive path；
+- confirmed EXPLAIN `rows` masking does not hide PQ `Extra` or counter
+  assertions；
+- recommended next task: M11-F2b debug-only ownership mismatch negative smoke。
 
 #### M11-F2 Agent Task Prompt
 
