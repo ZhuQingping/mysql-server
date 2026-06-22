@@ -6,9 +6,10 @@ Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage accepted；
 M11-F5a secondary MIN / optimizer shortcut source inventory completed and
 accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic completed and
 committed；F5-A reverse boundary contract completed and committed；F5-C
-partition worker ownership design completed and committed；next task is F5-C1
-debug-only partition reject diagnostic；real worker-side ICP positive row
-production remains blocked。
+partition worker ownership design completed and committed；F5-C1 partition
+reject diagnostic completed and committed；F5-B MVI inventory / design accepted；
+next task is F5-B1 debug-only MVI reject diagnostic；real worker-side ICP
+positive row production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -1300,7 +1301,8 @@ F5-B: MVI positive unique filter
 
 - 商用能力：`HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER` /
   `HA_EXTRA_DISABLE_UNIQUE_RECORD_FILTER`；
-- 当前状态：MVI 仍作为 wrong-result 高风险 shape blocked；
+- 当前状态：MVI 仍作为 wrong-result 高风险 shape blocked；F5-B inventory
+  in progress；
 - 主要前置：
   - single-table MVI access path 与 duplicate elimination contract；
   - worker-local unique filter lifecycle；
@@ -1362,6 +1364,182 @@ Completed / blocked before this priority:
   completed；positive execution remains blocked；
 - F5-A reverse boundary contract completed；F5-A1 recorded blocked for
   reverse range/index diagnostics under the current allowed-file boundary。
+- F5-C partition ownership design and C1 partition reject diagnostic completed；
+  positive execution remains blocked。
+
+#### Proposed M11-F5-B: MVI Unique Filter Inventory / Design
+
+Status: docs-only taskbook accepted by Design / Source / Test Review。
+
+Goal:
+
+- 对照商用 MVI positive path，明确当前分支 MVI key 被拒绝的位置和原因；
+- 保持 MVI / multi-valued index 全部 fail-closed，不打开
+  `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER`；
+- 定义后续最小安全可执行任务：debug-only MVI reject diagnostic，而不是
+  positive unique filter。
+
+Current Branch Facts:
+
+- MySQL handler 层通过 `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER` /
+  `HA_EXTRA_DISABLE_UNIQUE_RECORD_FILTER` 管理 MVI duplicate filter；
+- key flag `HA_MULTI_VALUED_KEY` 表示 multi-valued index；
+- 当前分支 PQ secondary/range/ref helpers 显式把
+  `HA_MULTI_VALUED_KEY` 当 unsafe：
+  - `pq_secondary_range_key_has_unsupported_parts()`；
+  - `pq_secondary_covering_read_set_is_safe()`；
+  - `pq_secondary_ref_key_parts_are_safe()`；
+  - iterator-side secondary helpers in `pq_iterators.cc`；
+- 当前用户可见 MVI SQL 主要通过 `NON_FULL_TABLE_SCAN` 或 `MULTI_TABLE`
+  fail-closed；
+- 当前没有 `Parallel_*mvi*` status counter；现有测试只能证明 generic PQ
+  execution / worker / range / secondary-row counters 不增长。
+
+Existing Test Guard:
+
+- `pq_commercial_ref_icp` F0 negative matrix 覆盖 MVI、reverse、partition、
+  secondary MIN 和 BLOB / record-buffer-hostile shape；
+- `pq_commercial_ref_icp` F1 专门覆盖 MVI / multi-valued key：
+  - single-table ref shape on non-array leading keyparts；
+  - dependent-ref / multi-table shape using the same MVI composite key；
+- result 保持：
+  - single-table MVI shape `Not parallel NON_FULL_TABLE_SCAN`；
+  - dependent-ref MVI join `Not parallel MULTI_TABLE`；
+  - `Parallel_queries_executed`、`Parallel_workers_launched`、
+    `Parallel_ranges_built`、`Parallel_ranges_dispatched`、
+    `Parallel_secondary_rows_produced` deltas 均为 0。
+
+Commercial Reference Findings:
+
+- 商用仓有真实 MVI positive path，但能力是窄子集：
+  - `pq_multi_value.test` 覆盖 index contains MVI keypart 的
+    `PQblockScanIterator` case；
+  - `pq_multi_value.test` 覆盖 MVI composite key 的 `PQRefIterator` case；
+  - result 显示 `Parallel execute (4 workers, ...)`；
+  - positive evidence 是 duplicate elimination / unique filter 生命周期，
+    不是泛化 JSON predicate 支持；
+  - `JSON_CONTAINS` 等 JSON functions 在商用 PQ optimizer 中仍被列为
+    unsupported。
+- 商用关键依赖：
+  - `PQblockScanIterator::Init()` / `PQRefIterator::Init()` 检测
+    `HA_MULTI_VALUED_KEY` 并启用
+    `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER`；
+  - destructors 调用 `HA_EXTRA_DISABLE_UNIQUE_RECORD_FILTER`；
+  - `Read()` 路径把 duplicate-filter 的 `HA_ERR_KEY_NOT_FOUND` 当作
+    continue；
+  - handler 层 `filter_dup_records()` / `Unique_on_insert` 维护 rowid
+    去重；
+  - worker-local handler ownership、dependent-ref range dispatch、ICP /
+    secondary visibility、worker prebuilt ownership、native `Record_buffer`
+    和 cleanup contract 都必须 ready。
+
+Do Not Copy Directly:
+
+- 不复制商用 `PQblockScanIterator` / `PQRefIterator` 的 MVI enable/disable
+  片段。没有 worker-local handler lifetime 和 cleanup，单独启用
+  `m_unique` 会污染 leader/worker handler 状态；
+- 不复制 handler `ha_extra()` / `filter_dup_records()` 行为。它们是 MySQL
+  handler core path，F5-B 不允许改变；
+- 不复制商用 `ha_innodb_pq.cc` / `row0pread_pq.cc` / `pq_clone.cc` 大块
+  逻辑。它们依赖成熟 worker row path、record buffer、ICP、reverse、
+  partition 和 ref dispatch ownership。
+
+Required Contract Before Positive Gate:
+
+- worker-local handler 必须独立拥有 `m_unique`；
+- enable / reset / disable unique record filter 必须覆盖 Init、normal EOF、
+  ERROR、KILL、early abort、fallback cleanup；
+- duplicate-filter `HA_ERR_KEY_NOT_FOUND` 必须只作为 MVI duplicate skip，
+  不能吞掉真实 handler error；
+- `prepare_for_position()` / rowid stability 必须与 worker result frame
+  生命周期一致；
+- ref / dependent-ref MVI key ownership、range dispatch 和 repeated outer
+  key 语义必须单独验证；
+- MVI 不得与 partition、reverse、ICP、native `Record_buffer`、
+  ORDER BY/Gather Merge 或 JSON predicate positive path 混入首批。
+
+Allowed Files:
+
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Forbidden Files:
+
+- `sql/**`
+- `storage/**`
+- `mysql-test/**`
+- build scripts and generated result files
+
+Hard Stops:
+
+- 不调用 `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER`；
+- 不调用 `HA_EXTRA_DISABLE_UNIQUE_RECORD_FILTER`；
+- 不修改 handler `m_unique`、`filter_dup_records()`、MRR 或
+  `multi_range_read_next()`；
+- 不打开 worker-local MVI duplicate elimination；
+- 不打开 MVI + ref / dependent-ref / ICP / partition / reverse /
+  native `Record_buffer` combined path；
+- 不把 MVI diagnostic 接入 key selection、range planning、handler cursor 或
+  InnoDB scan behavior。
+
+Recommended Next Coding Task After Review:
+
+- M11-F5-B1 debug-only MVI reject diagnostic；
+- 候选 hook 必须限于 PQ helper 层：
+  - `pq_secondary_range_key_has_unsupported_parts()`；
+  - `pq_secondary_covering_read_set_is_safe()`；
+  - `pq_secondary_ref_key_parts_are_safe()`；
+  - 或 `pq_check_full_table_scan()` 已知 candidate table/index 后的只读
+    diagnostic；
+- 不允许从 handler / InnoDB / iterator execution path 计数；
+- MTR 复用 `pq_commercial_ref_icp` F1 window，新增 MVI diagnostic delta，
+  同时保持 generic execution / worker / range / secondary-row counters 全为
+  0；
+- dependent-ref MVI join 仍可能 `MULTI_TABLE` 先拒绝，counter semantics
+  必须避免要求该 join 被 MVI counter 覆盖。
+
+Validation:
+
+- 本阶段只做文档 review，不运行 build/MTR；
+- Design / Source / Test Review Agent returned `ACCEPT`；
+- 若要编码，必须另起 M11-F5-B1 coding taskbook。
+
+Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: None；
+- Non-blocking risks:
+  - M11-F5-B1 counter semantics 必须保持为 reject probes，不解释为完整
+    MVI query count；
+  - dependent-ref MVI join 可能先被 `MULTI_TABLE` 拒绝，不应要求 MVI
+    counter 覆盖该路径；
+  - 本阶段按任务要求不运行 build/MTR；
+- Safe next task: M11-F5-B1 debug-only MVI reject diagnostic，限于 PQ
+  helper / preflight observation；不得触碰 `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER`、
+  handler `m_unique`、worker duplicate elimination、handler cursor behavior、
+  InnoDB scan behavior 或 MVI combined paths。
+
+Agent Review Prompt:
+
+请作为 M11-F5-B Design / Source / Test Review Agent，只读审查本任务书和
+相关源码 / 测试：
+
+1. 当前分支 MVI fail-closed 边界是否描述准确；
+2. 商用 MVI positive path 是否被正确归类为窄能力，而不是泛化 JSON/MVI；
+3. unique record filter ownership contract 是否覆盖 handler/worker cleanup
+   风险；
+4. Allowed / Forbidden files 和 Hard Stops 是否足够防止误开
+   `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER`、handler unique filter、worker
+   duplicate elimination、MVI combined paths；
+5. 下一步是否应为 M11-F5-B1 debug-only MVI reject diagnostic。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Required fixes before commit
+- Safe next task recommendation
 
 #### Proposed M11-F5-C: Partition Worker Ownership Design
 
