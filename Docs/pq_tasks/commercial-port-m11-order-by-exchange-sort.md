@@ -7998,8 +7998,8 @@ Docs/Source Review - M11-E5r-2-pre:
 
 ### M11-E5r-2a: Private Row-id Metadata Validation Helper
 
-Status: implementation completed；Design/Source Review and Code/Doc/Test Review
-accepted；full `parallel_query` suite passed；ready for commit。
+Status: committed as `f8f27df3bc0`；Design/Source Review and Code/Doc/Test
+Review accepted；full `parallel_query` suite passed。
 
 Goal:
 
@@ -8123,6 +8123,128 @@ Code/Doc/Test Review - M11-E5r-2a:
 - confirmed no `PQOF` wire/header/flags change；
 - confirmed synthetic smoke row ids are not connected to handler ref,
   `file->ref`, `cmp_ref()`, or the default ORDER BY path；
+- requested full `parallel_query` suite before commit；this was completed and
+  passed 89/89。
+
+### M11-E5r-2b: Controlled Row-id Metadata Validation Smoke
+
+Status: implementation completed；Code/Doc/Test Review accepted；full
+`parallel_query` suite passed；ready for commit。
+
+Goal:
+
+- make the E5r-2a row-id metadata contract evidence explicit in a controlled
+  private smoke；
+- verify fail-closed behavior for `NONE`, `SYNTHETIC_SMOKE`, `HANDLER_REF`,
+  ref-length mismatch, missing row-id, null frame, and non-ROW frame shapes；
+- keep the smoke disconnected from real handler ref production, `cmp_ref()`,
+  and visible ORDER BY PQ。
+
+Implementation shape:
+
+- add a private `pq_orderby_row_id_contract_controlled_smoke()` helper in
+  `exchange_sort.cc`；
+- call it from the existing
+  `Exchange_sort::run_orderby_frame_contract_smoke()` path；
+- reuse existing frame-smoke counters and MTR assertions；
+- do not extend the `PQOF` wire header；
+- do not add public status variables or counters；
+- do not claim the handler-ref length-shape smoke proves real handler
+  `file->ref` ordering。
+
+Allowed files:
+
+- `sql/parallel_query/exchange_sort.cc`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Forbidden:
+
+- `cmp_ref()` comparator；
+- `file->position(record)` calls；
+- `Query_result_mq::send_data()` wire-format changes；
+- `PQblockScanIterator::Read()`；
+- `ParallelScanIterator::Read()`；
+- `Gather_operator::init()` default `Exchange_sort` selection；
+- `pq_optimizer.*` readiness changes；
+- `HAS_ORDER_BY` serial boundary changes；
+- handler/InnoDB, worker launch, AccessPath, executor, sysvar, or public
+  counter changes。
+
+Hard gates:
+
+- `rowid_tiebreak_ready=false`；
+- `default_ordered_read_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`；
+- synthetic row-id bytes must not be described as handler refs。
+
+Validation plan:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  - `pq_commercial_order_by_frames`；
+  - `pq_commercial_order_by`；
+  - `pq_stats`。
+- full `parallel_query` suite if the source patch survives review。
+
+Planning/Source Review - M11-E5r-2b:
+
+- Review Agent verdict: `ACCEPT`；
+- recommended E5r-2b as the next smallest safe task；
+- confirmed it should be a controlled validation smoke, not E5r-3 worker
+  `position(record)` design and not real handler ref production/comparator；
+- confirmed coding is allowed only in `exchange_sort.*` and docs, with optional
+  focused MTR update only if output changes；
+- confirmed no public counter is needed；
+- confirmed E5r-3 should remain a later docs/source design task。
+
+Completion Report - M11-E5r-2b Coding:
+
+- changed files:
+  - `sql/parallel_query/exchange_sort.cc`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- implementation:
+  - added private `pq_orderby_row_id_contract_controlled_smoke()`；
+  - covered null frame and non-ROW frame fail-closed behavior；
+  - covered stable output with `NONE` source and missing row-id fail-closed
+    behavior；
+  - covered synthetic smoke row-id success only when no handler `ref_length` is
+    claimed；
+  - covered handler-ref length-shape success and length mismatch failures；
+  - reused existing `run_orderby_frame_contract_smoke()` and existing MTR
+    counter assertions；
+  - did not change `PQOF` header, wire format, or `flags` semantics；
+  - did not add public counters/status variables。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed 4/4:
+    `pq_commercial_order_by_frames pq_commercial_order_by pq_stats`
+    plus `shutdown_report`；
+  - full `parallel_query` suite passed 89/89。
+- scope notes:
+  - no `cmp_ref()` comparator；
+  - no `file->position(record)` call；
+  - no `Query_result_mq` wire-format change；
+  - no `PQblockScanIterator::Read()` / `ParallelScanIterator::Read()` /
+    `Gather_operator::init()` default path change；
+  - no optimizer readiness or `HAS_ORDER_BY` boundary change；
+  - no real handler ref ordering claim。
+
+Code/Doc/Test Review - M11-E5r-2b:
+
+- Review Agent verdict: `ACCEPT`；
+- findings: no critical or important issues；
+- minor finding: README and taskbook status were stale before final validation；
+  fixed by this completion update；
+- confirmed the patch stays within the allowed three files；
+- confirmed the smoke is private and controlled；
+- confirmed `PQOF` header/wire/flags are unchanged；
+- confirmed no public counter/status is added；
+- confirmed forbidden paths are not touched；
 - requested full `parallel_query` suite before commit；this was completed and
   passed 89/89。
 

@@ -410,6 +410,76 @@ bool pq_orderby_materialization_table_supported(TABLE *table) {
           table->field[0]->type() == MYSQL_TYPE_LONGLONG);
 }
 
+bool pq_orderby_row_id_contract_controlled_smoke() {
+  const uchar record_image[] = {0x01, 0x02, 0x03, 0x04};
+  const uchar synthetic_row_id[] = {0x10, 0x11, 0x12, 0x13};
+  const uchar handler_ref[] = {0x20, 0x21, 0x22, 0x23, 0x24, 0x25};
+
+  PQ_orderby_decoded_frame non_row;
+  non_row.type = PQ_orderby_frame_type::FINISH;
+  if (!pq_validate_orderby_row_id_contract(
+          nullptr,
+          {PQ_orderby_row_id_source::SYNTHETIC_SMOKE, 0, true}) ||
+      !pq_validate_orderby_row_id_contract(
+          &non_row,
+          {PQ_orderby_row_id_source::SYNTHETIC_SMOKE, 0, true})) {
+    return true;
+  }
+
+  PQ_orderby_decoded_frame no_row_id;
+  no_row_id.type = PQ_orderby_frame_type::ROW;
+  no_row_id.record_image = record_image;
+  no_row_id.record_image_len = sizeof(record_image);
+  if (!pq_validate_orderby_row_id_contract(
+          &no_row_id, {PQ_orderby_row_id_source::NONE, 0, true}) ||
+      !pq_validate_orderby_row_id_contract(
+          &no_row_id, {PQ_orderby_row_id_source::SYNTHETIC_SMOKE, 0, true}) ||
+      !pq_validate_orderby_row_id_contract(
+          &no_row_id, {PQ_orderby_row_id_source::HANDLER_REF,
+                       sizeof(handler_ref), true})) {
+    return true;
+  }
+
+  PQ_orderby_decoded_frame synthetic;
+  synthetic.type = PQ_orderby_frame_type::ROW;
+  synthetic.record_image = record_image;
+  synthetic.record_image_len = sizeof(record_image);
+  synthetic.row_id = synthetic_row_id;
+  synthetic.row_id_len = sizeof(synthetic_row_id);
+  if (pq_validate_orderby_row_id_contract(
+          &synthetic,
+          {PQ_orderby_row_id_source::SYNTHETIC_SMOKE, 0, true}) ||
+      !pq_validate_orderby_row_id_contract(
+          &synthetic, {PQ_orderby_row_id_source::SYNTHETIC_SMOKE,
+                       sizeof(synthetic_row_id), true}) ||
+      !pq_validate_orderby_row_id_contract(
+          &synthetic, {PQ_orderby_row_id_source::NONE, 0, true})) {
+    return true;
+  }
+
+  PQ_orderby_decoded_frame handler;
+  handler.type = PQ_orderby_frame_type::ROW;
+  handler.record_image = record_image;
+  handler.record_image_len = sizeof(record_image);
+  handler.row_id = handler_ref;
+  handler.row_id_len = sizeof(handler_ref);
+  if (pq_validate_orderby_row_id_contract(
+          &handler, {PQ_orderby_row_id_source::HANDLER_REF,
+                     sizeof(handler_ref), true}) ||
+      !pq_validate_orderby_row_id_contract(
+          &handler, {PQ_orderby_row_id_source::HANDLER_REF,
+                     sizeof(handler_ref) + 1, true}) ||
+      !pq_validate_orderby_row_id_contract(
+          &handler, {PQ_orderby_row_id_source::HANDLER_REF, 0, true}) ||
+      !pq_validate_orderby_row_id_contract(
+          &handler, {PQ_orderby_row_id_source::HANDLER_REF,
+                     sizeof(handler_ref), false})) {
+    return true;
+  }
+
+  return false;
+}
+
 }  // namespace
 
 bool pq_validate_orderby_frame(const void *raw_data, uint32 raw_len,
@@ -2393,6 +2463,10 @@ bool Exchange_sort::run_orderby_frame_contract_smoke(uint32 *rows_read,
   if (!pq_validate_orderby_frame(&invalid, sizeof(invalid), &unused_header,
                                  &unused_payload)) {
     failed = true;
+  }
+
+  if (!failed) {
+    failed = pq_orderby_row_id_contract_controlled_smoke();
   }
 
   if (!failed) {
