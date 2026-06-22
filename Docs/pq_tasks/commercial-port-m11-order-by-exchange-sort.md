@@ -6648,7 +6648,7 @@ Code/Doc/Test Review - M11-E5k:
 
 ### M11-E5l: Controlled Exchange_sort::read_mq_message Typed PQOF Branch Smoke
 
-Status: Code/Doc/Test Review accepted；ready to commit。
+Status: committed as `72b4234fd62`；Code/Doc/Test Review accepted。
 
 Goal:
 
@@ -6779,7 +6779,7 @@ Code/Doc/Test Review - M11-E5l:
 
 ### M11-E5m: Exchange_sort Ordered Read Rich Status API
 
-Status: Code/Doc/Test Review accepted；ready to commit。
+Status: committed as `2bc1b98c81e`；Code/Doc/Test Review accepted。
 
 Goal:
 
@@ -6894,7 +6894,7 @@ Code/Doc/Test Review - M11-E5m:
 
 ### M11-E5n: Ordered Materializer Owner Shape
 
-Status: Code/Doc/Test Review accepted；ready to commit。
+Status: committed as `3c1d273ae0d`；Code/Doc/Test Review accepted。
 
 Goal:
 
@@ -7003,7 +7003,7 @@ Code/Doc/Test Review - M11-E5n:
 
 ### M11-E5o: Filesort / Sort_param Real Runtime Owner Readiness
 
-Status: Code/Doc/Test Review accepted；ready to commit。
+Status: committed as `7a5d9b2ea27`；Code/Doc/Test Review accepted。
 
 Goal:
 
@@ -7105,7 +7105,7 @@ Code/Doc/Test Review - M11-E5o:
 
 ### M11-E5p: Worker ORDER BY PQOF Default Producer Owner Contract
 
-Status: Code/Doc/Test Review accepted；ready to commit。
+Status: committed as `2c84c61a19c`；Code/Doc/Test Review accepted。
 
 Goal:
 
@@ -7214,7 +7214,7 @@ Code/Doc/Test Review - M11-E5p:
 
 ### M11-E5q: Default Exchange_sort Heap Reader Integration Contract
 
-Status: Code/Doc/Test Review accepted；ready to commit。
+Status: committed as `c909a0efd19`；Code/Doc/Test Review accepted。
 
 Goal:
 
@@ -7324,7 +7324,7 @@ Code/Doc/Test Review - M11-E5q:
 
 ### M11-E5r: Rowid Duplicate-key Tie-break Inventory
 
-Status: design-only/read-only inventory drafted；waiting Docs/Source Review。
+Status: committed as `7f6eeda9038`；Docs/Source Review accepted。
 
 Goal:
 
@@ -7475,7 +7475,7 @@ Docs/Source Review - M11-E5r:
 
 ### M11-E5s: Wait / Kill / Detach / Error Policy Inventory
 
-Status: Code/Doc/Test Review accepted；ready to commit。
+Status: committed as `84a387f4674`；Code/Doc/Test Review accepted。
 
 Goal:
 
@@ -7677,7 +7677,7 @@ Code/Doc/Test Review - M11-E5s:
 
 ### M11-E5r-1: Handler Ref Ownership Contract Inventory
 
-Status: Design/Source Review accepted；ready to commit。
+Status: committed as `af2ae4f9d10`；Design/Source Review accepted。
 
 Goal:
 
@@ -7822,8 +7822,7 @@ Design/Source Review - M11-E5r-1:
 
 ### M11-E5r-2-pre: Worker position(record) and MQ Handler Ref Format Contract
 
-Status: design-only taskbook drafted from independent Design/Source Review；
-Docs/Source Review accepted；ready for docs-only commit。
+Status: committed as `3c6dbfd8cd8`；Docs/Source Review accepted。
 
 Goal:
 
@@ -8250,8 +8249,7 @@ Code/Doc/Test Review - M11-E5r-2b:
 
 ### M11-E5r-3a: Worker position(record) and MQ Ref Lifetime Design
 
-Status: design-only taskbook drafted from independent Design/Source Review；
-ready for docs-only commit。
+Status: committed as `c191ac8d505`；Design/Source Review accepted。
 
 Goal:
 
@@ -8818,6 +8816,36 @@ Closure Review:
   `cmp_ref()` comparator, optimizer readiness, and visible ORDER BY PQ all
   remain blocked until separate reviewed phases。
 
+### M11-E Post-E5r Handoff
+
+Status: docs-only handoff accepted；source work stopped。
+
+Handoff decision:
+
+- no safe M11-E source task remains after E5r closure；
+- E5h-E5q/E5s non-real-path contracts and smokes are already committed；
+- E5r rowid/tie-break chain is design/validation complete but real execution
+  remains blocked；
+- earlier historical task-prompt sections may retain original planning wording,
+  but this handoff is the current authoritative M11-E status；
+- do not continue with `position(record)`, `Query_result_mq` handler-ref wire,
+  `cmp_ref()` comparator, optimizer readiness, or visible ORDER BY PQ inside
+  the current M11-E workstream；
+- any future work touching those paths must start as a new reviewed phase with
+  fresh design/source review and explicit file boundaries。
+
+Allowed next actions:
+
+- turn to another non-ORDER-BY commercial-port workstream；
+- create a new reviewed phase for one of the blocked real ORDER BY paths；
+- run broader verification if integration readiness is being assessed。
+
+Forbidden without a new reviewed phase:
+
+- `sql/**` or `storage/**` source changes for M11-E；
+- `mysql-test/**` changes that imply visible ORDER BY PQ readiness；
+- relaxing `HAS_ORDER_BY` or setting ORDER BY readiness flags true。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
@@ -8914,8 +8942,7 @@ Ref/ICP Explorer returned:
 
 ## M11-E1: Exchange_sort Commercial Shape Compile-only
 
-Status: coding, validation, and Code-Docs-Test Review completed；ready to
-commit。
+Status: committed as `ee648d7ccd9`；Code-Docs-Test Review accepted。
 
 Goal:
 
@@ -9083,8 +9110,7 @@ Code-Docs-Test Review:
 
 ## M11-E2: Sorted Row-frame Adapter Smoke
 
-Status: coding, validation, and Code-Docs-Test Review completed；ready to
-commit。
+Status: committed as `47138dcd8c6`；Code-Docs-Test Review accepted。
 
 Goal:
 
@@ -9240,7 +9266,7 @@ Code-Docs-Test Review:
 
 ## M11-E3: ParallelScanIterator Order Gather Debug Path
 
-Status: design taskbook completed；Docs-Design Review accepted；ready to code。
+Status: committed as `30bc426afe2`；Code-Docs-Test Review accepted。
 
 Goal:
 
@@ -9453,7 +9479,7 @@ Code/Doc/Test Review - M11-E3:
 
 ## M11-E4: User-visible ORDER BY Gate Design
 
-Status: design review accepted；waiting for commit。
+Status: committed as `d38ff96651a`；design review accepted。
 
 Goal:
 
@@ -9577,7 +9603,7 @@ Design Review - M11-E4:
 
 ## M11-E5a: Real Exchange_sort Worker-frame Materialization Design
 
-Status: design drafted；waiting for independent design review。
+Status: committed as `e8645dbc2b8`；design review accepted。
 
 Goal:
 
