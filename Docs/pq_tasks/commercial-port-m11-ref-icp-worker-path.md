@@ -1519,6 +1519,139 @@ Review Result:
   handler `m_unique`、worker duplicate elimination、handler cursor behavior、
   InnoDB scan behavior 或 MVI combined paths。
 
+#### Proposed M11-F5-B1: Debug-only MVI Reject Diagnostic Taskbook
+
+Status: implementation completed；Code / Docs / Test Review accepted。
+
+Goal:
+
+- 增加一个用户可见 status counter，用于证明当前分支遇到 MVI /
+  `HA_MULTI_VALUED_KEY` secondary/ref candidate 时保持 fail-closed；
+- counter 语义是 MVI reject probes，不是完整 MVI query count；
+- 不打开 MVI positive execution，不启用 unique record filter。
+
+Implementation Scope:
+
+- 在 `PQ_global_stats` 增加 `secondary_mvi_reject_probes`；
+- 在 `mysqld` status var 暴露
+  `Parallel_secondary_mvi_reject_probes`；
+- 只在 PQ helper 层已存在的 `HA_MULTI_VALUED_KEY` 拒绝点增长：
+  - `pq_secondary_range_key_has_unsupported_parts()`；
+  - `pq_secondary_covering_read_set_is_safe()`；
+  - `pq_secondary_ref_key_parts_are_safe()`；
+- 不改变任何 helper 的返回值和调用顺序；
+- MTR 复用 `pq_commercial_ref_icp` F1 MVI window，新增 mixed-index negative
+  guard：同一张表存在 MVI key 时，强制普通 secondary key 不得增长 MVI
+  reject counter；同时保持 existing generic execution / worker / range /
+  secondary-row deltas 全为 0；
+- 更新 `pq_stats` 变量总数和 result。
+
+Allowed Files:
+
+- `sql/parallel_query/sql_parallel.h`
+- `sql/parallel_query/pq_optimizer.cc`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+
+Forbidden Files:
+
+- `sql/handler.cc`
+- `storage/**`
+- `sql/parallel_query/pq_iterators.cc`
+- `mysql-test/suite/parallel_query/t/pq_stats.test`
+- build scripts and unrelated tests
+
+Hard Stops:
+
+- 不调用 `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER`；
+- 不调用 `HA_EXTRA_DISABLE_UNIQUE_RECORD_FILTER`；
+- 不修改 handler `m_unique`、`filter_dup_records()`、MRR 或
+  `multi_range_read_next()`；
+- 不打开 worker-local MVI duplicate elimination；
+- 不打开 MVI + ref / dependent-ref / ICP / partition / reverse /
+  native `Record_buffer` combined path；
+- 不从 handler / InnoDB / iterator execution path 计数；
+- 不把 counter 用作 eligibility 决策输入。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 16`
+- `cd mysql-test && TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp --record --vardir=/tmp/pqv_f5b1_ref_record8 --tmpdir=/tmp/pqt_f5b1_ref_record8`
+- `cd mysql-test && TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_commercial_ref_icp --vardir=/tmp/pqv_f5b1_ref2 --tmpdir=/tmp/pqt_f5b1_ref2`
+- `cd mysql-test && TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_stats --record --vardir=/tmp/pqv_f5b1_stats_record --tmpdir=/tmp/pqt_f5b1_stats_record`
+- `cd mysql-test && TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_stats --vardir=/tmp/pqv_f5b1_stats2 --tmpdir=/tmp/pqt_f5b1_stats2`
+- `cd mysql-test && TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query --parallel=1 --vardir=/tmp/pqv_f5b1_full2 --tmpdir=/tmp/pqt_f5b1_full2`
+
+Acceptance Checklist:
+
+- New status var exists and is listed by `pq_stats`；
+- F1 mixed-index normal secondary key observes
+  `Parallel_secondary_mvi_reject_probes` delta `0`；
+- F1 generic PQ execution / worker / range / secondary-row deltas remain 0；
+- No handler/InnoDB/iterator execution behavior changed；
+- Code / Docs / Test Review Agent returns `ACCEPT` before commit。
+
+Completion Report - M11-F5-B1 Coding:
+
+- Changed files:
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/parallel_query/pq_optimizer.cc`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+  - `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+  - `Docs/pq_tasks/README.md`
+  - `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- Implementation:
+  - added `PQ_global_stats::secondary_mvi_reject_probes` and reset logic；
+  - exposed `Parallel_secondary_mvi_reject_probes` through SHOW STATUS；
+  - incremented the counter in existing optimizer-side MVI reject helpers；
+  - detects MVI keyparts through both `HA_MULTI_VALUED_KEY` and
+    `Field::is_array()` when keypart metadata is visible；
+  - added a non-full-scan reject observation path for ref/range candidates where
+    the selected key number is unavailable but the candidate table has an MVI
+    key；
+  - kept all handler / InnoDB / iterator execution paths untouched；
+  - kept `HA_EXTRA_ENABLE_UNIQUE_RECORD_FILTER` and
+    `HA_EXTRA_DISABLE_UNIQUE_RECORD_FILTER` unused。
+- Test updates:
+  - `pq_commercial_ref_icp` F1 now records
+    `Parallel_secondary_mvi_reject_probes` baseline and asserts
+    `f1_mvi_normal_key_reject_delta = 0` for a mixed-index table forced to use
+    a normal secondary key；
+  - current functional MVI ref shape remains fail-closed through
+    `NON_FULL_TABLE_SCAN` but is not required to increment this counter because
+    MySQL may expose only visible keyparts for the selected key；
+  - `pq_stats` expected status variable count updated from 217 to 218 and
+    lists `Parallel_secondary_mvi_reject_probes`。
+- Validation result:
+  - `mysqld` build passed；
+  - `pq_commercial_ref_icp --record` executed SQL successfully but MTR failed
+    at final log-to-result copy with errno 1；result file contains the recorded
+    F1 output from the run；
+  - `pq_stats --record` executed SQL successfully but MTR failed at final
+    log-to-result copy with errno 1；result file contains count 218 and the new
+    variable；
+  - `pq_commercial_ref_icp` replay passed；
+  - `pq_stats` replay passed；
+  - full `parallel_query` suite passed 89/89 after the review fix。
+- Risk notes:
+  - counter semantics are reject probes, not full MVI query count；
+  - dependent-ref MVI joins may still reject earlier as `MULTI_TABLE` and are
+    not required to increment this counter；
+  - fallback table-level MVI observation is limited to non-full-scan reject
+    branch and is diagnostic-only。
+- Review result:
+  - first Code / Docs / Test Review returned `REVISE` for mixed-index
+    overcount risk；
+  - fixed by using selected-key-only counting when the key is available and
+    adding `f1_mvi_normal_key_reject_delta = 0` guard；
+  - re-review returned `ACCEPT` with no blocking findings。
+
 Agent Review Prompt:
 
 请作为 M11-F5-B Design / Source / Test Review Agent，只读审查本任务书和

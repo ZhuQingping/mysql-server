@@ -9914,6 +9914,8 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_rows_produced,
                                     secondary_rows_produced)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_rows_materialized_smoke,
                                     secondary_rows_materialized_smoke)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_mvi_reject_probes,
+                                    secondary_mvi_reject_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(partition_reject_probes,
                                     partition_reject_probes)
 #ifndef NDEBUG
@@ -11937,6 +11939,9 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_secondary_rows_produced, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_rows_materialized_smoke",
      (char *)&show_pq_secondary_rows_materialized_smoke, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_secondary_mvi_reject_probes",
+     (char *)&show_pq_secondary_mvi_reject_probes, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_partition_reject_probes",
      (char *)&show_pq_partition_reject_probes, SHOW_FUNC, SHOW_SCOPE_GLOBAL},

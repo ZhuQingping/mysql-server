@@ -266,6 +266,7 @@ struct PQ_global_stats {
   std::atomic<uint64> secondary_ranges_built{0};  ///< Secondary ranges built
   std::atomic<uint64> secondary_rows_produced{0};  ///< Secondary rows produced
   std::atomic<uint64> secondary_rows_materialized_smoke{0};  ///< Mat smoke rows
+  std::atomic<uint64> secondary_mvi_reject_probes{0};  ///< MVI rejects
   std::atomic<uint64> partition_reject_probes{0};  ///< Partition rejects
 #ifndef NDEBUG
   std::atomic<uint64> opt_sum_minmax_shortcut_probe_attempts{0};
@@ -533,6 +534,7 @@ struct PQ_global_stats {
     secondary_ranges_built.store(0, std::memory_order_relaxed);
     secondary_rows_produced.store(0, std::memory_order_relaxed);
     secondary_rows_materialized_smoke.store(0, std::memory_order_relaxed);
+    secondary_mvi_reject_probes.store(0, std::memory_order_relaxed);
     partition_reject_probes.store(0, std::memory_order_relaxed);
 #ifndef NDEBUG
     opt_sum_minmax_shortcut_probe_attempts.store(0, std::memory_order_relaxed);

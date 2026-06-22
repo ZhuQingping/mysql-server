@@ -7,8 +7,8 @@
 --disable_warnings
 DROP TABLE IF EXISTS pq_ref_icp_t1, pq_ref_icp_t2, pq_ref_icp_t3,
                      pq_ref_icp_t4, pq_ref_icp_mvi, pq_ref_icp_part,
-                     pq_ref_icp_mvi_outer, pq_ref_icp_rev, pq_ref_icp_min,
-                     pq_ref_icp_blob;
+                     pq_ref_icp_mvi_mixed, pq_ref_icp_mvi_outer,
+                     pq_ref_icp_rev, pq_ref_icp_min, pq_ref_icp_blob;
 --enable_warnings
 
 CREATE TABLE pq_ref_icp_t1 (
@@ -46,6 +46,18 @@ CREATE TABLE pq_ref_icp_mvi (
   doc_id INT NOT NULL,
   b INT NOT NULL,
   doc JSON,
+  KEY mv_doc_id_b (
+    doc_id,
+    b,
+    (CAST(JSON_EXTRACT(doc, '$.val') AS UNSIGNED ARRAY)))
+) ENGINE=InnoDB;
+
+CREATE TABLE pq_ref_icp_mvi_mixed (
+  id INT PRIMARY KEY,
+  doc_id INT NOT NULL,
+  b INT NOT NULL,
+  doc JSON,
+  KEY normal_doc_id (doc_id),
   KEY mv_doc_id_b (
     doc_id,
     b,
@@ -94,6 +106,9 @@ INSERT INTO pq_ref_icp_t4 VALUES
   (1,20,100,1000),(2,20,110,1100),(3,30,300,3000),
   (4,40,400,4000);
 INSERT INTO pq_ref_icp_mvi VALUES
+  (1,2,2,'{"val":[1,2]}'),(2,2,2,'{"val":[2,3]}'),
+  (3,1,1,'{"val":[3,4]}');
+INSERT INTO pq_ref_icp_mvi_mixed VALUES
   (1,2,2,'{"val":[1,2]}'),(2,2,2,'{"val":[2,3]}'),
   (3,1,1,'{"val":[3,4]}');
 INSERT INTO pq_ref_icp_part VALUES
@@ -1087,6 +1102,27 @@ SET @f1_mvi_secondary_rows_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_rows_produced');
+SET @f1_mvi_reject_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_mvi_reject_probes');
+SET @f1_mvi_normal_reject_before = @f1_mvi_reject_before;
+
+--disable_warnings
+--replace_column 10 #
+EXPLAIN SELECT id, doc_id FROM pq_ref_icp_mvi_mixed FORCE INDEX(normal_doc_id)
+  WHERE doc_id = 2;
+--enable_warnings
+--sorted_result
+SELECT id, doc_id FROM pq_ref_icp_mvi_mixed FORCE INDEX(normal_doc_id)
+  WHERE doc_id = 2;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_secondary_mvi_reject_probes') -
+      @f1_mvi_normal_reject_before
+    AS f1_mvi_normal_key_reject_delta;
 
 --disable_warnings
 --replace_column 10 #
@@ -1631,6 +1667,7 @@ DROP TABLE pq_ref_icp_min;
 DROP TABLE pq_ref_icp_rev;
 DROP TABLE pq_ref_icp_mvi_outer;
 DROP TABLE pq_ref_icp_part;
+DROP TABLE pq_ref_icp_mvi_mixed;
 DROP TABLE pq_ref_icp_mvi;
 DROP TABLE pq_ref_icp_t4;
 DROP TABLE pq_ref_icp_t3;

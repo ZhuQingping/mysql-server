@@ -912,6 +912,15 @@ static bool pq_copy_key_endpoint(const key_range &src,
   return true;
 }
 
+static bool pq_key_has_mvi_part(const KEY &key) {
+  if (key.flags & HA_MULTI_VALUED_KEY) return true;
+  for (uint part = 0; part < key.user_defined_key_parts; ++part) {
+    Field *field = key.key_part[part].field;
+    if (field != nullptr && field->is_array()) return true;
+  }
+  return false;
+}
+
 static bool pq_secondary_range_key_has_unsupported_parts(const TABLE *table,
                                                          uint keyno) {
   if (table == nullptr || table->s == nullptr || table->key_info == nullptr ||
@@ -919,13 +928,28 @@ static bool pq_secondary_range_key_has_unsupported_parts(const TABLE *table,
     return true;
   }
   const KEY &key = table->key_info[keyno];
-  if (key.flags & (HA_SPATIAL | HA_MULTI_VALUED_KEY)) {
+  if (pq_key_has_mvi_part(key)) {
+    pq_global_stats.secondary_mvi_reject_probes.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+  if (key.flags & HA_SPATIAL) {
     return true;
   }
   for (uint i = 0; i < key.user_defined_key_parts; ++i) {
     if (key.key_part[i].key_part_flag & HA_REVERSE_SORT) {
       return true;
     }
+  }
+  return false;
+}
+
+static bool pq_table_has_mvi_key(const TABLE *table) {
+  if (table == nullptr || table->s == nullptr || table->key_info == nullptr) {
+    return false;
+  }
+  for (uint keyno = 0; keyno < table->s->keys; ++keyno) {
+    if (pq_key_has_mvi_part(table->key_info[keyno])) return true;
   }
   return false;
 }
@@ -958,7 +982,12 @@ static bool pq_secondary_covering_read_set_is_safe(const TABLE *table,
   }
 
   const KEY &key = table->key_info[keyno];
-  if (key.flags & (HA_SPATIAL | HA_MULTI_VALUED_KEY)) {
+  if (pq_key_has_mvi_part(key)) {
+    pq_global_stats.secondary_mvi_reject_probes.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+  if (key.flags & HA_SPATIAL) {
     return false;
   }
 
@@ -1009,8 +1038,15 @@ static bool pq_secondary_ref_key_parts_are_safe(const TABLE *table, uint keyno,
   }
 
   const KEY &key = table->key_info[keyno];
-  if (key_parts > key.user_defined_key_parts ||
-      key.flags & (HA_SPATIAL | HA_MULTI_VALUED_KEY)) {
+  if (key_parts > key.user_defined_key_parts) {
+    return false;
+  }
+  if (pq_key_has_mvi_part(key)) {
+    pq_global_stats.secondary_mvi_reject_probes.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+  if (key.flags & HA_SPATIAL) {
     return false;
   }
 
@@ -2130,6 +2166,27 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
     } else if (access_type == JT_REF) {
       pq_maybe_run_secondary_covering_ref_smoke(join->thd, candidate_table,
                                                 candidate_ref);
+    }
+    if ((candidate_index == MAX_KEY ||
+         (candidate_table != nullptr && candidate_table->s != nullptr &&
+          candidate_index >= candidate_table->s->keys)) &&
+        candidate_ref != nullptr && candidate_ref->key >= 0) {
+      candidate_index = static_cast<uint>(candidate_ref->key);
+    }
+    if (candidate_table != nullptr && candidate_table->s != nullptr &&
+        candidate_table->key_info != nullptr) {
+      const bool candidate_index_available =
+          candidate_index != MAX_KEY && candidate_index < candidate_table->s->keys;
+      if (candidate_index_available &&
+          pq_key_has_mvi_part(candidate_table->key_info[candidate_index])) {
+        pq_global_stats.secondary_mvi_reject_probes.fetch_add(
+            1, std::memory_order_relaxed);
+      } else if (!candidate_index_available &&
+                 (access_type == JT_REF || access_type == JT_RANGE) &&
+                 pq_table_has_mvi_key(candidate_table)) {
+        pq_global_stats.secondary_mvi_reject_probes.fetch_add(
+            1, std::memory_order_relaxed);
+      }
     }
     return pq_reject(info, PQUnsuiteReason::NON_FULL_TABLE_SCAN,
                      pq_unsuite_reason_to_string(
