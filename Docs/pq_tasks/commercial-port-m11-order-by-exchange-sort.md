@@ -8504,8 +8504,7 @@ Code/Doc/Test Re-review - M11-E5r-3b:
 
 ### M11-E5r-4: cmp_ref() Comparator Compatibility Design
 
-Status: design-only taskbook drafted from independent Planning/Source Review；
-ready for docs-only commit。
+Status: committed as `f9635804b40`；design-only taskbook accepted。
 
 Goal:
 
@@ -8589,6 +8588,112 @@ Planning/Source Review - M11-E5r-4:
   worker ref production, MQ ref wire, and leader handler compatibility are
   proven；
 - confirmed real `cmp_ref()` comparator and visible ORDER BY PQ remain blocked。
+
+### M11-E5r-5: MQ Handler-ref Wire Contract Design
+
+Status: design-only taskbook drafted from independent Planning/Source Review；
+ready for docs-only commit。
+
+Goal:
+
+- document the MQ handler-ref wire contract before any `Query_result_mq`
+  coding；
+- define how future ORDER BY handler-ref bytes must be separated from existing
+  `PQWR` field-value frames and controlled `PQOF` smoke frames；
+- keep current `Query_result_mq`, worker production, comparator, and visible
+  ORDER BY PQ unchanged。
+
+Current branch findings:
+
+- `Query_result_mq::send_data()` currently encodes field-value `PQWR` payloads
+  and does not carry handler `file->ref` / `file->ref_length`；
+- `PQblockScanIterator::Read()` remains fail-closed and does not produce
+  handler refs；
+- `Exchange_sort` has private row-id and lifetime shape validation only；
+- no current path proves real handler refs are in MQ, deep-copied, or safe for
+  `cmp_ref()`；
+- E5r-4 blocked comparator helper work until real worker ref production, MQ ref
+  deep-copy wire, and leader handler compatibility are designed。
+
+Future MQ wire contract requirements:
+
+- do not overload existing `PQWR` field-value frames without a dedicated wire
+  review；
+- do not overload `PQOF::flags`, which is already used as worker id in
+  controlled ORDER BY frame smokes；
+- define a distinct ORDER BY handler-ref record frame or explicit metadata
+  extension before coding；
+- frame metadata must distinguish:
+  - no row id；
+  - synthetic smoke row id；
+  - handler ref；
+  - handler-ref length-shape validation failure。
+- frame must carry or validate expected `ref_length`；
+- frame producer must deep-copy handler ref bytes before worker handler state
+  advances；
+- frame must record stable-output requirement explicitly；
+- ERROR / FINISH semantics must remain distinguishable from ROW payloads；
+- ref payload length mismatch must fail closed and not be treated as synthetic
+  ordering。
+
+Compatibility with existing frames:
+
+- existing `PQWR` worker-result field-value frames remain unchanged；
+- existing controlled `PQOF` frame smokes remain private and non-default；
+- future handler-ref wire must not change existing no-ORDER-BY worker-result
+  tests；
+- future visible ORDER BY path must remain gated until worker ref production,
+  MQ ref wire, leader handler compatibility, and comparator readiness are all
+  reviewed。
+
+Recommended next split:
+
+- E5r-5 remains docs-only；
+- E5r-5a is not recommended yet because private helper shapes already exist
+  and more shape code would create false evidence before the wire contract is
+  implemented；
+- E5r-6 may later cover worker `position(record)` production design after the
+  MQ wire contract is accepted；
+- any source changes to `Query_result_mq` must be a separate reviewed phase。
+
+Allowed files for E5r-5:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Forbidden:
+
+- `sql/parallel_query/query_result_mq.*`；
+- `sql/parallel_query/pq_iterators.*`；
+- `sql/parallel_query/exchange_sort.*`；
+- `Gather_operator` / `exchange.*`；
+- `pq_optimizer.*`, `HAS_ORDER_BY` gate, AccessPath, handler/InnoDB, executor,
+  sysvar, or public counter changes；
+- visible ORDER BY PQ, `cmp_ref()` comparator, or `file->position(record)`
+  calls。
+
+Hard gates:
+
+- `rowid_tiebreak_ready=false`；
+- `default_ordered_read_ready=false`；
+- `exchange_sort_heap_read_ready=false`；
+- visible ORDER BY SQL remains `Not parallel HAS_ORDER_BY`。
+
+Validation for E5r-5:
+
+- docs-only；
+- `git diff --check` before commit；
+- no build/MTR required unless source or test files change。
+
+Planning/Source Review - M11-E5r-5:
+
+- Review Agent verdict: `ACCEPT` for docs-only design；
+- recommended E5r-5 as the next smallest safe task；
+- confirmed `Query_result_mq::send_data()` currently has no handler-ref wire；
+- confirmed `PQblockScanIterator::Read()` remains fail-closed；
+- confirmed E5r-5a is not useful before the MQ wire design is accepted；
+- confirmed E5r-6 worker production design is riskier and should follow the MQ
+  wire contract。
 
 ## Risk Areas
 
