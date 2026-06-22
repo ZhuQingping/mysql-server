@@ -6,7 +6,7 @@ Status: M11-F0/F1a/F2/F3/F4 completed；M11-F5 backlog triage accepted；
 M11-F5a secondary MIN / optimizer shortcut source inventory completed and
 accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic completed and
 committed；F5-A reverse boundary contract completed and committed；next task is
-F5-A1 blocked-result commit；real worker-side ICP positive row production
+F5-C partition worker ownership docs-first design；real worker-side ICP positive row production
 remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
@@ -1311,7 +1311,8 @@ F5-B: MVI positive unique filter
 F5-C: Partition positive full/range/ref/dependent-ref
 
 - 商用能力：partition-aware leader/worker scan init、partition range ctx；
-- 当前状态：partition positive path blocked；
+- 当前状态：partition positive path blocked；F5-C ownership design in
+  progress；
 - 主要前置：
   - worker TABLE/handler/prebuilt ownership 覆盖 `ha_innopart`；
   - per-partition read view、part id、range dispatch、cleanup 顺序；
@@ -1360,6 +1361,173 @@ Completed / blocked before this priority:
   completed；positive execution remains blocked；
 - F5-A reverse boundary contract completed；F5-A1 recorded blocked for
   reverse range/index diagnostics under the current allowed-file boundary。
+
+#### Proposed M11-F5-C: Partition Worker Ownership Design
+
+Status: docs-only taskbook drafted；waiting Design / Source / Test Review。
+
+Goal:
+
+- 对照商用 partition positive PQ path，明确当前分支要支持 partition table
+  前必须补齐的 ownership contract；
+- 保持当前分支 partition table 全部 fail-closed，不打开任何用户可见
+  partition PQ 正例；
+- 定义后续最小安全可执行任务：优先是 optimizer-level debug-only
+  partition reject diagnostic，而不是 `ha_innopart` positive path。
+
+Current Branch Facts:
+
+- `PQUnsuiteReason::PARTITIONED_TABLE` 已存在；
+- `pq_check_single_table()` 在 `share->m_part_info != nullptr` 时返回
+  `PARTITIONED_TABLE`；
+- `pq_check_query_block_eligible()` 在 full scan / cost / iterator 创建前
+  先调用 single-table check，因此 partition full scan 不进入 PQ iterator；
+- secondary range / visibility / covering / ICP debug smokes 均显式拒绝
+  `table->part_info != nullptr`；
+- dependent-ref scaffold、user-visible secondary range iterator factory 和
+  secondary ref iterator factory 均拒绝 partition table；
+- 当前分支 `ha_innopart` 没有 PQ-specific worker ownership override；
+- 当前没有 `Parallel_*partition*` status counter；partition rejection 主要
+  通过 EXPLAIN `Not parallel PARTITIONED_TABLE` 和 generic zero-delta
+  counters 可见。
+
+Existing Test Guard:
+
+- `pq_commercial_ref_icp` F0 negative matrix 覆盖 partition secondary range；
+- `pq_commercial_ref_icp` F3 partition guard 覆盖：
+  - partition full scan；
+  - partition secondary range / ICP；
+  - partition ref；
+  - partition dependent ref；
+- result 断言 single-table partition full/range/ref 的 EXPLAIN 为
+  `Not parallel PARTITIONED_TABLE`；
+- dependent-ref partition join 继续通过 multi-table guard fail-closed，
+  EXPLAIN 为 `Not parallel MULTI_TABLE`，不应计入 single-table partition
+  reject counter；
+- F3 counter window 断言以下 counters delta 均为 0：
+  - `Parallel_queries_executed`；
+  - `Parallel_workers_launched`；
+  - `Parallel_ranges_built`；
+  - `Parallel_ranges_dispatched`；
+  - `Parallel_secondary_rows_produced`。
+
+Commercial Reference Findings:
+
+- 商用参考仓 partition positive path 是受限能力，不是泛化 partition PQ：
+  - explicit single partition full scan positive；
+  - explicit single partition primary / secondary range positive；
+  - explicit single partition ref positive；
+  - explicit single partition dependent ref + ICP positive；
+  - explicit single hash/range/key/subpartition positive；
+  - multi-partition or non-explicit partition shapes 仍可能 serial；
+  - partition + GROUP / derived / materialization 依赖更广的 clone/rewrite
+    stack。
+- 商用关键依赖：
+  - `SetupPQTab()` 设置 `JT_ALL` / `JT_RANGE` / `JT_REF`、keyno、`pq_ref`；
+  - `InitPQTab()` 设置 `pq_range_type` 并调用 `ha_pq_init()`；
+  - `handler::ha_pq_init()` / `ha_pq_next()` / `ha_pq_end()` 处理 leader /
+    worker split 和 cleanup；
+  - `ha_innopart::pq_leader_scan_init()` /
+    `ha_innopart::pq_worker_scan_init()` 提供 partition-aware PQ init；
+  - `row0pread_pq.cc` 管理 B+tree partitioning、range creation、record
+    buffer、ICP 和 persistent cursor ownership；
+  - `TABLE::pq_copy()` 复制 `partition_info` 并 clone pushed ICP condition。
+
+Do Not Copy Directly:
+
+- 不复制商用 `row0pread_pq.cc` 整体实现。当前分支刻意基于 upstream
+  `Parallel_reader`，商用独立 B+tree partitioner / cursor stack 与当前
+  ownership 模型不一致；
+- 不单独复制 `ha_innopart` positive overrides。没有 SQL eligibility、
+  cloned partition state、worker TABLE ownership 和 worker handler/prebuilt
+  isolation 时，容易读错 partition 或共享 mutable state；
+- 不复制 `pq_ref_build_ranges()` / dependent-ref queue code。它依赖商用
+  `PQ_slices_map`、`PQ_ref_key`、`PQRefIterator` 和 ref-key lifecycle；
+- 不复制 ICP / native `Record_buffer` pieces。它们依赖 cloned pushed
+  conditions 和 worker-owned `record[0]`。
+
+Required Ownership Contract Before Positive Gate:
+
+- SQL 层：
+  - eligibility 必须区分 explicit single partition、multi-partition、
+    non-explicit pruning、subpartition；
+  - access shape 必须先限定在最小子集，不混合 GROUP / ORDER / derived /
+    materialization；
+  - ref/dependent-ref key ownership 必须定义 per-worker copy / lifetime。
+- TABLE / handler 层：
+  - worker TABLE 与 handler 必须独立于 leader；
+  - partition_info clone / pruning bitmap / selected partitions 必须明确
+    ownership；
+  - `ha_innopart` leader / worker init and end 必须有 cleanup contract；
+  - worker-start 后失败不得 silent serial fallback。
+- InnoDB 层：
+  - partition-local dict table / index / prebuilt ownership 必须明确；
+  - read view、trx、mtr、cursor、range boundary 和 EOF / ERROR / KILL
+    cleanup 必须单独验证；
+  - native `Record_buffer`、ICP、MVI、reverse 继续后置。
+
+Allowed Files:
+
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Forbidden Files:
+
+- `sql/**`
+- `storage/**`
+- `mysql-test/**`
+- build scripts and generated result files
+
+Hard Stops:
+
+- 不打开 `ha_innopart` worker ownership；
+- 不实现 partition pruning 或 per-partition range dispatch；
+- 不实现 worker TABLE / handler / prebuilt ownership for partition tables；
+- 不接 native `Record_buffer`；
+- 不混入 MVI / reverse / ICP combined partition path；
+- 不打开用户可见 partition PQ execution，即使是 full scan 或 explicit
+  single partition。
+
+Recommended Next Coding Task After Review:
+
+- M11-F5-C1 debug-only partition reject diagnostic；
+- 最小安全 hook：在 `pq_check_single_table()` 的
+  `share->m_part_info != nullptr` / `PARTITIONED_TABLE` reject 点增加
+  partition-specific counter；
+- counter semantics 仅覆盖 single-table partition rejection；F3 dependent-ref
+  join 会在 `MULTI_TABLE` 处提前拒绝，不要求 partition counter 增长；
+- 不进入 `ha_innopart`、partition pruning、range dispatch、worker
+  TABLE/handler/prebuilt、native `Record_buffer` 或 combined paths；
+- MTR 复用 `pq_commercial_ref_icp` F3 window，新增 counter delta，同时保持
+  generic execution / worker / range / secondary-row counters 全为 0。
+
+Validation:
+
+- 本阶段只做文档 review，不运行 build/MTR；
+- Design / Source / Test Review Agent 必须返回 `ACCEPT` 后才能提交；
+- 若 review 认为要编码，必须另起 M11-F5-C1 coding taskbook。
+
+Agent Review Prompt:
+
+请作为 M11-F5-C Design / Source / Test Review Agent，只读审查本任务书和
+相关源码 / 测试：
+
+1. 当前分支 partition fail-closed 边界是否描述准确；
+2. 商用 partition positive path 是否被正确归类为受限能力，而不是泛化
+   partition PQ；
+3. ownership contract 是否覆盖 SQL、TABLE/handler、InnoDB 三层关键风险；
+4. Allowed / Forbidden files 和 Hard Stops 是否足够防止误开
+   `ha_innopart`、partition pruning、worker ownership、native
+   `Record_buffer`、ICP、MVI、reverse；
+5. 下一步是否应为 M11-F5-C1 debug-only partition reject diagnostic。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Required fixes before commit
+- Safe next task recommendation
 
 #### Proposed M11-F5a: Secondary MIN / Optimizer Shortcut Source Inventory
 
