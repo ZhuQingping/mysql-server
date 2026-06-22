@@ -1196,9 +1196,20 @@ bool Gather_operator::run_worker_attach_contract_smoke(
   bool initialized_here = false;
   bool cleanup_reached = false;
   bool failed = true;
+  bool ownership_mismatch_smoke = false;
+  bool icp_ownership_mismatch_smoke = false;
+  Item *saved_leader_pushed_idx_cond = nullptr;
+  uint saved_leader_pushed_idx_cond_keyno = MAX_KEY;
   auto cleanup = [&]() {
     if (cleanup_reached) return;
     cleanup_reached = true;
+
+    if (icp_ownership_mismatch_smoke && leader_table != nullptr &&
+        leader_table->file != nullptr) {
+      leader_table->file->pushed_idx_cond = saved_leader_pushed_idx_cond;
+      leader_table->file->pushed_idx_cond_keyno =
+          saved_leader_pushed_idx_cond_keyno;
+    }
 
     if (auto *worker = get_worker(0)) {
       if (worker->m_worker_ctx != nullptr &&
@@ -1251,11 +1262,25 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     return true;
   }
 
-  bool ownership_mismatch_smoke = false;
   DBUG_EXECUTE_IF("pq_worker_ownership_mismatch_smoke", {
     /* Force the InnoDB ownership gate to reject this debug-only smoke. */
     ownership_mismatch_smoke = true;
     worker->m_open_ctx.worker_handler = leader_table->file;
+  });
+
+  DBUG_EXECUTE_IF("pq_worker_icp_ownership_mismatch_smoke", {
+    /*
+      Force an ICP-specific ownership mismatch without constructing a real
+      Item tree. The InnoDB worker gate must reject the non-null leader ICP
+      before any worker range dispatch or row production can dereference it.
+    */
+    icp_ownership_mismatch_smoke = true;
+    saved_leader_pushed_idx_cond = leader_table->file->pushed_idx_cond;
+    saved_leader_pushed_idx_cond_keyno =
+        leader_table->file->pushed_idx_cond_keyno;
+    leader_table->file->pushed_idx_cond =
+        reinterpret_cast<Item *>(leader_table);
+    leader_table->file->pushed_idx_cond_keyno = leader_table->s->primary_key;
   });
 
   if (worker->m_open_ctx.worker_handler == nullptr ||
@@ -1263,7 +1288,7 @@ bool Gather_operator::run_worker_attach_contract_smoke(
           &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
       worker->m_worker_ctx == nullptr) {
     cleanup();
-    return !ownership_mismatch_smoke;
+    return !(ownership_mismatch_smoke || icp_ownership_mismatch_smoke);
   }
 
   failed = false;

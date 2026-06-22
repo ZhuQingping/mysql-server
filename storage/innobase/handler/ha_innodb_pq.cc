@@ -395,6 +395,17 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
+  if (open_ctx->leader_table != nullptr &&
+      open_ctx->leader_table->file != nullptr &&
+      open_ctx->leader_table->file->pushed_idx_cond != nullptr) {
+    auto *leader_handler = open_ctx->leader_table->file;
+    if (pushed_idx_cond == nullptr ||
+        pushed_idx_cond == leader_handler->pushed_idx_cond ||
+        pushed_idx_cond_keyno != leader_handler->pushed_idx_cond_keyno) {
+      return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+    }
+  }
+
   auto sql_leader =
       static_cast<InnoDB_pq_sql_leader_context *>(open_ctx->leader_ctx);
   auto innodb_leader = sql_leader->innodb_ctx();

@@ -733,8 +733,7 @@ Code / Task Review:
 
 ### M11-F3: Worker-side ICP Clone / Refix Contract
 
-Status: design taskbook accepted；Design / Docs / Source Review Agent returned
-`ACCEPT`；next task is M11-F3b debug-only ICP ownership mismatch smoke。
+Status: M11-F3b implemented；awaiting Code / Docs / Test Review Agent。
 
 建议性质：design-first + 后续 debug-only fail-closed smoke。F3 不打开真实
 worker-side ICP positive path；不调用真实 `PQRefIterator::Read()` /
@@ -906,6 +905,93 @@ Design / Docs / Source Review:
 - clarified F3b should not require `Parallel_ranges_built = 0` but must assert
   attempt/cleanup reached, success `= 0`, workers/ranges-dispatched/secondary
   rows unchanged。
+
+Completion Report - M11-F3b Coding:
+
+Changed files:
+
+- `sql/parallel_query/sql_parallel.cc`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_locking_read_fallback.test`
+- `mysql-test/suite/parallel_query/r/pq_locking_read_fallback.result`
+- `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`
+- `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Implementation notes:
+
+- Added debug flag `pq_worker_icp_ownership_mismatch_smoke` inside
+  `Gather_operator::run_worker_attach_contract_smoke()`；
+- the flag creates an ICP-specific mismatch by temporarily setting the leader
+  handler `pushed_idx_cond` / `pushed_idx_cond_keyno` to a non-null sentinel
+  without constructing or dereferencing a real `Item` tree；
+- cleanup restores the leader handler ICP state before serial fallback；
+- `ha_innobase::pq_worker_scan_init()` now rejects worker attach/init when the
+  leader handler has `pushed_idx_cond` but the worker handler does not own a
+  distinct cloned/refixed ICP condition with the same keyno；
+- the rejection happens before worker context allocation, range dispatch, worker
+  row production, MQ enqueue, or `pq_worker_scan_next()`；
+- no `pq_clone*`、`pq_refix*`、`sql_select.cc`、standard InnoDB ICP path、
+  positive worker-side ICP row production、ORDER BY、partition、MVI、reverse or
+  native `Record_buffer` path was opened。
+
+TDD / RED evidence:
+
+```bash
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_worker_attach_contract_smoke --parallel=1
+```
+
+Before implementation, the new ICP-specific mismatch window failed because
+`icp_mismatch_success_delta` was `1` and
+`icp_mismatch_ranges_dispatched_delta` was `1` instead of the expected `0`。
+
+Validation:
+
+```bash
+cmake --build build-ninja --target mysqld -j 16
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_worker_attach_contract_smoke --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --record pq_locking_read_fallback --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query pq_locking_read_fallback --parallel=1
+TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
+  --suite=parallel_query --parallel=1
+```
+
+Results:
+
+- `mysqld` build passed；
+- targeted MTR passed；
+- `pq_locking_read_fallback` record/replay passed after masking the volatile
+  EXPLAIN `rows` column；full-suite-only drift was 5/6 while `Extra` and
+  counters were unchanged；
+- full `parallel_query` suite passed: 89/89；
+- ICP mismatch window produced:
+  `icp_mismatch_attempt_delta=1`、`icp_mismatch_success_delta=0`、
+  `icp_mismatch_cleanup_delta=1`、
+  `icp_mismatch_queries_executed_delta=0`、
+  `icp_mismatch_workers_launched_delta=0`、
+  `icp_mismatch_ranges_dispatched_delta=0`、
+  `icp_mismatch_secondary_rows_delta=0`；
+- Code / Docs / Test Review pending。
+
+Code / Docs / Test Review:
+
+- Review Agent verdict: `ACCEPT`；
+- blocking findings: none；
+- confirmed F3b is ICP-specific and not a repeat of F2b generic handler
+  mismatch；
+- confirmed the debug-only sentinel is restored through cleanup and rejected
+  before worker context allocation or range dispatch；
+- confirmed the InnoDB gate remains future-compatible with a distinct
+  worker-owned cloned/refixed ICP condition using the same keyno；
+- confirmed forbidden positive paths remain closed；
+- confirmed `pq_locking_read_fallback` masks only volatile EXPLAIN `rows` and
+  still checks `Extra=Not parallel LOCKING_READ` plus counters；
+- commit can proceed。
 
 ### M11-F4: Native Record_buffer / Prefetch Worker-owned Adapter
 

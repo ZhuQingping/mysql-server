@@ -175,6 +175,77 @@ WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced') -
 @secondary_rows_before) AS mismatch_secondary_rows_delta;
 mismatch_secondary_rows_delta
 0
+SET @attach_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_attempts');
+SET @attach_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_success');
+SET @attach_cleanup_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_cleanup_calls');
+SET @queries_executed_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed');
+SET @workers_launched_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_workers_launched');
+SET @ranges_dispatched_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched');
+SET @secondary_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced');
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_worker_attach_contract_smoke,pq_worker_icp_ownership_mismatch_smoke";
+SELECT id, v FROM pq_worker_attach_t WHERE v >= 0;
+id	v
+1	10
+2	20
+3	30
+SET SESSION debug=@old_debug;
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_attempts') -
+@attach_attempts_before) >= 1 AS icp_mismatch_attempt_delta;
+icp_mismatch_attempt_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_success') -
+@attach_success_before) AS icp_mismatch_success_delta;
+icp_mismatch_success_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_cleanup_calls') -
+@attach_cleanup_before) >= 1 AS icp_mismatch_cleanup_delta;
+icp_mismatch_cleanup_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed') -
+@queries_executed_before) AS icp_mismatch_queries_executed_delta;
+icp_mismatch_queries_executed_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
+@workers_launched_before) AS icp_mismatch_workers_launched_delta;
+icp_mismatch_workers_launched_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched') -
+@ranges_dispatched_before) AS icp_mismatch_ranges_dispatched_delta;
+icp_mismatch_ranges_dispatched_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced') -
+@secondary_rows_before) AS icp_mismatch_secondary_rows_delta;
+icp_mismatch_secondary_rows_delta
+0
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;
 SET SESSION parallel_default_dop=4;
