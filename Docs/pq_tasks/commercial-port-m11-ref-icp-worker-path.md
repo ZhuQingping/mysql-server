@@ -8,8 +8,9 @@ accepted；M11-F5a-1 debug-only optimizer shortcut diagnostic completed and
 committed；F5-A reverse boundary contract completed and committed；F5-C
 partition worker ownership design completed and committed；F5-C1 partition
 reject diagnostic completed and committed；F5-B MVI inventory / design accepted；
-next task is F5-B1 debug-only MVI reject diagnostic；real worker-side ICP
-positive row production remains blocked。
+F5-B1 debug-only MVI reject diagnostic completed and committed；F5-E ICP +
+native `Record_buffer` combined path design accepted；
+real worker-side ICP positive row production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -1652,7 +1653,169 @@ Completion Report - M11-F5-B1 Coding:
     adding `f1_mvi_normal_key_reject_delta = 0` guard；
   - re-review returned `ACCEPT` with no blocking findings。
 
+#### Proposed M11-F5-E: ICP + Native Record_buffer Combined Path Design
+
+Status: docs-only taskbook accepted by Design / Source / Test Review。
+
+Goal:
+
+- 对照商用 ICP + native `Record_buffer` combined path，明确当前分支为何
+  不能直接平移该路径；
+- 固化 worker-side ICP、native `Record_buffer`、secondary visibility、
+  ref/dependent-ref range dispatch 之间的状态机和错误码边界；
+- 定义后续只允许的 negative / diagnostic 工作，不打开 positive combined
+  execution。
+
+Current Branch Facts:
+
+- worker-side ICP clone/refix 未实现：
+  - `Item::pq_clone()` / `Item::pq_copy_from()` 仍 fail-closed；
+  - `pq_refix_fields_item.cc` 仍是 placeholder；
+  - clone preflight 会记录 unsupported，不生成 worker-owned
+    `pushed_idx_cond` / `pq_cond`；
+- worker ICP 目前只有负向 ownership gate：
+  - `pq_worker_icp_ownership_mismatch_smoke` 可注入 leader ICP sentinel；
+  - `ha_innobase::pq_worker_scan_init()` 要求 worker handler 拥有 distinct
+    cloned/refixed ICP condition 和 matching keyno，否则拒绝；
+- native `Record_buffer` 未用于 PQ row production：
+  - `PQ_record_buffer_sink` 是 SQL-owned row-image vector，不是 server
+    native `Record_buffer`；
+  - 当前仅有 `ha_get_record_buffer()` null/non-null probes；
+  - 不调用 PQ worker 上的 `set_record_buffer()`；
+- user-visible secondary ICP 仍是 leader-local narrow bridge：
+  - `PQSecondaryNoncoveringIcpRangeIterator` 使用 SQL-owned row images；
+  - tests 要求 `workers_delta = 0`；
+  - 这不是 worker-side ICP + native buffer；
+- `PQblockScanIterator::Init/Read()`、`PQRefIterator::Init/Read()` 仍为
+  fail stubs；`ha_innobase::pq_worker_scan_next()` 仍返回 unsupported。
+
+Commercial Reference Findings:
+
+- 商用 combined path 的核心在 worker read path：
+  - `PQ_Ctx::read_record()` 先 drain native `Record_buffer`，再从 pcur /
+    worker ctx 批量填充，再把缓存行交给 SQL；
+  - `PQ_Scan_ctx::find_visible_record()` 在 worker 侧处理 MVCC、ICP、
+    secondary clustered lookup；
+  - `pq_worker_scan_next()` 把 `DB_END_OF_RANGE` / `DB_END_OF_INDEX` 解释为
+    换 ctx / range，不是 statement EOF；
+  - `PQRefIterator::Read()` 对每个 outer ref key build ranges 并 reset
+    native `Record_buffer`；
+  - `pq_ref_build_ranges()` 明确避免在 range-build 阶段用 ICP 判断 key
+    是否存在，防止 dependent-ref 丢行；
+  - `pq_record_buffer.test`、`pq_ref_build_range.test`、`pq_icp.test` 覆盖
+    ICP + native buffer、secondary clustered lookup、ref + ICP range build。
+
+Combined State / Error Contract:
+
+| Source state | Meaning | Allowed PQ interpretation |
+| --- | --- | --- |
+| `ICP_NO_MATCH` | secondary record fails pushed index condition | skip row；do not grow produced-row counters |
+| `DB_NOT_FOUND` after ICP miss | commercial worker read path maps ICP miss to retryable not-found | retry / continue within current ctx；not fatal and not statement EOF |
+| `ICP_MATCH` | secondary record passes pushed index condition | continue visibility；clustered lookup only if needed |
+| `ICP_OUT_OF_RANGE` | ICP comparison crossed current key/range boundary | end current range/ctx；not statement EOF |
+| `DB_SUCCESS` with native buffer rows | cached rows are available | drain buffer before requesting next ctx |
+| `Record_buffer::out_of_range` | buffer reached range/index boundary after cached rows | reset buffer and return current range/ctx end after drain |
+| `DB_END_OF_RANGE` | current ctx/range done | worker may request next ctx；not statement EOF |
+| `DB_END_OF_INDEX` | current scan/index done | worker may request next ctx or finish if no ctx remains |
+| `HA_ERR_END_OF_FILE` | SQL handler EOF after all ctx/ranges drained | statement-level EOF only after all workers finish |
+| worker ERROR/KILL | fatal after row production may have started | abort / ERROR token / cleanup；no silent serial fallback |
+
+Required Migration Preconditions:
+
+- worker-owned `TABLE` / handler / `row_prebuilt_t` / cursor / template；
+- worker-owned cloned/refixed `pushed_idx_cond`、`pq_cond`、`Item_field` and
+  ref key Items；
+- worker handler `pushed_idx_cond_keyno` / active index / `m_prebuilt->idx_cond`
+  consistency；
+- `Record_buffer` ownership by worker `TABLE::m_record_buffer` and worker
+  MEM_ROOT；
+- deterministic attach/reset/detach for EOF、ERROR、KILL、early abort、
+  dependent-ref reinit and fallback-before-start；
+- secondary visibility and clustered lookup correctness under worker read view；
+- explicit gates for reverse、partition、MVI、descending/generation/nullable
+  keyparts、BLOB/TEXT/JSON/GEOMETRY、fixed-point and unsafe read/write sets。
+
+Hard Stops:
+
+- 不 clone/refix `pushed_idx_cond`、`pq_cond`、`Item_field` 或 ref key Items；
+- 不在 PQ worker 上调用 `set_record_buffer()`；
+- 不启用 `pq_worker_scan_next()`；
+- 不把 native `Record_buffer` slot 直接作为 leader result；
+- 不裸调 `pushed_idx_cond->val_int()`；
+- 不在 ref/dependent-ref range build 阶段使用 ICP 判断 key 是否存在；
+- 不把 leader-local secondary ICP 视为 worker-side ICP；
+- 不混入 dependent ref、partition、reverse、MVI、ORDER BY、native
+  `Record_buffer` positive path 或 worker-side ICP positive row production。
+
+Allowed Files:
+
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Forbidden Files:
+
+- `sql/**`
+- `storage/**`
+- `mysql-test/**`
+- build scripts and generated result files
+
+Safe Follow-up Candidate:
+
+- M11-F5-E1 debug-only combined negative diagnostic；
+- candidate hook: `Gather_operator::run_worker_attach_contract_smoke()` after
+  worker TABLE open and before any successful `pq_worker_scan_init()`；
+- it may combine the existing worker record-buffer null probe with the existing
+  ICP ownership mismatch sentinel；
+- it must assert:
+  - worker `ha_get_record_buffer() == nullptr`；
+  - ICP ownership mismatch rejects before worker scan success；
+  - `Parallel_queries_executed`、`Parallel_workers_launched`、
+    `Parallel_ranges_dispatched`、`Parallel_secondary_rows_produced` stay 0；
+- it must not call `set_record_buffer()` or produce worker rows。
+
+Validation:
+
+- This stage is docs-only；no build/MTR required；
+- Design / Source / Test Review Agent returned `ACCEPT`；
+- If review asks for coding, create a separate M11-F5-E1 coding taskbook。
+
+Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: None；
+- Non-blocking risks:
+  - commercial path maps `ICP_NO_MATCH` to retryable `DB_NOT_FOUND` before
+    continuing；the state table now records this explicitly；
+  - F5-E1 must not reuse a worker attach path that increments range-dispatch
+    counters before the negative diagnostic completes；
+- Required fixes before commit: None；
+- Safe next task: keep F5-E design-only；next coding, if any, must be
+  M11-F5-E1 debug-only combined negative diagnostic with no
+  `set_record_buffer()`、no `pq_worker_scan_next()` enablement、no worker row
+  production, and explicit zero-counter assertions。
+
 Agent Review Prompt:
+
+请作为 M11-F5-E Design / Source / Test Review Agent，只读审查本任务书和
+相关源码 / 测试：
+
+1. 当前分支状态是否准确区分 leader-local ICP、debug-only ownership gate、
+   SQL-owned row-image sink 和 native `Record_buffer`；
+2. 商用 combined path 的状态机 / 错误码转换是否描述准确；
+3. hard stops 是否足够阻止误开 worker-side ICP + native buffer positive path；
+4. 是否应该把 F5-E 固定为 design-only，并将后续编码限制为
+   F5-E1 debug-only combined negative diagnostic；
+5. 是否还缺少必须写入文档的前置条件或测试护栏。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Required fixes before commit
+- Safe next task recommendation
+
+Historical Agent Review Prompt - M11-F5-B:
 
 请作为 M11-F5-B Design / Source / Test Review Agent，只读审查本任务书和
 相关源码 / 测试：
