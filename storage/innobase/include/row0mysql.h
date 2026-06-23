@@ -59,6 +59,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "rem0types.h"
 #include "row0types.h"
 #include "sess0sess.h"
+#include "sql/parallel_query/pq_handler.h"
 #include "sql_cmd.h"
 #include "trx0types.h"
 #include "univ.i"
@@ -851,6 +852,29 @@ struct row_prebuilt_t {
   lob::undo_vers_t *get_lob_undo() { return (&m_lob_undo); }
 
   void lob_undo_reset() { m_lob_undo.reset(); }
+
+  /** Commercial Parallel Query pull-row carriers.
+
+  These fields are inert until the commercial InnoDB PQ handler path is wired.
+  Keep this batch to POD/raw-pointer carriers: row_prebuilt_t is allocated by
+  mem_heap_zalloc(), so C++ members requiring construction/destruction must be
+  added only together with an explicit construction policy. */
+  bool is_attach_ctx{false};
+  mem_heap_t *pq_heap{nullptr};
+  dtuple_t *pq_tuple{nullptr};
+  bool pq_index_read{false};
+  PQ_Ref_info pq_ref_info;
+
+  /**
+    For Parallel Query. Like the `index` member, but obtained from the
+    commercial old-share path when that path is ported.
+  */
+  dict_index_t *old_index{nullptr};
+
+#ifdef UNIV_DEBUG
+  void *pq_prev_ctx{nullptr};
+#endif
+  void *pq_worker{nullptr};
 
   /** Can a record buffer or a prefetch cache be utilized for prefetching
   records in this scan?

@@ -865,6 +865,74 @@ Risk constraints:
 - high-risk partition/MVI/reverse/ref-dependent execution remains gated by
   later D1.x batches。
 
+#### Batch D1.2 - row_prebuilt_t commercial PQ carriers
+
+Status: completed
+
+目标：
+
+- 在 `row_prebuilt_t` 中恢复商用 InnoDB PQ pull-row path 依赖的状态
+  carrier；
+- 只补字段和 include 依赖，不接 `ha_innodb_pq.cc` 商用执行路径；
+- 为后续 `pq_worker_scan_init(uint, void*)`、`ha_pq_next()`、
+  dependent-ref/range path 提供存储位置。
+
+Planned implementation:
+
+- `storage/innobase/include/row0mysql.h`
+  - include `sql/parallel_query/pq_handler.h`；
+  - add carrier fields:
+    `is_attach_ctx`、`pq_heap`、`pq_tuple`、`pq_index_read`、
+    `pq_ref_info`、`old_index`、debug-only `pq_prev_ctx`、`pq_worker`。
+
+Validation:
+
+- `git diff --check -- storage/innobase/include/row0mysql.h Docs/pq_tasks/commercial-full-port-sprint.md`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+
+Risk constraints:
+
+- `pq_heap` / `pq_tuple` allocation and cleanup remain later work；this batch
+  only adds default-null carriers；
+- `pq_prev_ctx` / `pq_worker` are raw `void *` placeholders in this batch
+  because `row_prebuilt_t` is allocated by `mem_heap_zalloc()`；true
+  `std::shared_ptr` ownership requires an explicit construction/destruction
+  policy and is deferred to the commercial worker init path；
+- `old_index` is carrier-only until the commercial old-share path is aligned；
+- this batch must not change ordinary InnoDB reads or current typed PQ path。
+
+Completion Report - Batch D1.2:
+
+- changed files:
+  - `storage/innobase/include/row0mysql.h`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - included `sql/parallel_query/pq_handler.h` for `PQ_Ref_info`；
+  - added commercial POD/raw-pointer carriers to `row_prebuilt_t`:
+    `is_attach_ctx`、`pq_heap`、`pq_tuple`、`pq_index_read`、
+    `pq_ref_info`、`old_index`、debug-only `pq_prev_ctx`、`pq_worker`；
+  - intentionally did not add `std::shared_ptr` fields because
+    `row_prebuilt_t` is allocated by `mem_heap_zalloc()` in
+    `row_create_prebuilt()` and would need explicit C++ construction and
+    destruction policy。
+- validation:
+  - `git diff --check -- storage/innobase/include/row0mysql.h Docs/pq_tasks/commercial-full-port-sprint.md` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`。
+- risks carried forward:
+  - true commercial `pq_ctx` / `pq_worker` ownership remains deferred until the
+    worker init/end path is ported with explicit construction/destruction；
+  - no `ha_innodb_pq.cc`、`row0sel.cc`、or read path behavior changed in this
+    batch。
+- review:
+  - independent Review Agent accepted the batch with no Critical issues；
+  - reviewer noted `pq_prev_ctx` is intentionally debug-only and that
+    default member initializers are documentary only under `mem_heap_zalloc()`；
+  - reviewer also noted `row0mysql.h` -> `pq_handler.h` is a heavier layering
+    dependency but found no direct circular include or compile blocker。
+
 ### Batch E1 - Commercial MTR migration
 
 Status: pending
