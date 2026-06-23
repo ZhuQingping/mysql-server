@@ -462,11 +462,13 @@ SET(SQL_SHARED_SOURCES
   opt_trace2server.cc
   parallel_query/exchange.cc
   parallel_query/exchange_sort.cc
+  parallel_query/explain_pq_access_path.cc
   parallel_query/msg_queue.cc
   parallel_query/pq_aggregate.cc
   parallel_query/pq_clone.cc
   parallel_query/pq_clone_item.cc
   parallel_query/pq_group_aggregate_iterator.cc
+  parallel_query/pq_hash_join_shared_context.cc
   parallel_query/pq_handler.cc
   parallel_query/pq_iterator.cc
   parallel_query/pq_iterators.cc

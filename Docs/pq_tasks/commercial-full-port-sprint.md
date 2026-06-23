@@ -361,7 +361,7 @@ MTR 迁移矩阵：
 
 ### Batch B0 - Compile surface and commercial source inventory
 
-Status: pending
+Status: implementation completed locally；pending Code / Docs / Test Review
 
 目标：
 
@@ -370,6 +370,43 @@ Status: pending
 - 不打开真实执行 gate，只解决编译表面和类型可见性；
 - 明确当前自研 `pq_iterator.*`、`pq_aggregate.*`、
   `pq_group_aggregate_iterator.*` 与商用路径的并存/删除策略。
+
+Completion Report - Batch B0:
+
+- changed files:
+  - `sql/CMakeLists.txt`
+  - `sql/parallel_query/barrier.h`
+  - `sql/parallel_query/bloom_filter.h`
+  - `sql/parallel_query/chunk_files_wrapper.h`
+  - `sql/parallel_query/explain_pq_access_path.cc`
+  - `sql/parallel_query/explain_pq_access_path.h`
+  - `sql/parallel_query/pq_hash_join_shared_context.cc`
+  - `sql/parallel_query/pq_hash_join_shared_context.h`
+- implementation:
+  - copied commercial-only source/header files into current tree；
+  - added `parallel_query/explain_pq_access_path.cc` and
+    `parallel_query/pq_hash_join_shared_context.cc` to `sql/CMakeLists.txt`；
+  - kept `barrier.h` / `bloom_filter.h` / `chunk_files_wrapper.h` as imported
+    commercial headers；
+  - adapted `explain_pq_access_path.cc` to a compile-only 8.0.46 compatibility
+    shell because the commercial implementation depends on not-yet-migrated
+    `ExplainChild` / `WalkAccessPathsProxy` / iterator timing hooks；
+  - adapted `pq_hash_join_shared_context.h` to a compile-only shell because
+    the commercial implementation depends on not-yet-migrated VFD /
+    `ChunkFilesWrapper` / hash join spill integration；
+  - these shells are not skip decisions：C1/hash-join batches must restore the
+    real commercial behavior when their main hooks are migrated.
+- validation:
+  - `git diff --check -- sql/CMakeLists.txt sql/parallel_query` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed。
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`。
+- risks carried forward:
+  - `explain_pq_access_path.*` is compile-visible but not functionally wired；
+  - `pq_hash_join_shared_context.*` is compile-visible but not functionally wired；
+  - `chunk_files_wrapper.h` still references commercial VFD/hash-spill headers
+    and must not be included by production code until the hash join spill gate
+    migrates its dependencies.
 
 ### Batch B1 - Commercial SQL/PQ core replacement
 
