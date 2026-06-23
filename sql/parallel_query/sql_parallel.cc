@@ -2913,8 +2913,18 @@ bool Gather_operator::prepare_leader_row_stream_error_smoke(
   }
 
   Exchange_nosort *exchange = get_exchange();
-  if (exchange == nullptr) return true;
-  return exchange->enqueue_error_smoke(0);
+  auto *worker = get_worker(0);
+  if (exchange == nullptr || worker == nullptr) return true;
+
+  if (!worker->transition_status(PQ_Worker_status::RUNNING)) return true;
+  int worker_error_code = HA_ERR_INTERNAL_ERROR;
+  DBUG_EXECUTE_IF("pq_leader_row_stream_error_smoke_out_of_mem", {
+    worker_error_code = HA_ERR_OUT_OF_MEM;
+  });
+  worker->m_error_code = worker_error_code;
+  const bool failed = exchange->enqueue_error_smoke(0);
+  if (!worker->transition_status(PQ_Worker_status::ERROR)) return true;
+  return failed;
 }
 
 bool Gather_operator::run_worker_callback_threaded_producer(

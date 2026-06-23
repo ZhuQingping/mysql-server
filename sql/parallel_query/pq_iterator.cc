@@ -578,12 +578,18 @@ int PQTableScanIterator::Read() {
       pq_global_stats.leader_row_stream_error_smoke_errors.fetch_add(
           1, std::memory_order_relaxed);
     });
+    const auto error_state = m_gather->resolve_error_priority(thd());
+    int error_code = HA_ERR_INTERNAL_ERROR;
+    if (error_state.has_error() && error_state.error_code != 0) {
+      error_code = error_state.error_code;
+      thd()->pq_error = error_code;
+    }
     cleanup_pq_resources(true);
     DBUG_EXECUTE_IF("pq_leader_row_stream_error_smoke", {
       pq_global_stats.leader_row_stream_error_smoke_cleanup.fetch_add(
           1, std::memory_order_relaxed);
     });
-    PrintError(HA_ERR_INTERNAL_ERROR);
+    PrintError(error_code);
     return 1;
   }
 }

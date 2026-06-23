@@ -1,0 +1,27 @@
+# Verify row-stream ERROR uses worker error priority instead of a fixed code.
+
+--source include/have_innodb_16k.inc
+--source include/have_debug.inc
+
+CREATE TABLE pq_leader_row_stream_error_priority_t (
+  id INT PRIMARY KEY,
+  v INT
+) ENGINE=InnoDB;
+INSERT INTO pq_leader_row_stream_error_priority_t VALUES (1,10),(2,20);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+
+SET @old_debug=@@session.debug;
+SET SESSION debug=
+  "d,pq_leader_row_stream_error_smoke,pq_leader_row_stream_error_smoke_out_of_mem";
+--error ER_OUT_OF_RESOURCES
+SELECT id, v FROM pq_leader_row_stream_error_priority_t WHERE v >= 0;
+SET SESSION debug=@old_debug;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE pq_leader_row_stream_error_priority_t;

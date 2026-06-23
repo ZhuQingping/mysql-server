@@ -49,7 +49,7 @@ Parallel Query 实现尽量全量平移到当前 `support_parallel_query_8.0`
 
 ### Batch A - 商用差异审计与迁移清单
 
-Status: in progress
+Status: completed
 
 输出：
 
@@ -1261,6 +1261,86 @@ Completion Report - Batch D1.6a:
   - reviewer confirmed zero-row EOF is signaled by FINISH, while
     unsupported/error paths remain failures；
   - reviewer noted the new MTR files must be explicitly included in the commit。
+
+#### Batch D1.6b-pre - row-stream worker error priority contract
+
+Status: in progress
+
+目标：
+
+- 将 debug-gated leader row stream ERROR token 与 `Gather_operator`
+  worker error priority 解析打通；
+- 在 iterator 收到 MQ ERROR 时优先使用 `resolve_error_priority()` 的
+  worker fatal error code，而不是裸 `HA_ERR_INTERNAL_ERROR`；
+- 为后续 D1.6b 用户可见 iterator 接入准备 worker error propagation
+  contract；
+- 仍不打开默认用户可见 PQ，也不恢复 typed `pq_worker_scan_next()`。
+
+Planned implementation:
+
+- `sql/parallel_query/sql_parallel.cc`
+  - `prepare_leader_row_stream_error_smoke()` 在发送 ERROR token 前后标记
+    worker `RUNNING -> ERROR`，并设置 `m_error_code`；
+  - 新增 debug-only `pq_leader_row_stream_error_smoke_out_of_mem` 注入，
+    用可区分的 `HA_ERR_OUT_OF_MEM` 验证 priority bridge；
+- `sql/parallel_query/pq_iterator.cc`
+  - `PQTableScanIterator::Read()` 收到 `Materialize_status::ERROR` 后调用
+    `resolve_error_priority()`；
+  - 将解析出的 error code 写入 `THD::pq_error` 并用于 `PrintError()`；
+- `mysql-test/suite/parallel_query/t|r/pq_leader_row_stream_error_priority`
+  - 验证最终 SQL 错误使用 worker priority 解析出的错误码，而不是固定
+    `HA_ERR_INTERNAL_ERROR`；
+- 沿用现有 `pq_leader_row_stream_error_smoke` MTR 验证 error/cleanup 计数和
+  无 serial fallback 语义。
+
+Validation:
+
+- `git diff --check -- sql/parallel_query/sql_parallel.cc sql/parallel_query/pq_iterator.cc mysql-test/suite/parallel_query/t/pq_leader_row_stream_error_priority.test mysql-test/suite/parallel_query/r/pq_leader_row_stream_error_priority.result Docs/pq_tasks/commercial-full-port-sprint.md`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr parallel_query.pq_leader_row_stream_error_priority parallel_query.pq_leader_row_stream_error_smoke parallel_query.pq_leader_row_stream_empty parallel_query.pq_leader_row_stream_smoke --parallel=1 --vardir=/tmp/pq-d16bpre-target-vardir --tmpdir=/tmp/pq-d16bpre-target-tmpdir`
+
+Risk constraints:
+
+- no optimizer eligibility change；
+- no default user-visible PQ enablement；
+- no typed worker pull-row path enablement；
+- kill/early-exit and thread-budget convergence remain separate D1.6b
+  blockers。
+
+Completion Report - Batch D1.6b-pre:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/parallel_query/pq_iterator.cc`
+  - `mysql-test/suite/parallel_query/t/pq_leader_row_stream_error_priority.test`
+  - `mysql-test/suite/parallel_query/r/pq_leader_row_stream_error_priority.result`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - debug-gated row stream ERROR producer now marks worker 0
+    `RUNNING -> ERROR` and records `m_error_code` before enqueuing the ERROR
+    token；
+  - `PQTableScanIterator::Read()` resolves the worker error priority before
+    cleanup and prints the resolved handler error code；
+  - added a distinguishable `HA_ERR_OUT_OF_MEM` debug injection to prove the
+    iterator no longer always prints fixed `HA_ERR_INTERNAL_ERROR`。
+- validation:
+  - `git diff --check -- sql/parallel_query/sql_parallel.cc sql/parallel_query/pq_iterator.cc mysql-test/suite/parallel_query/t/pq_leader_row_stream_error_priority.test mysql-test/suite/parallel_query/r/pq_leader_row_stream_error_priority.result Docs/pq_tasks/commercial-full-port-sprint.md`
+    passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - first full-suite run before the distinguishable-code review fix passed:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq-d16bpre-full-vardir --tmpdir=/tmp/pq-d16bpre-full-tmpdir`,
+    all 90 tests successful；
+  - after adding the distinguishable-code test:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr parallel_query.pq_leader_row_stream_error_priority parallel_query.pq_leader_row_stream_error_smoke parallel_query.pq_leader_row_stream_empty parallel_query.pq_leader_row_stream_smoke --parallel=1 --vardir=/tmp/pq-d16bpre-target-vardir --tmpdir=/tmp/pq-d16bpre-target-tmpdir`
+    passed, all 5 tests successful。
+- review:
+  - first independent Review Agent rejected the batch only because existing
+    tests could not distinguish the resolved worker error code from the old
+    fixed internal error；
+  - the distinguishable-code MTR was added to address that Important finding；
+  - follow-up Review Agent was retried with a reduced prompt but failed due
+    intermittent subagent connection failures；the original Important finding
+    is covered by the new distinguishable-code MTR。
 
 ### Batch E1 - Commercial MTR migration
 
