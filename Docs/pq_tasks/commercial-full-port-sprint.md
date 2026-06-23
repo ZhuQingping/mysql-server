@@ -1093,6 +1093,96 @@ Completion Report - Batch D1.4:
   - independent Review Agent pending; this commit is a validated safeguard
     commit to preserve current PQ work remotely。
 
+#### Batch D1.5 - typed worker next minimal fullscan bridge design
+
+Status: deferred after review reject
+
+目标：
+
+- 评估是否可以打开一个极窄的 InnoDB typed worker pull-row next 路径；
+- 只支持当前 typed `PQ_Worker_context *` API 下的 clustered full table scan；
+- 不打开 commercial `ha_pq_next()` / `void *scan_ctx` 正式执行路径；
+- 不打开 range/ref/dependent-ref/reverse/secondary/ICP/MVI/partition。
+
+Design review result:
+
+- Commercial diff Agent 和 D1.5 Design Review Agent 结论均为 SPLIT：
+  可以做 typed clustered fullscan worker next；不能一次性打开商用全量
+  `ha_pq_next()` 语义。
+- 原因：
+  - 当前 SQL worker iterator 已经调用 typed
+    `pq_worker_scan_next(PQ_Worker_context *, ...)`；
+  - 当前 commercial `void *` next 没有真实 SQL caller；
+  - 当前 D1.4 `void *` leader bridge 背后是 typed
+    `PQ_Leader_context`，不是商用 `Parallel_leader` + commercial slice map；
+  - callback producer 与 latent `row_search_mvcc()` pull producer 仍需保持清晰
+    边界，不能同时大范围打开两套不一致路径。
+
+Planned implementation:
+
+- `storage/innobase/handler/ha_innodb_pq.cc`
+  - evaluated typed `pq_worker_scan_next(PQ_Worker_context *, uchar *, bool *)`
+    delegating to `InnoDB_pq_worker_ctx::read_record()`；
+  - gate this path to:
+    clustered fullscan、single full-range、active leader read view、
+    no reverse、no ref/range/dependent-ref、no ICP、no BLOB table、
+    worker-owned table record buffer；
+  - keep commercial `pq_worker_scan_next(void *, uchar *)` fail-closed with
+    `HA_ERR_UNSUPPORTED`。
+
+Validation:
+
+- `git diff --check -- storage/innobase/handler/ha_innodb_pq.cc Docs/pq_tasks/commercial-full-port-sprint.md`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr parallel_query.pq_commercial_fullscan parallel_query.pq_parallel_scan_iterator_row_values parallel_query.pq_leader_row_stream_smoke parallel_query.pq_read_threaded_dop2_worker_error parallel_query.pq_read_threaded_dop2_external_kill --parallel=1 --vardir=/tmp/pq-d15-target-vardir --tmpdir=/tmp/pq-d15-target-tmpdir`
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq-d15-mtr-vardir --tmpdir=/tmp/pq-d15-mtr-tmpdir`
+
+Risk constraints:
+
+- do not wire `PQblockScanIterator` back to commercial `ha_pq_next()` until
+  handler `inited == PQ` state and commercial caller contract are migrated；
+- do not treat unsupported/error as EOF；
+- do not expose multi-range pull-row behavior until range boundaries have
+  explicit no-duplicate/no-gap tests；
+- do not use a row cache wrapper around callback producer without memory、
+  kill、error、and early-exit limits。
+
+Completion Report - Batch D1.5:
+
+- changed files:
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - attempted implementation was reviewed and rejected before commit；
+  - source change was reverted so typed and commercial worker next remain
+    fail-closed；
+  - commercial `pq_worker_scan_next(void *, uchar *)` remains unsupported。
+- validation:
+  - `git diff --check -- storage/innobase/handler/ha_innodb_pq.cc` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    passed；
+  - targeted MTR command above passed, all 6 tests successful。
+  - `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq-d15-mtr-vardir --tmpdir=/tmp/pq-d15-mtr-tmpdir`
+    passed, all 89 tests successful。
+- review:
+  - independent Code Review Agent rejected enabling the typed pull path；
+  - Critical: the latent `row_search_mvcc()` path reads through the worker
+    `row_prebuilt_t` / worker transaction and does not prove leader snapshot
+    visibility；
+  - Important: typed `PQRefIterator` also calls
+    `pq_worker_scan_next(PQ_Worker_context *, ...)`, so commercial
+    `pq_ref/pq_range_type` fields are not a sufficient access-shape gate；
+  - Important: direct `row_search_mvcc()` bypasses normal InnoDB handler
+    concurrency and abort wrappers。
+- risks carried forward:
+  - D1.5 row production remains deferred；
+  - commercial `ha_pq_next()` remains a future batch；
+  - next implementation must either use the existing controlled
+    callback/Parallel_reader row producer as canonical, or prove worker
+    `row_search_mvcc()` uses leader snapshot and cannot be reached from ref/range
+    typed iterators。
+
 ### Batch E1 - Commercial MTR migration
 
 Status: pending
