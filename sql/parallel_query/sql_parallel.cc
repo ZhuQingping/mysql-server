@@ -1005,6 +1005,29 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
     pq_global_stats.exchange_sort_ordered_diag_success.fetch_add(
         1, std::memory_order_relaxed);
   }
+  bool ref_owner_enabled = false;
+  uint32 ref_owner_ref_bytes = 0;
+  uint32 ref_owner_mismatch_rejects = 0;
+  uint32 ref_owner_no_handler_rejects = 0;
+  uint32 ref_owner_no_ref_rejects = 0;
+  DBUG_EXECUTE_IF("pq_exchange_sort_ref_owner_smoke",
+                  ref_owner_enabled = true;);
+  if (ref_owner_enabled) {
+    pq_global_stats.exchange_sort_ref_owner_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    if (leader_table == nullptr || leader_table->file == nullptr ||
+        leader_table->file->ref_length == 0 ||
+        sort_exchange.run_orderby_ref_owner_smoke(
+            leader_table->file, leader_table->file->ref_length,
+            &ref_owner_ref_bytes, &ref_owner_mismatch_rejects,
+            &ref_owner_no_handler_rejects, &ref_owner_no_ref_rejects)) {
+      pq_global_stats.exchange_sort_ref_owner_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+    pq_global_stats.exchange_sort_ref_owner_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
   uint32 frame_merge_rows_read = 0;
   uint32 frame_merge_finishes_read = 0;
   if (sort_exchange.run_orderby_frame_merge_smoke(
@@ -1114,6 +1137,14 @@ bool Gather_operator::run_exchange_sort_smoke(THD *leader_thd [[maybe_unused]],
       ordered_reader_skeleton_heap_removes, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_ordered_diag_kill_not_wired.fetch_add(
       ordered_diag_kill_not_wired, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ref_owner_ref_bytes.fetch_add(
+      ref_owner_ref_bytes, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ref_owner_mismatch_rejects.fetch_add(
+      ref_owner_mismatch_rejects, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ref_owner_no_handler_rejects.fetch_add(
+      ref_owner_no_handler_rejects, std::memory_order_relaxed);
+  pq_global_stats.exchange_sort_ref_owner_no_ref_rejects.fetch_add(
+      ref_owner_no_ref_rejects, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_rows.fetch_add(
       frame_merge_rows_read, std::memory_order_relaxed);
   pq_global_stats.exchange_sort_frame_merge_smoke_finishes.fetch_add(

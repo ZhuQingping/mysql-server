@@ -10097,6 +10097,99 @@ Readiness that must remain false / unopened:
 - `Parallel_orderby_execution_preflight_ready`；
 - visible ORDER BY eligibility / `HAS_ORDER_BY` relaxation。
 
+### M11-E6g-2: Exchange_sort Ref-owner Smoke
+
+Status: local implementation completed，waiting Code / Docs / Test review
+before commit。
+
+Goal:
+
+- turn the E6g-1 leader-side handler/ref_length owner contract into a
+  DBUG-only smoke；
+- prove `Exchange_sort` can hold an explicit leader handler owner and exact
+  `ref_length` before any handler-based row-id tie-break is allowed；
+- prove fail-closed validation for row-id length mismatch, missing handler, and
+  missing row-id bytes；
+- keep the default ORDER BY path, default heap comparator, production MQ send
+  path, and visible ORDER BY eligibility unchanged。
+
+Implemented:
+
+- added private `PQ_orderby_ref_owner_shape` with:
+  - `handler *tie_break_file`；
+  - `uint32 expected_ref_length`；
+  - `bool stable_output`；
+  - `bool initialized`；
+- added private validation helper that rejects:
+  - uninitialized owner；
+  - non-stable owner；
+  - null handler；
+  - `expected_ref_length == 0`；
+  - null row-id；
+  - row-id length different from expected `ref_length`；
+- added `Exchange_sort::run_orderby_ref_owner_smoke()`：
+  - positive case uses the still-open leader handler and exact
+    `leader_table->file->ref_length`；
+  - owns row-id bytes in a local vector；
+  - negative cases cover mismatch / null handler / null row-id；
+  - no `handler::cmp_ref()` call yet；
+- added DBUG flag `pq_exchange_sort_ref_owner_smoke` under
+  `Gather_operator::run_exchange_sort_smoke()`；
+- added status variables:
+  - `Parallel_exchange_sort_ref_owner_attempts`；
+  - `Parallel_exchange_sort_ref_owner_success`；
+  - `Parallel_exchange_sort_ref_owner_unsupported`；
+  - `Parallel_exchange_sort_ref_owner_ref_bytes`；
+  - `Parallel_exchange_sort_ref_owner_mismatch_rejects`；
+  - `Parallel_exchange_sort_ref_owner_no_handler_rejects`；
+  - `Parallel_exchange_sort_ref_owner_no_ref_rejects`；
+- extended `pq_commercial_order_by_frames` and `pq_stats` to assert the new
+  smoke is not reached without DBUG and is reached exactly once with DBUG。
+
+Hard boundaries preserved:
+
+- no default `pq_orderby_cached_compare_records()` replacement；
+- no default heap reader / ordered `Read()` activation；
+- no production `Query_result_mq::send_data()` or `m_stable_output` behavior
+  change；
+- no `handler::cmp_ref()` call in E6g-2；
+- no `pq_optimizer.*`, `HAS_ORDER_BY`, AccessPath, handler/InnoDB, or visible
+  ORDER BY eligibility change；
+- no readiness flag opened。
+
+Validation evidence:
+
+- RED observed before implementation because the new
+  `Parallel_exchange_sort_ref_owner_*` status variables were absent；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_commercial_order_by_frames --parallel=1 --vardir=/tmp/pq_e6g2_frames_vardir --tmpdir=/tmp/pq_e6g2_frames_tmp` passed；
+- `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_stats --parallel=1 --vardir=/tmp/pq_e6g2_stats_vardir --tmpdir=/tmp/pq_e6g2_stats_tmp` passed；
+- `git diff --check` passed；
+- `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query --parallel=1 --vardir=/tmp/pq_e6g2_full_vardir --tmpdir=/tmp/pq_e6g2_full_tmp` passed 89/89。
+
+Review request checklist:
+
+- confirm the smoke is DBUG-only and remains under
+  `pq_exchange_sort_ref_owner_smoke`；
+- confirm the positive owner uses the still-open leader handler plus exact
+  handler `ref_length`；
+- confirm mismatch / null handler / null row-id cases are observable；
+- confirm no default comparator, `cmp_ref()`, heap reader, production MQ
+  stable-output path, readiness flag, or visible ORDER BY gate was opened；
+- confirm `pq_commercial_order_by_frames` and `pq_stats` cover the new status
+  variables。
+
+Review result:
+
+- Code / Docs / Test Review Agent `019ef239-6894-7253-9eaf-9232932def25`
+  returned `ACCEPT`；
+- no Critical / Important / Minor findings；
+- commit allowed；
+- residual risk carried forward: E6g-2 proves only owner shape and fail-closed
+  validation. It still does not prove real decoded stable row-id lifetime beyond
+  local smoke, nor `handler::cmp_ref()` tie-break integration. Next task must
+  remain DBUG-only and keep visible ORDER BY PQ closed。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

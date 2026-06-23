@@ -193,6 +193,27 @@ SET @sort_state_shape_success_before = (
 SET @sort_state_shape_unsupported_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_state_shape_smoke_unsupported');
+SET @ref_owner_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_attempts');
+SET @ref_owner_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_success');
+SET @ref_owner_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_unsupported');
+SET @ref_owner_ref_bytes_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_ref_bytes');
+SET @ref_owner_mismatch_rejects_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_mismatch_rejects');
+SET @ref_owner_no_handler_rejects_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_no_handler_rejects');
+SET @ref_owner_no_ref_rejects_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_no_ref_rejects');
 
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
@@ -286,8 +307,16 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_kill_not_wired') -
   @ordered_diag_kill_not_wired_before) = 0 AS orderby_diag_kill_not_wired_without_debug;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_attempts') -
+  @ref_owner_attempts_before) = 0 AS orderby_ref_owner_attempts_without_debug;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_success') -
+  @ref_owner_success_before) = 0 AS orderby_ref_owner_success_without_debug;
 
-SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_orderby_worker_producer_adapter_skeleton_smoke,pq_exchange_sort_stream_heap_smoke,pq_exchange_sort_stream_materialized_smoke,pq_exchange_sort_ordered_materialize_api_smoke,pq_exchange_sort_ordered_reader_skeleton_smoke,pq_exchange_sort_ordered_diag_smoke";
+SET SESSION debug="d,pq_exchange_sort_state_shape_smoke,pq_orderby_worker_frame_producer_smoke,pq_orderby_worker_producer_adapter_skeleton_smoke,pq_exchange_sort_stream_heap_smoke,pq_exchange_sort_stream_materialized_smoke,pq_exchange_sort_ordered_materialize_api_smoke,pq_exchange_sort_ordered_reader_skeleton_smoke,pq_exchange_sort_ordered_diag_smoke,pq_exchange_sort_ref_owner_smoke";
 
 --sorted_result
 SELECT * FROM pq_orderby_frame_t;
@@ -446,6 +475,34 @@ SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ordered_diag_kill_not_wired') -
   @ordered_diag_kill_not_wired_before) = 1 AS orderby_diag_kill_not_wired_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_attempts') -
+  @ref_owner_attempts_before) = 1 AS orderby_ref_owner_attempts_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_success') -
+  @ref_owner_success_before) = 1 AS orderby_ref_owner_success_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_unsupported') -
+  @ref_owner_unsupported_before) = 0 AS orderby_ref_owner_unsupported_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_ref_bytes') -
+  @ref_owner_ref_bytes_before) >= 1 AS orderby_ref_owner_ref_bytes_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_mismatch_rejects') -
+  @ref_owner_mismatch_rejects_before) >= 1 AS orderby_ref_owner_mismatch_rejects_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_no_handler_rejects') -
+  @ref_owner_no_handler_rejects_before) >= 1 AS orderby_ref_owner_no_handler_rejects_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_exchange_sort_ref_owner_no_ref_rejects') -
+  @ref_owner_no_ref_rejects_before) >= 1 AS orderby_ref_owner_no_ref_rejects_delta;
 
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status

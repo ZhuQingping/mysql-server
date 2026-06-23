@@ -91,6 +91,14 @@ bool pq_orderby_cached_compare_batches(int a, int b, void *arg) {
   return pq_orderby_cached_compare_records(left, right, ctx->descending);
 }
 
+bool pq_validate_orderby_ref_owner_shape(
+    const PQ_orderby_ref_owner_shape &owner, const uchar *row_id,
+    uint32 row_id_len) {
+  return !owner.initialized || !owner.stable_output ||
+         owner.tie_break_file == nullptr || owner.expected_ref_length == 0 ||
+         row_id == nullptr || row_id_len != owner.expected_ref_length;
+}
+
 bool pq_orderby_smoke_merge(PQ_orderby_smoke_stream *streams, uint32 nstreams,
                             bool descending,
                             const uint32 *expected_row_ids,
@@ -4149,4 +4157,57 @@ bool Exchange_sort::run_orderby_ordered_diag_skeleton_smoke(
   }
   *kill_not_wired = 1;
   return false;
+}
+
+bool Exchange_sort::run_orderby_ref_owner_smoke(handler *tie_break_file,
+                                                uint32 expected_ref_length,
+                                                uint32 *ref_bytes,
+                                                uint32 *mismatch_rejects,
+                                                uint32 *no_handler_rejects,
+                                                uint32 *no_ref_rejects) {
+  if (tie_break_file == nullptr || expected_ref_length == 0 ||
+      ref_bytes == nullptr || mismatch_rejects == nullptr ||
+      no_handler_rejects == nullptr || no_ref_rejects == nullptr) {
+    return true;
+  }
+
+  *ref_bytes = 0;
+  *mismatch_rejects = 0;
+  *no_handler_rejects = 0;
+  *no_ref_rejects = 0;
+
+  const PQ_orderby_ref_owner_shape owner{tie_break_file, expected_ref_length,
+                                         true, true};
+  std::vector<uchar> owned_row_id(expected_ref_length, 0x5a);
+  if (pq_validate_orderby_ref_owner_shape(owner, owned_row_id.data(),
+                                          expected_ref_length)) {
+    return true;
+  }
+  *ref_bytes = expected_ref_length;
+
+  if (pq_validate_orderby_ref_owner_shape(owner, owned_row_id.data(),
+                                          expected_ref_length + 1)) {
+    ++(*mismatch_rejects);
+  } else {
+    return true;
+  }
+
+  const PQ_orderby_ref_owner_shape no_handler{nullptr, expected_ref_length,
+                                              true, true};
+  if (pq_validate_orderby_ref_owner_shape(no_handler, owned_row_id.data(),
+                                          expected_ref_length)) {
+    ++(*no_handler_rejects);
+  } else {
+    return true;
+  }
+
+  if (pq_validate_orderby_ref_owner_shape(owner, nullptr,
+                                          expected_ref_length)) {
+    ++(*no_ref_rejects);
+  } else {
+    return true;
+  }
+
+  return *ref_bytes != expected_ref_length || *mismatch_rejects != 1 ||
+         *no_handler_rejects != 1 || *no_ref_rejects != 1;
 }

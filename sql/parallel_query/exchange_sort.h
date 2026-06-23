@@ -251,6 +251,13 @@ struct PQ_orderby_ordered_diag_contract_shape {
   bool diagnostics_ready{false};
 };
 
+struct PQ_orderby_ref_owner_shape {
+  handler *tie_break_file{nullptr};
+  uint32 expected_ref_length{0};
+  bool stable_output{false};
+  bool initialized{false};
+};
+
 constexpr uint32 PQ_ORDERBY_FRAME_MAGIC = 0x50514f46;  // "PQOF"
 constexpr uint16 PQ_ORDERBY_FRAME_VERSION = 1;
 
@@ -329,6 +336,12 @@ class Exchange_sort final : public Exchange {
       uint32 *errors_read, uint32 *detaches_read, uint32 *refills_read,
       uint32 *heap_replaces_read, uint32 *heap_removes_read);
   bool run_orderby_ordered_diag_skeleton_smoke(uint32 *kill_not_wired);
+  bool run_orderby_ref_owner_smoke(handler *tie_break_file,
+                                   uint32 expected_ref_length,
+                                   uint32 *ref_bytes,
+                                   uint32 *mismatch_rejects,
+                                   uint32 *no_handler_rejects,
+                                   uint32 *no_ref_rejects);
   bool run_orderby_sort_state_shape_smoke();
   bool run_orderby_sort_state_shape_handoff_smoke(uint32 workers,
                                                   bool stable_output,

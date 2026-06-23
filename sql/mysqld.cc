@@ -10813,6 +10813,35 @@ static int show_pq_exchange_sort_ordered_diag_kill_not_wired(
   return 0;
 }
 
+#define DEFINE_PQ_EXCHANGE_SORT_REF_OWNER_SHOW_FUNC(NAME, FIELD)        \
+  static int show_pq_##NAME(THD *, SHOW_VAR *var, char *buf) {          \
+    var->type = SHOW_LONGLONG;                                          \
+    var->value = buf;                                                   \
+    *((longlong *)buf) =                                                \
+        (longlong)(pq_global_stats.FIELD.load(std::memory_order_relaxed)); \
+    return 0;                                                           \
+  }
+
+DEFINE_PQ_EXCHANGE_SORT_REF_OWNER_SHOW_FUNC(exchange_sort_ref_owner_attempts,
+                                            exchange_sort_ref_owner_attempts)
+DEFINE_PQ_EXCHANGE_SORT_REF_OWNER_SHOW_FUNC(exchange_sort_ref_owner_success,
+                                            exchange_sort_ref_owner_success)
+DEFINE_PQ_EXCHANGE_SORT_REF_OWNER_SHOW_FUNC(exchange_sort_ref_owner_unsupported,
+                                            exchange_sort_ref_owner_unsupported)
+DEFINE_PQ_EXCHANGE_SORT_REF_OWNER_SHOW_FUNC(exchange_sort_ref_owner_ref_bytes,
+                                            exchange_sort_ref_owner_ref_bytes)
+DEFINE_PQ_EXCHANGE_SORT_REF_OWNER_SHOW_FUNC(
+    exchange_sort_ref_owner_mismatch_rejects,
+    exchange_sort_ref_owner_mismatch_rejects)
+DEFINE_PQ_EXCHANGE_SORT_REF_OWNER_SHOW_FUNC(
+    exchange_sort_ref_owner_no_handler_rejects,
+    exchange_sort_ref_owner_no_handler_rejects)
+DEFINE_PQ_EXCHANGE_SORT_REF_OWNER_SHOW_FUNC(
+    exchange_sort_ref_owner_no_ref_rejects,
+    exchange_sort_ref_owner_no_ref_rejects)
+
+#undef DEFINE_PQ_EXCHANGE_SORT_REF_OWNER_SHOW_FUNC
+
 static int show_pq_exchange_sort_frame_merge_smoke_rows(THD *, SHOW_VAR *var,
                                                         char *buf) {
   var->type = SHOW_LONGLONG;
@@ -11826,6 +11855,27 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_ordered_diag_success",
      (char *)&show_pq_exchange_sort_ordered_diag_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ref_owner_attempts",
+     (char *)&show_pq_exchange_sort_ref_owner_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ref_owner_mismatch_rejects",
+     (char *)&show_pq_exchange_sort_ref_owner_mismatch_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ref_owner_no_handler_rejects",
+     (char *)&show_pq_exchange_sort_ref_owner_no_handler_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ref_owner_no_ref_rejects",
+     (char *)&show_pq_exchange_sort_ref_owner_no_ref_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ref_owner_ref_bytes",
+     (char *)&show_pq_exchange_sort_ref_owner_ref_bytes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ref_owner_success",
+     (char *)&show_pq_exchange_sort_ref_owner_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_exchange_sort_ref_owner_unsupported",
+     (char *)&show_pq_exchange_sort_ref_owner_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_sort_smoke_runs",
      (char *)&show_pq_exchange_sort_smoke_runs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},

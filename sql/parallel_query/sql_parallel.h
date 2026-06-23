@@ -408,6 +408,13 @@ struct PQ_global_stats {
   std::atomic<uint64> exchange_sort_ordered_diag_attempts{0};
   std::atomic<uint64> exchange_sort_ordered_diag_success{0};
   std::atomic<uint64> exchange_sort_ordered_diag_kill_not_wired{0};
+  std::atomic<uint64> exchange_sort_ref_owner_attempts{0};
+  std::atomic<uint64> exchange_sort_ref_owner_success{0};
+  std::atomic<uint64> exchange_sort_ref_owner_unsupported{0};
+  std::atomic<uint64> exchange_sort_ref_owner_ref_bytes{0};
+  std::atomic<uint64> exchange_sort_ref_owner_mismatch_rejects{0};
+  std::atomic<uint64> exchange_sort_ref_owner_no_handler_rejects{0};
+  std::atomic<uint64> exchange_sort_ref_owner_no_ref_rejects{0};
   std::atomic<uint64> exchange_sort_frame_merge_smoke_rows{0};  ///< Merge rows
   std::atomic<uint64> exchange_sort_frame_merge_smoke_finishes{0};  ///< FINISH
   std::atomic<uint64> exchange_sort_frame_merge_edge_smoke_rows{0};  ///< Rows
@@ -780,6 +787,16 @@ struct PQ_global_stats {
     exchange_sort_ordered_diag_success.store(0, std::memory_order_relaxed);
     exchange_sort_ordered_diag_kill_not_wired.store(
         0, std::memory_order_relaxed);
+    exchange_sort_ref_owner_attempts.store(0, std::memory_order_relaxed);
+    exchange_sort_ref_owner_success.store(0, std::memory_order_relaxed);
+    exchange_sort_ref_owner_unsupported.store(0, std::memory_order_relaxed);
+    exchange_sort_ref_owner_ref_bytes.store(0, std::memory_order_relaxed);
+    exchange_sort_ref_owner_mismatch_rejects.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ref_owner_no_handler_rejects.store(
+        0, std::memory_order_relaxed);
+    exchange_sort_ref_owner_no_ref_rejects.store(0,
+                                                 std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_sort_frame_merge_smoke_finishes.store(0,
                                                    std::memory_order_relaxed);

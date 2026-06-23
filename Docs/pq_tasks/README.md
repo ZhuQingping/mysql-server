@@ -5,41 +5,20 @@
 ## Current Summary
 
 - Last synced: 2026-06-22
-- Active update: M11-E6g-1 Exchange_sort Handler/ref_length Ownership and
-  Comparator Preconditions Design
-  已启动 docs/design-only。M11-E6a
-  已提交为 `70197ead960`，证明 private/debug-only
-  `position(record)` + deep-copied handler ref + `cmp_ref(ref, ref)==0`
-  contract；M11-E6b 已提交为 `03025f83ba6`，证明 private `PQOF` ORDER BY
-  frame 可传输 E6a 真实 handler ref；M11-E6c 已提交为 `8905f9d1289`，
-  证明 owned copied ref 可跨过 worker cleanup boundary，并在 cleanup 后通过
-  still-open leader handler 调用 `cmp_ref(ref, ref)`。E6d 进一步用两条真实
-  worker row 的 deep-copied refs 验证 cleanup 后 still-open leader handler
-  `cmp_ref(ref0, ref1)` / `cmp_ref(ref1, ref0)` 非零且反对称；不替换默认
-  cached comparator，不打开 visible ORDER BY PQ、`HAS_ORDER_BY` 或 ORDER BY
-  readiness flags。M11-E6e 新增 private/DBUG-only comparator adapter smoke：
-  equal sort-key 下使用 still-open leader handler `cmp_ref()` 做 tie-break，
-  不替换默认 heap comparator，不进入 visible ORDER BY gate。验证：
-  `mysqld` build passed，`pq_worker_attach_contract_smoke` passed，
-  `pq_stats` passed，full `parallel_query` suite passed 89/89。E6f 当前只做
-  readiness / prerequisite inventory 与 private `Query_result_mq` stable
-  handler-ref wire contract 任务书：E6a-E6e 证据仍不能转换为
-  `rowid_tiebreak_ready`、`exchange_sort_heap_read_ready`、
-  `default_ordered_read_ready` 或 visible ORDER BY eligibility；后续源码任务
-  必须先证明 `file->ref` 深拷贝进入 MQ wire，再评估默认 heap comparator。
-  E6f design-only 已提交为 `ed8afd02d58`；当前实现新增 private
-  stable-ref `PQWR` flag contract 和 DBUG-only smoke，证明 stable handler ref
-  可深拷贝进 worker-result MQ frame，且 normal decoder 不会静默接受 stable
-  frame；仍不改变生产 `Query_result_mq::send_data()`、`m_stable_output`
-  行为、默认 heap comparator、ORDER BY readiness 或 visible ORDER BY gate。
-  验证：RED 已观察；`mysqld` build passed；`pq_worker_attach_contract_smoke`
-  passed；`pq_stats` passed；full `parallel_query` suite passed 89/89；
-  Code / Docs / Test Review accepted，并已提交为 `e80bc2c1342`。E6g-1
-  当前只做 design/readiness contract：商用默认 heap comparator 依赖
+- Active update: M11-E6g-2 Exchange_sort ref-owner smoke implementation.
+  E6g-1 已提交为 `74e00d1065a`，明确商用默认 heap comparator 依赖
   leader-side `Exchange_sort` 持有正确 handler/ref_length/stable_output
   ownership、decoded stable row-id 生命周期、Filesort/Sort_param runtime
   state 和 worker producer；在这些 owner 未明确前，不编码默认 comparator、
-  heap reader、ORDER BY readiness 或 visible ORDER BY gate。
+  heap reader、ORDER BY readiness 或 visible ORDER BY gate。E6g-2 当前本地
+  实现新增 DBUG-only `pq_exchange_sort_ref_owner_smoke`：绑定 still-open
+  leader handler 与精确 `ref_length` 到 private owner shape，验证 owned
+  row-id bytes，并拒绝 length mismatch、null handler、null row-id。E6g-2
+  不调用 `handler::cmp_ref()`，不替换默认 heap comparator，不连接 production
+  `Query_result_mq::send_data()`，不打开 visible ORDER BY PQ 或 readiness
+  flag。已完成本地 RED/GREEN 验证：`mysqld` build passed，
+  `pq_commercial_order_by_frames` passed，`pq_stats` passed，full
+  `parallel_query` suite passed 89/89；当前等待独立 Code/Docs/Test review。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
   ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史
