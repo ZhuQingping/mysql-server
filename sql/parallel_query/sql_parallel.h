@@ -319,6 +319,17 @@ struct PQ_global_stats {
   std::atomic<uint64> orderby_handler_ref_two_row_cmp_nonzero{0};  ///< E6d
   std::atomic<uint64> orderby_handler_ref_two_row_antisymmetric_success{0};  ///< E6d
   std::atomic<uint64> orderby_handler_ref_two_row_post_cleanup_success{0};  ///< E6d
+  std::atomic<uint64> orderby_handler_ref_adapter_smoke_attempts{0};  ///< E6e
+  std::atomic<uint64> orderby_handler_ref_adapter_smoke_success{0};  ///< E6e
+  std::atomic<uint64> orderby_handler_ref_adapter_smoke_unsupported{0};  ///< E6e
+  std::atomic<uint64> orderby_handler_ref_adapter_smoke_refs{0};  ///< E6e
+  std::atomic<uint64> orderby_handler_ref_adapter_smoke_cmp_nonzero{0};  ///< E6e
+  std::atomic<uint64>
+      orderby_handler_ref_adapter_smoke_antisymmetric_success{0};  ///< E6e
+  std::atomic<uint64>
+      orderby_handler_ref_adapter_smoke_direction_match_success{0};  ///< E6e
+  std::atomic<uint64>
+      orderby_handler_ref_adapter_smoke_tiebreak_success{0};  ///< E6e
   std::atomic<uint64> leader_row_stream_error_smoke_attempts{0};  ///< Error smoke
   std::atomic<uint64> leader_row_stream_error_smoke_selected{0};  ///< Error selected
   std::atomic<uint64> leader_row_stream_error_smoke_errors{0};  ///< Error seen
@@ -619,6 +630,22 @@ struct PQ_global_stats {
     orderby_handler_ref_two_row_antisymmetric_success.store(
         0, std::memory_order_relaxed);
     orderby_handler_ref_two_row_post_cleanup_success.store(
+        0, std::memory_order_relaxed);
+    orderby_handler_ref_adapter_smoke_attempts.store(
+        0, std::memory_order_relaxed);
+    orderby_handler_ref_adapter_smoke_success.store(0,
+                                                    std::memory_order_relaxed);
+    orderby_handler_ref_adapter_smoke_unsupported.store(
+        0, std::memory_order_relaxed);
+    orderby_handler_ref_adapter_smoke_refs.store(0,
+                                                 std::memory_order_relaxed);
+    orderby_handler_ref_adapter_smoke_cmp_nonzero.store(
+        0, std::memory_order_relaxed);
+    orderby_handler_ref_adapter_smoke_antisymmetric_success.store(
+        0, std::memory_order_relaxed);
+    orderby_handler_ref_adapter_smoke_direction_match_success.store(
+        0, std::memory_order_relaxed);
+    orderby_handler_ref_adapter_smoke_tiebreak_success.store(
         0, std::memory_order_relaxed);
     leader_row_stream_error_smoke_attempts.store(0,
                                                  std::memory_order_relaxed);

@@ -8925,7 +8925,7 @@ Validation:
 
 ### M11-E6a: Worker Handler-ref Positive Contract
 
-Status: implementation completed locally；Code / Docs / Test Review accepted。
+Status: committed；Code / Docs / Test Review accepted。
 
 Goal:
 
@@ -9525,7 +9525,7 @@ Required review after E6d coding:
 
 ### M11-E6e: Exchange_sort Handler-ref Comparator Adapter Smoke
 
-Status: taskbook in progress；design review required before source changes。
+Status: implementation completed locally；Code / Docs / Test Review accepted。
 
 Background:
 
@@ -9629,6 +9629,75 @@ Required review after E6e coding:
 - Docs Review: confirm E6e does not claim real ORDER BY readiness；
 - Test Review: confirm no-DBUG, positive adapter, and visible ORDER BY negative
   windows remain。
+
+Completion Report - M11-E6e Coding:
+
+- Status: implementation completed locally；Code / Docs / Test Review accepted；
+- Design:
+  - design-only taskbook committed as `f2ceead3c62`；
+  - Design Review Agent verdict: `ACCEPT`；
+  - review wording tightened: no new source files, smoke/contract counter names
+    only, no ORDER BY readiness/preflight counter changes。
+- Changed files:
+  - `sql/parallel_query/exchange_sort.{h,cc}`；
+  - `sql/parallel_query/sql_parallel.{h,cc}`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`；
+  - `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- Implementation:
+  - added `pq_orderby_handler_ref_adapter_smoke()` as an external helper in
+    `exchange_sort.{h,cc}`；
+  - helper constructs two controlled `PQ_orderby_cached_record` values with
+    identical sort key and handler refs in `row_id`；
+  - helper compares only equal-sort-key records through the passed leader
+    handler `cmp_ref()`；
+  - `Gather_operator::run_worker_attach_contract_smoke()` invokes the helper
+    only under `pq_orderby_handler_ref_adapter_smoke` after E6d has collected
+    two refs and passed post-cleanup direct `cmp_ref()` checks；
+  - added E6e smoke/contract diagnostic counters with shortened SHOW STATUS
+    names under `Parallel_orderby_ref_adapter_smoke_*`；
+  - no default `pq_orderby_cached_compare_records()`, heap reader,
+    `Query_result_mq`, PQWR/PQOF wire, optimizer, readiness flag, handler, or
+    InnoDB change。
+- RED evidence:
+  - after adding E6e counters and MTR assertions but before implementation,
+    `pq_worker_attach_contract_smoke` failed because attempts / success / refs
+    / cmp_nonzero / antisymmetric / direction / tiebreak deltas stayed `0`；
+  - status variable names were shortened during RED setup because the initial
+    long names produced `NULL` in `performance_schema.global_status`。
+- GREEN / validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query pq_worker_attach_contract_smoke --parallel=1
+    --vardir=/tmp/pq_e6e_green_vardir --tmpdir=/tmp/pq_e6e_green_tmp`
+    passed；
+  - `pq_stats --record` SQL completed and hit the known final copy errno `1`;
+    generated log was copied manually to `pq_stats.result`；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query pq_stats --parallel=1
+    --vardir=/tmp/pq_e6e_stats_replay_vardir
+    --tmpdir=/tmp/pq_e6e_stats_replay_tmp` passed；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query --parallel=1 --vardir=/tmp/pq_e6e_full_vardir
+    --tmpdir=/tmp/pq_e6e_full_tmp` passed 89/89。
+- Remaining boundary:
+  - E6e proves only private equal-sort-key handler-ref comparator adapter
+    shape；
+  - it does not make the default Exchange_sort heap comparator commercial-ready
+    and does not open visible ORDER BY PQ。
+- Code / Docs / Test Review:
+  - Review Agent verdict: `ACCEPT`；
+  - confirmed `pq_orderby_handler_ref_adapter_smoke()` is controlled and uses
+    `handler::cmp_ref()` only for private tie-break validation；
+  - confirmed the only call site is DBUG-gated and runs after E6d direct
+    post-cleanup two-row `cmp_ref()` checks；
+  - confirmed no default comparator / heap reader, `Query_result_mq`, PQWR/PQOF,
+    optimizer, readiness flag, handler/InnoDB, or visible ORDER BY diff；
+  - confirmed MTR covers no-DBUG zero counters, positive adapter counters,
+    unsupported `0`, `pq_stats`, and visible ORDER BY negative guards。
 
 ## Risk Areas
 

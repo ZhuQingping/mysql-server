@@ -30,6 +30,7 @@
 #include "sql/parallel_query/exchange.h"
 
 struct TABLE;
+class handler;
 
 struct PQ_orderby_smoke_record {
   int64 key{0};
@@ -267,6 +268,14 @@ bool pq_validate_orderby_row_id_contract(
 bool pq_validate_orderby_handler_ref_lifetime_contract(
     const PQ_orderby_decoded_frame *decoded,
     const PQ_orderby_handler_ref_lifetime_contract &contract);
+
+bool pq_orderby_handler_ref_adapter_smoke(handler *tie_break_file,
+                                          const uchar *left_ref,
+                                          uint32 left_ref_len,
+                                          const uchar *right_ref,
+                                          uint32 right_ref_len,
+                                          int *cmp_forward,
+                                          int *cmp_reverse);
 
 bool pq_run_orderby_handler_ref_wire_smoke(const uchar *record_image,
                                            uint32 record_image_len,

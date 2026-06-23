@@ -1525,6 +1525,45 @@ bool Gather_operator::run_worker_attach_contract_smoke(
         1, std::memory_order_relaxed);
     pq_global_stats.orderby_handler_ref_two_row_post_cleanup_success.fetch_add(
         1, std::memory_order_relaxed);
+
+    DBUG_EXECUTE_IF("pq_orderby_handler_ref_adapter_smoke", {
+      pq_global_stats.orderby_handler_ref_adapter_smoke_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+
+      int adapter_forward = 0;
+      int adapter_reverse = 0;
+      const bool adapter_failed =
+          pq_orderby_handler_ref_adapter_smoke(
+              leader_table->file, handler_ref_two_row_smoke_refs[0].data(),
+              static_cast<uint32>(handler_ref_two_row_smoke_refs[0].size()),
+              handler_ref_two_row_smoke_refs[1].data(),
+              static_cast<uint32>(handler_ref_two_row_smoke_refs[1].size()),
+              &adapter_forward, &adapter_reverse) ||
+          ((adapter_forward < 0) != (cmp_forward < 0)) ||
+          ((adapter_forward > 0) != (cmp_forward > 0)) ||
+          ((adapter_reverse < 0) != (cmp_reverse < 0)) ||
+          ((adapter_reverse > 0) != (cmp_reverse > 0));
+      if (adapter_failed) {
+        pq_global_stats.orderby_handler_ref_adapter_smoke_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+        return true;
+      }
+
+      pq_global_stats.orderby_handler_ref_adapter_smoke_success.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats.orderby_handler_ref_adapter_smoke_refs.fetch_add(
+          handler_ref_two_row_smoke_refs.size(), std::memory_order_relaxed);
+      pq_global_stats.orderby_handler_ref_adapter_smoke_cmp_nonzero.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats
+          .orderby_handler_ref_adapter_smoke_antisymmetric_success.fetch_add(
+              1, std::memory_order_relaxed);
+      pq_global_stats
+          .orderby_handler_ref_adapter_smoke_direction_match_success.fetch_add(
+              1, std::memory_order_relaxed);
+      pq_global_stats.orderby_handler_ref_adapter_smoke_tiebreak_success
+          .fetch_add(1, std::memory_order_relaxed);
+    });
   }
   pq_global_stats.worker_attach_smoke_success.fetch_add(
       1, std::memory_order_relaxed);

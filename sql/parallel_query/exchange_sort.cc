@@ -28,6 +28,7 @@
 #include <utility>
 
 #include "sql/field.h"
+#include "sql/handler.h"
 #include "sql/table.h"
 
 namespace {
@@ -514,6 +515,44 @@ bool pq_orderby_row_id_contract_controlled_smoke() {
 }
 
 }  // namespace
+
+bool pq_orderby_handler_ref_adapter_smoke(handler *tie_break_file,
+                                          const uchar *left_ref,
+                                          uint32 left_ref_len,
+                                          const uchar *right_ref,
+                                          uint32 right_ref_len,
+                                          int *cmp_forward,
+                                          int *cmp_reverse) {
+  if (cmp_forward == nullptr || cmp_reverse == nullptr) return true;
+  *cmp_forward = 0;
+  *cmp_reverse = 0;
+
+  if (tie_break_file == nullptr || left_ref == nullptr || right_ref == nullptr ||
+      left_ref_len == 0 || right_ref_len == 0 ||
+      left_ref_len != right_ref_len ||
+      tie_break_file->ref_length != left_ref_len) {
+    return true;
+  }
+
+  PQ_orderby_cached_record left;
+  PQ_orderby_cached_record right;
+  left.sort_key.push_back(1);
+  right.sort_key.push_back(1);
+  left.has_sort_key = true;
+  right.has_sort_key = true;
+  left.row_id.assign(left_ref, left_ref + left_ref_len);
+  right.row_id.assign(right_ref, right_ref + right_ref_len);
+  left.worker_id = 0;
+  right.worker_id = 1;
+
+  if (left.sort_key != right.sort_key) return true;
+
+  *cmp_forward = tie_break_file->cmp_ref(left.row_id.data(), right.row_id.data());
+  *cmp_reverse = tie_break_file->cmp_ref(right.row_id.data(), left.row_id.data());
+  return *cmp_forward == 0 || *cmp_reverse == 0 ||
+         !((*cmp_forward < 0 && *cmp_reverse > 0) ||
+           (*cmp_forward > 0 && *cmp_reverse < 0));
+}
 
 bool pq_validate_orderby_frame(const void *raw_data, uint32 raw_len,
                                const PQ_orderby_frame_header **header,

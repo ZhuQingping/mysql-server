@@ -10107,6 +10107,27 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
     orderby_handler_ref_two_row_post_cleanup_success,
     orderby_handler_ref_two_row_post_cleanup_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_adapter_smoke_attempts,
+                                  orderby_handler_ref_adapter_smoke_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_adapter_smoke_success,
+                                  orderby_handler_ref_adapter_smoke_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_handler_ref_adapter_smoke_unsupported,
+    orderby_handler_ref_adapter_smoke_unsupported)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_adapter_smoke_refs,
+                                  orderby_handler_ref_adapter_smoke_refs)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_handler_ref_adapter_smoke_cmp_nonzero,
+    orderby_handler_ref_adapter_smoke_cmp_nonzero)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_handler_ref_adapter_smoke_antisymmetric_success,
+    orderby_handler_ref_adapter_smoke_antisymmetric_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_handler_ref_adapter_smoke_direction_match_success,
+    orderby_handler_ref_adapter_smoke_direction_match_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_handler_ref_adapter_smoke_tiebreak_success,
+    orderby_handler_ref_adapter_smoke_tiebreak_success)
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
@@ -12083,6 +12104,30 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_handler_ref_cmp_unsupported",
      (char *)&show_pq_orderby_handler_ref_cmp_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_smoke_antisym_success",
+     (char *)&show_pq_orderby_handler_ref_adapter_smoke_antisymmetric_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_smoke_attempts",
+     (char *)&show_pq_orderby_handler_ref_adapter_smoke_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_smoke_cmp_nonzero",
+     (char *)&show_pq_orderby_handler_ref_adapter_smoke_cmp_nonzero, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_smoke_direction_success",
+     (char *)&show_pq_orderby_handler_ref_adapter_smoke_direction_match_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_smoke_refs",
+     (char *)&show_pq_orderby_handler_ref_adapter_smoke_refs, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_smoke_success",
+     (char *)&show_pq_orderby_handler_ref_adapter_smoke_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_smoke_tiebreak_success",
+     (char *)&show_pq_orderby_handler_ref_adapter_smoke_tiebreak_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_smoke_unsupported",
+     (char *)&show_pq_orderby_handler_ref_adapter_smoke_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_handler_ref_two_row_antisymmetric_success",
      (char *)&show_pq_orderby_handler_ref_two_row_antisymmetric_success,
