@@ -473,6 +473,7 @@ SET(SQL_SHARED_SOURCES
   parse_tree_window.cc
   select_lex_visitor.cc
   parser_service.cc
+  partial_result_cache.cc
   partition_info.cc
   partitioning/partition_handler.cc
   persisted_variable.cc

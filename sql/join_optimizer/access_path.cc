@@ -44,6 +44,7 @@
 #include "sql/join_optimizer/relational_expression.h"
 #include "sql/join_optimizer/walk_access_paths.h"
 #include "sql/mem_root_array.h"
+#include "sql/partial_result_cache.h"
 #include "sql/range_optimizer/geometry_index_range_scan.h"
 #include "sql/range_optimizer/group_index_skip_scan.h"
 #include "sql/range_optimizer/group_index_skip_scan_plan.h"
@@ -1182,6 +1183,21 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
                                             std::move(job.children[0]));
         break;
       }
+      case AccessPath::PARTIAL_RESULT_CACHE: {
+        const auto &param = path->ptrc();
+        if (job.children.is_null()) {
+          SetupJobsForChildren(mem_root, param.child, join,
+                               eligible_for_batch_mode, &job, &todo);
+          continue;
+        }
+        ptrc::PathParameters *ptrc_param = param.param;
+        iterator = NewIterator<ptrc::PtrcIterator>(
+            thd, mem_root, ptrc_param->key_tables, ptrc_param->res_tables,
+            std::move(job.children[0]), ptrc_param->res_items,
+            ptrc_param->res_tmp_table, ptrc_param->was_null,
+            !ptrc_param->is_exists_subquery);
+        break;
+      }
     }
 
     if (iterator == nullptr) {
@@ -1223,6 +1239,11 @@ void FindTablesToGetRowidFor(AccessPath *path) {
         // Doesn't really matter, we don't cross query blocks anyway.
         return true;
       }
+      case AccessPath::PARTIAL_RESULT_CACHE:
+        handled_by_others |=
+            GetUsedTableMap(subpath, /*include_pruned_tables=*/true);
+        FindTablesToGetRowidFor(subpath);
+        return true;  // Don't double-traverse.
       default:
         return false;
     }
@@ -1265,6 +1286,15 @@ void FindTablesToGetRowidFor(AccessPath *path) {
       path->sort().tables_to_get_rowid_for =
           GetUsedTableMap(path, /*include_pruned_tables=*/true) &
           ~handled_by_others;
+      break;
+    case AccessPath::PARTIAL_RESULT_CACHE:
+      WalkAccessPaths(path, /*join=*/nullptr,
+                      WalkAccessPathPolicy::STOP_AT_MATERIALIZATION,
+                      add_tables_handled_by_others);
+      path->ptrc().param->res_tables->set_store_rowids(true);
+      path->ptrc().param->res_tables->set_tables_to_get_rowid_for(
+          GetUsedTableMap(path, /*include_pruned_tables=*/true) &
+          ~handled_by_others);
       break;
     default:
       my_abort();

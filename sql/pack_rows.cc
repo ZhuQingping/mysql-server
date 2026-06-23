@@ -25,6 +25,9 @@
 
 #include <assert.h>
 #include <sys/types.h>
+#include <algorithm>
+#include <string>
+#include <vector>
 
 #include "mysql_com.h"
 #include "sql/join_optimizer/bit_utils.h"
@@ -40,11 +43,13 @@ Column::Column(Field *field) : field(field), field_type(field->real_type()) {}
 // Take in a TABLE and extract the columns that are needed to satisfy the SQL
 // query (determined by the read set for internal operations in the execution
 // engine).
-Table::Table(TABLE *table_arg)
+Table::Table(TABLE *table_arg, bool create_fields)
     : table(table_arg), columns(PSI_NOT_INSTRUMENTED) {
-  for (uint i = 0; i < table->s->fields; ++i) {
-    if (bitmap_is_set(&table->read_set_internal, i)) {
-      columns.emplace_back(table->field[i]);
+  if (create_fields) {
+    for (uint i = 0; i < table->s->fields; ++i) {
+      if (bitmap_is_set(&table->read_set_internal, i)) {
+        columns.emplace_back(table->field[i]);
+      }
     }
   }
 }
@@ -75,6 +80,26 @@ TableCollection::TableCollection(
   }
 }
 
+void TableCollection::AddTable(Table *tab) {
+  TABLE *table = tab->table;
+  if (table->has_storage_handler()) {
+    // PTRC adds virtual tables to the collection with no storage handler.
+    m_ref_and_null_bytes_size += table->file->ref_length;
+  }
+
+  if (table->is_nullable()) {
+    m_ref_and_null_bytes_size += sizeof(table->null_row);
+  }
+
+  if (tab->has_blob_column) m_has_blob_column = true;
+
+  if (tab->copy_null_flags) {
+    m_ref_and_null_bytes_size += table->s->null_bytes;
+  }
+
+  m_tables.push_back(*tab);
+}
+
 void TableCollection::AddTable(TABLE *tab, bool store_contents_of_null_rows) {
   // When constructing the iterator tree, we might end up adding a
   // WeedoutIterator _after_ a HashJoinIterator has been constructed.
@@ -86,7 +111,9 @@ void TableCollection::AddTable(TABLE *tab, bool store_contents_of_null_rows) {
   // account here. To overcome this, we always assume that the row ID should
   // be kept; reserving some extra bytes in a few buffers should not be an
   // issue.
-  m_ref_and_null_bytes_size += tab->file->ref_length;
+  if (tab->has_storage_handler()) {
+    m_ref_and_null_bytes_size += tab->file->ref_length;
+  }
 
   // Reserve one byte for the null_row flag, if the table is nullable.
   if (tab->is_nullable()) {
@@ -121,6 +148,45 @@ void TableCollection::AddTable(TABLE *tab, bool store_contents_of_null_rows) {
   table.store_contents_of_null_rows = store_contents_of_null_rows;
 
   m_tables.push_back(std::move(table));
+}
+
+void TableCollection::print(String &str_cols) {
+  std::vector<std::string> key_cols;
+  for (const Table &table : m_tables) {
+    for (const Column &column : table.columns) {
+      std::string str;
+      TABLE *tab = table.table;
+      str.append(tab->alias);
+      str.append(".");
+      str.append(column.field->field_name);
+      key_cols.emplace_back(str);
+    }
+  }
+
+  std::sort(key_cols.begin(), key_cols.end());
+  bool first = true;
+  for (const auto &col : key_cols) {
+    if (!first) str_cols.append(", ");
+    first = false;
+    str_cols.append(col.c_str());
+  }
+}
+
+void Table::AddColumn(Field *col) {
+  if (col->is_flag_set(BLOB_FLAG) || col->is_array()) {
+    has_blob_column = true;
+  }
+
+  if (!col->is_flag_set(NOT_NULL_FLAG)) {
+    copy_null_flags = true;
+  }
+
+  if (col->type() == MYSQL_TYPE_BIT &&
+      down_cast<const Field_bit *>(col)->bit_len > 0) {
+    copy_null_flags = true;
+  }
+
+  columns.emplace_back(col);
 }
 
 // Calculate how many bytes the data in the column uses. We don't bother
@@ -283,7 +349,8 @@ void RequestRowId(const Prealloced_array<Table, 4> &tables,
                   table_map tables_to_get_rowid_for) {
   for (const Table &it : tables) {
     const TABLE *table = it.table;
-    if ((tables_to_get_rowid_for & table->pos_in_table_list->map()) &&
+    if (table->pos_in_table_list != nullptr &&
+        (tables_to_get_rowid_for & table->pos_in_table_list->map()) &&
         can_call_position(table)) {
       table->file->position(table->record[0]);
     }
@@ -293,7 +360,8 @@ void RequestRowId(const Prealloced_array<Table, 4> &tables,
 void PrepareForRequestRowId(const Prealloced_array<Table, 4> &tables,
                             table_map tables_to_get_rowid_for) {
   for (const Table &it : tables) {
-    if (tables_to_get_rowid_for & it.table->pos_in_table_list->map()) {
+    if (it.table->pos_in_table_list != nullptr &&
+        (tables_to_get_rowid_for & it.table->pos_in_table_list->map())) {
       it.table->prepare_for_position();
     }
   }

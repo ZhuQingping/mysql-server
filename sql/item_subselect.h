@@ -31,6 +31,7 @@
 
 #include <cstddef>
 #include <memory>  // unique_ptr
+#include <set>
 #include <vector>
 
 #include "field_types.h"  // enum_field_types
@@ -71,9 +72,21 @@ class my_decimal;
 class subselect_indexsubquery_engine;
 struct AccessPath;
 class Table_ref;
+namespace ptrc {
+struct PathParameters;
+}
 
 template <class T>
 class List;
+
+/**
+  Collects fields from upper query blocks that a subquery depends on.
+*/
+struct Dependent_item_params {
+  int nest_level{0};
+  std::set<Field *> parameters;
+  Query_block *first_select{nullptr};
+};
 
 /* base class for subselects */
 
@@ -258,6 +271,7 @@ class Item_subselect : public Item_result_field {
   Item *replace_item_field(uchar *arg) override;
   Item *replace_item_view_ref(uchar *arg) override;
   Item *replace_item(Item_transformer t, uchar *arg);
+  void get_item_params(const THD *thd, Dependent_item_params *params);
 
   friend class Query_result_interceptor;
   friend class Item_in_optimizer;
@@ -706,6 +720,7 @@ class Item_in_subselect : public Item_exists_subselect {
   friend class Item_in_optimizer;
   friend class subselect_indexsubquery_engine;
   friend class subselect_hash_sj_engine;
+  friend struct ptrc::PathParameters;
 
  private:
   bool val_bool_naked();

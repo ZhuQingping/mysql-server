@@ -79,6 +79,7 @@
 #include "sql/mysqld.h"              // global_system_variables ...
 #include "sql/mysqld_thd_manager.h"  // Global_THD_manager
 #include "sql/parse_location.h"
+#include "sql/partial_result_cache.h"
 #include "sql/protocol.h"
 #include "sql/protocol_classic.h"
 #include "sql/psi_memory_key.h"
@@ -1836,6 +1837,14 @@ void THD::cleanup_after_query() {
   if (rli_slave) rli_slave->cleanup_after_query();
   // Set the default "cute" mode for the execution environment:
   check_for_truncated_fields = CHECK_FIELD_IGNORE;
+
+  /*
+    PTRC may allocate Item objects on its private MEM_ROOT while the normal
+    Item constructor still links them into the THD item list. Keep the PTRC
+    root alive until after cleanup_items() and free_items() have walked that
+    list.
+  */
+  if (!in_sub_stmt) ptrc::cleanup(this);
 }
 
 /*

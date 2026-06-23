@@ -49,6 +49,7 @@
 #include "sql/join_optimizer/relational_expression.h"
 #include "sql/opt_explain.h"
 #include "sql/opt_explain_traditional.h"
+#include "sql/partial_result_cache.h"
 #include "sql/query_result.h"
 #include "sql/range_optimizer/group_index_skip_scan_plan.h"
 #include "sql/range_optimizer/index_skip_scan_plan.h"
@@ -1630,6 +1631,15 @@ static std::unique_ptr<Json_object> SetObjectMembers(
       }
       description = string("Update ") + tables;
       children->push_back({path->update_rows().child});
+      break;
+    }
+    case AccessPath::PARTIAL_RESULT_CACHE: {
+      char buff[256];
+      String cache_keys(buff, sizeof(buff), system_charset_info);
+      ptrc::print(path, &cache_keys, current_thd);
+
+      description = string(cache_keys.ptr());
+      children->push_back({path->ptrc().child});
       break;
     }
   }

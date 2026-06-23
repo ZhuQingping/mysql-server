@@ -132,6 +132,10 @@ static bool parse_int(longlong *to, const char *from, size_t from_length)
 %token DERIVED_CONDITION_PUSHDOWN_HINT 1047
 %token NO_DERIVED_CONDITION_PUSHDOWN_HINT 1048
 %token HINT_ARG_FLOATING_POINT_NUMBER 1049
+%token PRC_SUBQUERY_HINT 1050
+%token NO_PRC_SUBQUERY_HINT 1051
+%token PRC_JOIN_HINT 1052
+%token NO_PRC_JOIN_HINT 1053
 
 /*
   YYUNDEF in internal to Bison. Please don't change its number, or change
@@ -170,10 +174,13 @@ static bool parse_int(longlong *to, const char *from, size_t from_length)
 
 %type <hint_param_table>
   hint_param_table
+  hint_param_table_empty_qb
   hint_param_table_ext
 
 %type <hint_param_table_list>
   hint_param_table_list
+  hint_param_table_list_empty_qb
+  opt_hint_param_table_list_empty_qb
   opt_hint_param_table_list
 
 %type <lexer.hint_string>
@@ -259,6 +266,11 @@ opt_hint_param_table_list:
         | hint_param_table_list
         ;
 
+opt_hint_param_table_list_empty_qb:
+          %empty { $$.init(thd->mem_root); }
+        | hint_param_table_list_empty_qb
+        ;
+
 hint_param_table_list:
           hint_param_table
           {
@@ -267,6 +279,21 @@ hint_param_table_list:
               YYABORT; // OOM
           }
         | hint_param_table_list ',' hint_param_table
+          {
+            if ($1.push_back($3))
+              YYABORT; // OOM
+            $$= $1;
+          }
+        ;
+
+hint_param_table_list_empty_qb:
+          hint_param_table_empty_qb
+          {
+            $$.init(thd->mem_root);
+            if ($$.push_back($1))
+              YYABORT; // OOM
+          }
+        | hint_param_table_list_empty_qb ',' hint_param_table_empty_qb
           {
             if ($1.push_back($3))
               YYABORT; // OOM
@@ -303,6 +330,14 @@ hint_param_table:
           {
             $$.table= $1;
             $$.opt_query_block= $2;
+          }
+        ;
+
+hint_param_table_empty_qb:
+          HINT_ARG_IDENT
+          {
+            $$.table= $1;
+            $$.opt_query_block= NULL_CSTR;
           }
         ;
 
@@ -387,6 +422,34 @@ qb_level_hint:
           JOIN_FIXED_ORDER_HINT '(' opt_qb_name  ')'
           {
             $$= NEW_PTN PT_qb_level_hint($3, true, JOIN_FIXED_ORDER_HINT_ENUM, 0);
+            if ($$ == NULL)
+              YYABORT; // OOM
+          }
+          |
+          PRC_SUBQUERY_HINT '(' opt_qb_name opt_hint_param_table_list_empty_qb ')'
+          {
+            $$= NEW_PTN PT_qb_level_hint($3, true, PRC_SUBQUERY_HINT_ENUM, $4);
+            if ($$ == NULL)
+              YYABORT; // OOM
+          }
+          |
+          NO_PRC_SUBQUERY_HINT '(' opt_qb_name opt_hint_param_table_list_empty_qb ')'
+          {
+            $$= NEW_PTN PT_qb_level_hint($3, false, PRC_SUBQUERY_HINT_ENUM, $4);
+            if ($$ == NULL)
+              YYABORT; // OOM
+          }
+          |
+          PRC_JOIN_HINT '(' opt_qb_name opt_hint_param_table_list_empty_qb ')'
+          {
+            $$= NEW_PTN PT_qb_level_hint($3, true, PRC_JOIN_HINT_ENUM, $4);
+            if ($$ == NULL)
+              YYABORT; // OOM
+          }
+          |
+          NO_PRC_JOIN_HINT '(' opt_qb_name opt_hint_param_table_list_empty_qb ')'
+          {
+            $$= NEW_PTN PT_qb_level_hint($3, false, PRC_JOIN_HINT_ENUM, $4);
             if ($$ == NULL)
               YYABORT; // OOM
           }

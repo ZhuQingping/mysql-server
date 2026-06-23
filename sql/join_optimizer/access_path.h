@@ -67,6 +67,10 @@ struct POSITION;
 struct RelationalExpression;
 struct TABLE;
 
+namespace ptrc {
+struct PathParameters;
+}  // namespace ptrc
+
 /**
   A specification that two specific relational expressions
   (e.g., two tables, or a table and a join between two other tables)
@@ -261,6 +265,9 @@ struct AccessPath {
     // Access paths that modify tables.
     DELETE_ROWS,
     UPDATE_ROWS,
+
+    // Partial result cache.
+    PARTIAL_RESULT_CACHE,
   } type;
 
   /// A general enum to describe the safety of a given operation.
@@ -843,6 +850,14 @@ struct AccessPath {
     assert(type == UPDATE_ROWS);
     return u.update_rows;
   }
+  auto &ptrc() {
+    assert(type == PARTIAL_RESULT_CACHE);
+    return u.partial_result_cache;
+  }
+  const auto &ptrc() const {
+    assert(type == PARTIAL_RESULT_CACHE);
+    return u.partial_result_cache;
+  }
 
   double num_output_rows() const { return m_num_output_rows; }
 
@@ -1212,6 +1227,10 @@ struct AccessPath {
       table_map tables_to_update;
       table_map immediate_tables;
     } update_rows;
+    struct {
+      AccessPath *child;
+      ptrc::PathParameters *param;
+    } partial_result_cache;
   } u;
 };
 static_assert(std::is_trivially_destructible<AccessPath>::value,

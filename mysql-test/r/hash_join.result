@@ -3847,16 +3847,17 @@ EXPLAIN
         -> Hash
             -> Table scan on t1  (cost=0.225 rows=2)
     -> Select #2 (subquery in condition; dependent)
-        -> Limit: 1 row(s)  (cost=2.15 rows=1)
-            -> Filter: (<if>(outer_field_is_not_null, ((<cache>(t1.str_col) = c1_1.str_col) or (c1_1.str_col is null)), true) and <if>(outer_field_is_not_null, ((<cache>(t1.str_col) = min(c1_2.str_col)) or (min(c1_2.str_col) is null)), true) and <if>(outer_field_is_not_null, <is_not_null_test>(c1_1.str_col), true) and <if>(outer_field_is_not_null, <is_not_null_test>(min(c1_2.str_col)), true))  (cost=2.15 rows=1)
-                -> Aggregate: min(c1_2.str_col)  (cost=2.15 rows=1)
-                    -> Inner hash join (t3.i = c1_2.i)  (cost=1.75 rows=4)
-                        -> Table scan on t3  (cost=0.0875 rows=1)
-                        -> Hash
-                            -> Inner hash join (no condition)  (cost=1.1 rows=4)
-                                -> Index scan on c1_2 using idx  (cost=0.225 rows=2)
-                                -> Hash
-                                    -> Index scan on c1_1 using idx  (cost=0.45 rows=2)
+        -> Result cache : cache keys(t1.str_col)
+            -> Limit: 1 row(s)  (cost=2.15 rows=1)
+                -> Filter: (<if>(outer_field_is_not_null, ((<cache>(t1.str_col) = c1_1.str_col) or (c1_1.str_col is null)), true) and <if>(outer_field_is_not_null, ((<cache>(t1.str_col) = min(c1_2.str_col)) or (min(c1_2.str_col) is null)), true) and <if>(outer_field_is_not_null, <is_not_null_test>(c1_1.str_col), true) and <if>(outer_field_is_not_null, <is_not_null_test>(min(c1_2.str_col)), true))  (cost=2.15 rows=1)
+                    -> Aggregate: min(c1_2.str_col)  (cost=2.15 rows=1)
+                        -> Inner hash join (t3.i = c1_2.i)  (cost=1.75 rows=4)
+                            -> Table scan on t3  (cost=0.0875 rows=1)
+                            -> Hash
+                                -> Inner hash join (no condition)  (cost=1.1 rows=4)
+                                    -> Index scan on c1_2 using idx  (cost=0.225 rows=2)
+                                    -> Hash
+                                        -> Index scan on c1_1 using idx  (cost=0.45 rows=2)
 
 SELECT 1 FROM t1 RIGHT JOIN t2 ON t2.str_col = t1.str_col
 WHERE (t1.str_col, t1.str_col) NOT IN (

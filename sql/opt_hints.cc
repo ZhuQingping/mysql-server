@@ -86,6 +86,8 @@ struct st_opt_hint_info opt_hint_info[] = {
     {"GROUP_INDEX", false, false, false},
     {"ORDER_INDEX", false, false, false},
     {"DERIVED_CONDITION_PUSHDOWN", true, true, false},
+    {"PRC_SUBQUERY", false, true, false},
+    {"PRC_JOIN", false, true, false},
     {nullptr, false, false, false}};
 
 /**
@@ -207,6 +209,7 @@ Opt_hints_qb::Opt_hints_qb(Opt_hints *opt_hints_arg, MEM_ROOT *mem_root_arg,
       subquery_hint(nullptr),
       semijoin_hint(nullptr),
       join_order_hints(mem_root_arg),
+      ptrc_hints(mem_root_arg),
       join_order_hints_ignored(0) {
   sys_name.str = buff;
   sys_name.length =
@@ -523,6 +526,72 @@ void Opt_hints_qb::apply_join_order_hints(JOIN *join) {
     if (set_join_hint_deps(join, hint_table_list, hint->type()))
       //  Skip hint printing in EXPLAIN message.
       join_order_hints_ignored |= 1ULL << hint_idx;
+  }
+}
+
+void Opt_hints_qb::apply_ptrc_hints(JOIN *join, table_map *force_tab_map,
+                                    table_map *ignore_tab_map,
+                                    bool *force_subquery_ptrc,
+                                    bool *force_no_subquery_ptrc,
+                                    bool *force_join_ptrc,
+                                    bool *ignore_join_ptrc) {
+  THD *thd = join->thd;
+  for (uint hint_idx = 0; hint_idx < ptrc_hints.size(); hint_idx++) {
+    PT_qb_level_hint *hint = ptrc_hints[hint_idx];
+    Hint_param_table_list *hint_table_list = hint->get_table_list();
+    if (hint->type() == PRC_SUBQUERY_HINT_ENUM) {
+      if (!hint_table_list->empty()) {
+        push_warning_printf(thd, Sql_condition::SL_WARNING,
+                            ER_WARN_INVALID_HINT,
+                            ER_THD(thd, ER_WARN_INVALID_HINT),
+                            "PRC_SUBQUERY");
+        continue;
+      }
+      if (hint->switch_on())
+        *force_subquery_ptrc = true;
+      else
+        *force_no_subquery_ptrc = true;
+      continue;
+    }
+
+    assert(hint->type() == PRC_JOIN_HINT_ENUM);
+    table_map hint_table_map = 0;
+    for (const Hint_param_table *hint_table = hint_table_list->begin();
+         hint_table < hint_table_list->end(); hint_table++) {
+      bool hint_table_found = false;
+      for (uint i = 0; i < join->tables; i++) {
+        const Table_ref *table = join->qep_tab[i].table_ref;
+        if (table != nullptr && !compare_table_name(hint_table, table)) {
+          hint_table_found = true;
+          hint_table_map |= table->map();
+          break;
+        }
+      }
+
+      if (!hint_table_found) {
+        print_join_order_warn(thd, PRC_JOIN_HINT_ENUM, hint_table);
+      }
+    }
+
+    if (hint->switch_on()) {
+      if (hint_table_map == 0)
+        *force_join_ptrc = true;
+      else
+        *force_tab_map |= hint_table_map;
+    } else {
+      if (hint_table_map == 0)
+        *ignore_join_ptrc = true;
+      else
+        *ignore_tab_map |= hint_table_map;
+    }
+
+    if (*force_tab_map & *ignore_tab_map) {
+      *force_tab_map = 0;
+      *ignore_tab_map = 0;
+      push_warning_printf(thd, Sql_condition::SL_WARNING,
+                          ER_WARN_CONFLICTING_HINT,
+                          ER_THD(thd, ER_WARN_CONFLICTING_HINT), "ptrc");
+    }
   }
 }
 

@@ -500,6 +500,11 @@ struct System_variables {
     @sa Sys_explain_format
    */
   Explain_format_type explain_format;
+
+  ulonglong partial_result_cache_max_mem_size;
+  double partial_result_cache_cost_threshold;
+  double partial_result_cache_min_hit_ratio;
+  uint partial_result_cache_check_hit_ratio_frequency;
 };
 
 /**

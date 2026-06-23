@@ -124,12 +124,15 @@ class HashJoinRowBuffer {
                     std::vector<HashJoinCondition> join_conditions,
                     size_t max_mem_available_bytes);
 
+  HashJoinRowBuffer(size_t max_mem_available_bytes,
+                    MEM_ROOT *mem_root = nullptr);
+
   ~HashJoinRowBuffer();
 
   // Initialize the HashJoinRowBuffer so it is ready to store rows. This
   // function can be called multiple times; subsequent calls will only clear the
   // buffer for existing rows.
-  bool Init();
+  bool Init(bool is_ptrc = false);
 
   /// Store the row that is currently lying in the tables record buffers.
   /// The hash map key is extracted from the join conditions that the row buffer
@@ -146,6 +149,16 @@ class HashJoinRowBuffer {
   ///         my_error().
   StoreRowResult StoreRow(THD *thd, bool reject_duplicate_keys);
 
+  /// Store a PTRC key/value pair directly. The normal hash join path builds
+  /// keys from join conditions; PTRC has already packed both key and result
+  /// rows before calling this function.
+  ///
+  /// To preserve scan order for all rows with the same key, duplicate-key rows
+  /// are appended at the tail of that key's row chain.
+  StoreRowResult StoreRow(char *key_data, size_t key_size, char *key_store_pos,
+                          char *val_data, size_t val_size,
+                          char *val_store_pos);
+
   size_t size() const;
 
   bool empty() const { return size() == 0; }
@@ -158,10 +171,19 @@ class HashJoinRowBuffer {
     assert(Initialized());
     return m_last_row_stored;
   }
+  size_t LastRowLengthStored() const { return m_last_row_length_stored; }
 
   bool Initialized() const { return m_hash_map != nullptr; }
 
   bool contains(const Key &key) const { return find(key).has_value(); }
+
+  void erase(Key key);
+
+  ImmutableStringWithLength LastKeyStored() const {
+    assert(Initialized());
+    return m_last_key_stored;
+  }
+  size_t LastKeyLengthStored() const { return m_last_key_length_stored; }
 
  private:
   // The type of hash map in which the rows are stored.
@@ -174,8 +196,9 @@ class HashJoinRowBuffer {
   const pack_rows::TableCollection m_tables;
 
   // The MEM_ROOT on which all of the hash table keys and values are allocated.
-  // The actual hash map is on the regular heap.
-  MEM_ROOT m_mem_root;
+  // The actual hash map is on the regular heap. PTRC may pass in a MEM_ROOT
+  // owned by its query-lifetime memory context.
+  MEM_ROOT *m_mem_root;
 
   // A MEM_ROOT used only for storing the final row (possibly both key and
   // value). The code assumes fairly deeply that inserting a row never fails, so
@@ -203,6 +226,15 @@ class HashJoinRowBuffer {
   // hash join may put any row in the hash table in the tables' record buffer).
   // See HashJoinIterator::BuildHashTable() for an example of this.
   LinkedImmutableString m_last_row_stored{nullptr};
+  size_t m_last_row_length_stored{0};
+  ImmutableStringWithLength m_last_key_stored{nullptr};
+  size_t m_last_key_length_stored{0};
+
+  bool m_owned_mem_root{false};
+
+  // Tail row for each key, used only by PTRC's direct StoreRow() API to append
+  // duplicate-key rows in scan order without walking the whole row chain.
+  std::unique_ptr<HashMap> m_all_last_rows{nullptr};
 
   // Fetch the relevant fields from each table, and pack them into m_mem_root
   // as a LinkedImmutableString where the “next” pointer points to “next_ptr”.

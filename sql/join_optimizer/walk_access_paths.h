@@ -239,6 +239,10 @@ void WalkAccessPaths(AccessPathPtr path, JoinPtr join,
       WalkAccessPaths(path->update_rows().child, join, cross_query_blocks,
                       std::forward<Func &&>(func), post_order_traversal);
       break;
+    case AccessPath::PARTIAL_RESULT_CACHE:
+      WalkAccessPaths(path->ptrc().child, join, cross_query_blocks,
+                      std::forward<Func &&>(func), post_order_traversal);
+      break;
   }
   if (post_order_traversal) {
     if (func(path, join)) {
@@ -337,6 +341,7 @@ void WalkTablesUnderAccessPath(AccessPath *root_path, Func &&func,
           case AccessPath::ROWID_UNION:
           case AccessPath::DELETE_ROWS:
           case AccessPath::UPDATE_ROWS:
+          case AccessPath::PARTIAL_RESULT_CACHE:
             return false;
         }
         assert(false);

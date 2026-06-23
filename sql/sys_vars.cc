@@ -208,7 +208,8 @@ static constexpr const unsigned long long OPTIMIZER_SWITCH_DEFAULT{
     OPTIMIZER_SWITCH_COND_FANOUT_FILTER | OPTIMIZER_SWITCH_DERIVED_MERGE |
     OPTIMIZER_SKIP_SCAN | OPTIMIZER_SWITCH_HASH_JOIN |
     OPTIMIZER_SWITCH_PREFER_ORDERING_INDEX |
-    OPTIMIZER_SWITCH_DERIVED_CONDITION_PUSHDOWN};
+    OPTIMIZER_SWITCH_DERIVED_CONDITION_PUSHDOWN |
+    OPTIMIZER_SWITCH_PARTIAL_RESULT_CACHE};
 
 static constexpr const unsigned long MYSQLD_NET_RETRY_COUNT{10};
 
@@ -3462,6 +3463,7 @@ static const char *optimizer_switch_names[] = {
     "prefer_ordering_index",
     "hypergraph_optimizer",  // Deliberately not documented below.
     "derived_condition_pushdown",
+    "partial_result_cache",
     "default",
     NullS};
 static Sys_var_flagset Sys_optimizer_switch(
@@ -3475,11 +3477,43 @@ static Sys_var_flagset Sys_optimizer_switch(
     " block_nested_loop, batched_key_access, use_index_extensions,"
     " condition_fanout_filter, derived_merge, hash_join,"
     " subquery_to_derived, prefer_ordering_index,"
-    " derived_condition_pushdown} and val is one of "
+    " derived_condition_pushdown, partial_result_cache} and val is one of "
     "{on, off, default}",
     HINT_UPDATEABLE SESSION_VAR(optimizer_switch), CMD_LINE(REQUIRED_ARG),
     optimizer_switch_names, DEFAULT(OPTIMIZER_SWITCH_DEFAULT), NO_MUTEX_GUARD,
     NOT_IN_BINLOG, ON_CHECK(check_optimizer_switch), ON_UPDATE(nullptr));
+
+static Sys_var_ulonglong Sys_partial_result_cache_max_mem_size(
+    "rds_partial_result_cache_max_mem_size",
+    "Maximum allowed cumulated size of partial result cache per statement",
+    SESSION_VAR(partial_result_cache_max_mem_size), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(64 * 1024, ULONG_MAX), DEFAULT(16 * 1024 * 1024),
+    BLOCK_SIZE(1));
+
+static Sys_var_double Sys_partial_result_cost_threshold(
+    "rds_partial_result_cache_cost_threshold",
+    "This option indicates the threshold cost for choosing partial result "
+    "cache. If estimated cost is over this threshold, partial result cache can "
+    "be used. Otherwise not.",
+    SESSION_VAR(partial_result_cache_cost_threshold), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, DBL_MAX), DEFAULT(0.5));
+
+static Sys_var_double Sys_partial_result_min_hit_ratio(
+    "rds_partial_result_cache_min_hit_ratio",
+    "This option indicates the minimal hit ratio during partial result cache "
+    "works. If the hit ratio is lower than this value, partial result cache "
+    "will be disabled dynamically.",
+    SESSION_VAR(partial_result_cache_min_hit_ratio), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, DBL_MAX), DEFAULT(0.2));
+
+static Sys_var_uint Sys_partial_result_check_hit_ratio_frequency(
+    "rds_partial_result_cache_hit_ratio_frequency",
+    "This option indicates a frequency to check whether hit ratio is over "
+    "minimal hit ratio during partial result cache works. Every this value of "
+    "cache misses, such a check will be done.",
+    SESSION_VAR(partial_result_cache_check_hit_ratio_frequency),
+    CMD_LINE(REQUIRED_ARG), VALID_RANGE(1, UINT_MAX), DEFAULT(200),
+    BLOCK_SIZE(1));
 
 static PolyLock_mutex PLock_global_conn_mem_limit(&LOCK_global_conn_mem_limit);
 

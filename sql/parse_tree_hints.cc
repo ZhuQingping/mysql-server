@@ -271,6 +271,10 @@ bool PT_qb_level_hint::contextualize(Parse_context *pc) {
       else
         pc->select->add_base_options(SELECT_STRAIGHT_JOIN);
       break;
+    case PRC_SUBQUERY_HINT_ENUM:
+    case PRC_JOIN_HINT_ENUM:
+      qb->register_ptrc_hint(this);
+      break;
     default:
       assert(0);
   }
@@ -321,6 +325,8 @@ void PT_qb_level_hint::append_args(const THD *thd, String *str) const {
     case JOIN_PREFIX_HINT_ENUM:
     case JOIN_SUFFIX_HINT_ENUM:
     case JOIN_ORDER_HINT_ENUM:
+    case PRC_SUBQUERY_HINT_ENUM:
+    case PRC_JOIN_HINT_ENUM:
       for (uint i = 0; i < table_list.size(); i++) {
         const Hint_param_table *table_name = &table_list.at(i);
         if (i != 0) str->append(',');

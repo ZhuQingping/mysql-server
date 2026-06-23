@@ -102,8 +102,14 @@ class Dummy_error_handler : public Internal_error_handler {
                         Sql_condition::enum_severity_level *,
                         const char *) override {
     /* Ignore error */
+    m_error_handled = true;
     return true;
   }
+
+  bool is_error_handled() const { return m_error_handled; }
+
+ private:
+  bool m_error_handled{false};
 };
 
 /**

@@ -38,6 +38,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <limits>
 #include <string_view>
@@ -53,6 +54,8 @@ MY_COMPILER_DIAGNOSTIC_POP()
 
 #include "template_utils.h"
 
+static constexpr int kMaxVarintBytes = 10;
+
 /**
  * The variant with length (ImmutableStringWithLength) stores the length as a
  * Varint128 (similar to protobuf), immediately followed by the string itself.
@@ -64,6 +67,9 @@ class ImmutableStringWithLength {
  public:
   ImmutableStringWithLength() = default;
   explicit ImmutableStringWithLength(const char *encoded) : m_ptr(encoded) {}
+  explicit ImmutableStringWithLength(const char *encoded,
+                                     bool is_pad_to_max_length)
+      : m_ptr(encoded), m_pad_to_max_length(is_pad_to_max_length) {}
 
   inline std::string_view Decode() const;
 
@@ -72,21 +78,24 @@ class ImmutableStringWithLength {
   /// of bytes returned by RequiredBytesForEncode.
   ///
   /// “dst” is moved to one byte past the end of the written stream.
-  static inline ImmutableStringWithLength Encode(const char *data,
-                                                 size_t length, char **dst);
+  static inline ImmutableStringWithLength Encode(
+      const char *data, size_t length, char **dst,
+      bool is_pad_to_max_length = false);
 
   /// Calculates an upper bound on the space required for encoding a string
   /// of the given length.
   static inline size_t RequiredBytesForEncode(size_t length) {
-    static constexpr int kMaxVarintBytes = 10;
     return kMaxVarintBytes + length;
   }
 
   /// Compares full contents (data/size).
   inline bool operator==(ImmutableStringWithLength other) const;
+  inline bool IsEmpty() const { return m_ptr == nullptr; }
+  inline const char *GetDataPointer() const { return m_ptr; }
 
  private:
   const char *m_ptr = nullptr;
+  bool m_pad_to_max_length = false;
 };
 
 // From protobuf.
@@ -129,24 +138,41 @@ inline const char *VarintParse64(const char *p, uint64_t *out) {
 
 std::string_view ImmutableStringWithLength::Decode() const {
   uint64_t size;
+  if (m_ptr == nullptr) {
+    return {nullptr, static_cast<size_t>(0)};
+  }
   const char *data = VarintParse64(m_ptr, &size);
+  if (m_pad_to_max_length) {
+    const int zero_padded_size =
+        kMaxVarintBytes - static_cast<int>(data - m_ptr);
+    assert(zero_padded_size >= 0);
+    data += zero_padded_size;
+  }
   return {data, static_cast<size_t>(size)};
 }
 
 ImmutableStringWithLength ImmutableStringWithLength::Encode(const char *data,
                                                             size_t length,
-                                                            char **dst) {
+                                                            char **dst,
+                                                            bool is_pad_to_max_length) {
   using google::protobuf::io::CodedOutputStream;
 
   const char *base = *dst;
   uint8_t *ptr = CodedOutputStream::WriteVarint64ToArray(
       length, pointer_cast<uint8_t *>(*dst));
+  if (is_pad_to_max_length) {
+    const int zero_padded_size =
+        kMaxVarintBytes - static_cast<int>(pointer_cast<char *>(ptr) - base);
+    assert(zero_padded_size >= 0);
+    memset(ptr, 0, zero_padded_size);
+    ptr += zero_padded_size;
+  }
   if (length != 0) {  // Avoid sending nullptr to memcpy().
     memcpy(ptr, data, length);
   }
   *dst = pointer_cast<char *>(ptr + length);
 
-  return ImmutableStringWithLength(base);
+  return ImmutableStringWithLength(base, is_pad_to_max_length);
 }
 
 bool ImmutableStringWithLength::operator==(
@@ -179,6 +205,7 @@ class LinkedImmutableString {
   explicit LinkedImmutableString(const char *encoded) : m_ptr(encoded) {}
 
   inline Decoded Decode() const;
+  inline Decoded DecodeFixed() const;
 
   /// Encode the given string and “next” pointer as a header for
   /// LinkedImmutableString, and returns a new object pointing to it.
@@ -191,16 +218,18 @@ class LinkedImmutableString {
   /// written stream (which is the right place to store the string itself).
   static inline LinkedImmutableString EncodeHeader(LinkedImmutableString next,
                                                    char **dst);
+  static inline LinkedImmutableString EncodeFixedHeader(
+      LinkedImmutableString next, char **dst);
 
   /// Calculates an upper bound on the space required for encoding a string
   /// of the given length.
   static inline size_t RequiredBytesForEncode(size_t length) {
-    static constexpr int kMaxVarintBytes = 10;
     return kMaxVarintBytes + length;
   }
 
   inline bool operator==(std::nullptr_t) const { return m_ptr == nullptr; }
   inline bool operator!=(std::nullptr_t) const { return m_ptr != nullptr; }
+  inline const char *GetDataPointer() const { return m_ptr; }
 
  private:
   const char *m_ptr;
@@ -224,6 +253,23 @@ LinkedImmutableString::Decoded LinkedImmutableString::Decode() const {
   return decoded;
 }
 
+LinkedImmutableString::Decoded LinkedImmutableString::DecodeFixed() const {
+  LinkedImmutableString::Decoded decoded;
+  uint64_t ptr_diff;
+  assert(m_ptr != nullptr);
+  const char *ptr = VarintParse64(m_ptr, &ptr_diff);
+  const int zero_padded_size =
+      kMaxVarintBytes - static_cast<int>(ptr - m_ptr);
+  assert(zero_padded_size >= 0);
+  decoded.data = ptr + zero_padded_size;
+  if (ptr_diff == 0) {
+    decoded.next = LinkedImmutableString{nullptr};
+  } else {
+    decoded.next = LinkedImmutableString(m_ptr + ZigZagDecode64(ptr_diff));
+  }
+  return decoded;
+}
+
 LinkedImmutableString LinkedImmutableString::EncodeHeader(
     LinkedImmutableString next, char **dst) {
   using google::protobuf::io::CodedOutputStream;
@@ -236,6 +282,27 @@ LinkedImmutableString LinkedImmutableString::EncodeHeader(
     ptr = CodedOutputStream::WriteVarint64ToArray(
         ZigZagEncode64(next.m_ptr - base), ptr);
   }
+  *dst = pointer_cast<char *>(ptr);
+  return LinkedImmutableString(base);
+}
+
+LinkedImmutableString LinkedImmutableString::EncodeFixedHeader(
+    LinkedImmutableString next, char **dst) {
+  using google::protobuf::io::CodedOutputStream;
+
+  const char *base = *dst;
+  uint8_t *ptr = pointer_cast<uint8_t *>(*dst);
+  if (next.m_ptr == nullptr) {
+    *ptr++ = 0;
+  } else {
+    ptr = CodedOutputStream::WriteVarint64ToArray(
+        ZigZagEncode64(next.m_ptr - base), ptr);
+  }
+  const int zero_padded_size =
+      kMaxVarintBytes - static_cast<int>(pointer_cast<char *>(ptr) - base);
+  assert(zero_padded_size >= 0);
+  memset(ptr, 0, zero_padded_size);
+  ptr += zero_padded_size;
   *dst = pointer_cast<char *>(ptr);
   return LinkedImmutableString(base);
 }

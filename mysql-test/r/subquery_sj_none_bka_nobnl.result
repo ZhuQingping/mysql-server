@@ -5876,15 +5876,17 @@ EXPLAIN
         -> Filter: ((ot2.a = ot1.a) and <in_optimizer>(ot1.a,<exists>(select #2)))  (rows=4)
             -> Table scan on ot2  (rows=4)
             -> Select #2 (subquery in condition; dependent)
-                -> Limit: 1 row(s)  (rows=1)
-                    -> Filter: (<cache>(ot1.a) = it3.a)  (rows=1)
-                        -> Table scan on it3  (rows=3)
+                -> Result cache : cache keys(ot1.a)
+                    -> Limit: 1 row(s)  (rows=1)
+                        -> Filter: (<cache>(ot1.a) = it3.a)  (rows=1)
+                            -> Table scan on it3  (rows=3)
     -> Filter: ((ot3.a = ot2.a) and <in_optimizer>(ot2.a,<exists>(select #3)))  (rows=3)
         -> Table scan on ot3  (rows=3)
         -> Select #3 (subquery in condition; dependent)
-            -> Limit: 1 row(s)  (rows=1)
-                -> Filter: (<cache>(ot3.a) = it3.a)  (rows=1)
-                    -> Table scan on it3  (rows=3)
+            -> Result cache : cache keys(ot2.a, ot3.a)
+                -> Limit: 1 row(s)  (rows=1)
+                    -> Filter: (<cache>(ot3.a) = it3.a)  (rows=1)
+                        -> Table scan on it3  (rows=3)
 
 SELECT *
 FROM ot1 LEFT JOIN ot2 ON ot1.a=ot2.a AND ot1.a IN (SELECT a FROM it3)
@@ -13280,9 +13282,9 @@ I
 SHOW STATUS LIKE '%handler_read%';
 Variable_name	Value
 Handler_read_first	1
-Handler_read_key	34
+Handler_read_key	18
 Handler_read_last	0
-Handler_read_next	10
+Handler_read_next	3
 Handler_read_prev	0
 Handler_read_rnd	0
 Handler_read_rnd_next	12

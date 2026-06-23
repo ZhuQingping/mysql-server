@@ -828,8 +828,9 @@ The following options may be given as the first argument:
  block_nested_loop, batched_key_access,
  use_index_extensions, condition_fanout_filter,
  derived_merge, hash_join, subquery_to_derived,
- prefer_ordering_index, derived_condition_pushdown} and
- val is one of {on, off, default}
+ prefer_ordering_index, derived_condition_pushdown,
+ partial_result_cache} and val is one of {on, off,
+ default}
  --optimizer-trace=name 
  Controls tracing of the Optimizer:
  optimizer_trace=option=val[,option=val...], where option
@@ -1109,6 +1110,24 @@ The following options may be given as the first argument:
  optimization of a query, index range scan will not be
  considered for this query. A value of 0 means range
  optimizer does not have any cap on memory. 
+ --rds-partial-result-cache-cost-threshold=# 
+ This option indicates the threshold cost for choosing
+ partial result cache. If estimated cost is over this
+ threshold, partial result cache can be used. Otherwise
+ not.
+ --rds-partial-result-cache-hit-ratio-frequency=# 
+ This option indicates a frequency to check whether hit
+ ratio is over minimal hit ratio during partial result
+ cache works. Every this value of cache misses, such a
+ check will be done.
+ --rds-partial-result-cache-max-mem-size=# 
+ Maximum allowed cumulated size of partial result cache
+ per statement
+ --rds-partial-result-cache-min-hit-ratio=# 
+ This option indicates the minimal hit ratio during
+ partial result cache works. If the hit ratio is lower
+ than this value, partial result cache will be disabled
+ dynamically.
  --read-buffer-size=# 
  Each thread that does a sequential scan allocates a
  buffer of this size for each table it scans. If you do
@@ -1869,7 +1888,7 @@ old-style-user-limits FALSE
 optimizer-max-subgraph-pairs 100000
 optimizer-prune-level 1
 optimizer-search-depth 62
-optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on
+optimizer-switch index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,partial_result_cache=on
 optimizer-trace 
 optimizer-trace-features greedy_search=on,range_optimizer=on,dynamic_range=on,repeated_subselect=on
 optimizer-trace-limit 1
@@ -1955,6 +1974,10 @@ query-alloc-block-size 8192
 query-prealloc-size 8192
 range-alloc-block-size 4096
 range-optimizer-max-mem-size 8388608
+rds-partial-result-cache-cost-threshold 0.5
+rds-partial-result-cache-hit-ratio-frequency 200
+rds-partial-result-cache-max-mem-size 16777216
+rds-partial-result-cache-min-hit-ratio 0.2
 read-buffer-size 131072
 read-only FALSE
 read-rnd-buffer-size 262144

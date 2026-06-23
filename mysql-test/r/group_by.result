@@ -4485,6 +4485,8 @@ DROP TABLE t1, t2;
 # Bug#34891365: MySQL 8.0.29+ is slower than MySQL 8.0.28 with
 #               queries using JOINS
 #
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET optimizer_switch='partial_result_cache=off';
 CREATE TABLE t1(a INT AUTO_INCREMENT PRIMARY KEY, b INT, KEY(b));
 INSERT INTO t1(b)
 WITH RECURSIVE qn(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM qn WHERE n<250)
@@ -4776,6 +4778,7 @@ b	COUNT(*)
 SHOW STATUS LIKE 'Handler_read_key';
 Variable_name	Value
 Handler_read_key	501
+SET optimizer_switch=@saved_optimizer_switch;
 DROP TABLE t1, t2, t3;
 CREATE TABLE t1(x INT, y INT);
 CREATE TABLE t2(x INT, y INT);

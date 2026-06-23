@@ -3458,6 +3458,9 @@ DROP TABLE t1, t2;
 --echo #               queries using JOINS
 --echo #
 
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET optimizer_switch='partial_result_cache=off';
+
 CREATE TABLE t1(a INT AUTO_INCREMENT PRIMARY KEY, b INT, KEY(b));
 INSERT INTO t1(b)
 WITH RECURSIVE qn(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM qn WHERE n<250)
@@ -3495,6 +3498,8 @@ FLUSH STATUS;
 --echo # Expect around 500 index reads. 250 from t2 and 250 from t3.
 --echo # It used to be around 16000 index reads.
 SHOW STATUS LIKE 'Handler_read_key';
+
+SET optimizer_switch=@saved_optimizer_switch;
 
 DROP TABLE t1, t2, t3;
 

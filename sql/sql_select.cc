@@ -4237,6 +4237,7 @@ bool JOIN::add_having_as_tmp_table_cond(uint curr_tmp_table) {
     Opt_trace_object(trace, "sort_using_internal_table")
         .add("condition_for_sort", sort_table_cond)
         .add("having_after_sort", having_cond);
+    pushed_having_cond = sort_table_cond;
   }
 
   return false;

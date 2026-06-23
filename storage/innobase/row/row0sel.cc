@@ -3683,8 +3683,23 @@ static inline byte *row_sel_fetch_last_buf(
                             : prebuilt->fetch_cache[prebuilt->n_fetch_cached];
 
   ut_ad(prebuilt->fetch_cache_first == 0);
-  UNIV_MEM_INVALID(buf, record_buffer ? record_buffer->record_size()
-                                      : prebuilt->mysql_row_len);
+  const size_t record_size =
+      record_buffer ? record_buffer->record_size() : prebuilt->mysql_row_len;
+  UNIV_MEM_INVALID(buf, record_size);
+
+  if (prebuilt->m_mysql_table != nullptr) {
+    const size_t null_bytes = prebuilt->m_mysql_table->s->null_bytes;
+    const size_t bytes_to_clear =
+        null_bytes < record_size ? null_bytes : record_size;
+    if (bytes_to_clear > 0) {
+      /*
+        The first bytes of buf are the MySQL NULL bitmap. Bits for
+        non-nullable or non-existent columns may otherwise remain
+        uninitialized, while row packing hashes/copies the complete bitmap.
+      */
+      memset(buf, 0, bytes_to_clear);
+    }
+  }
 
   return (buf);
 }

@@ -8309,7 +8309,8 @@ void Field_enum::sql_type(String &res) const {
 
 Field *Field_enum::new_field(MEM_ROOT *root, TABLE *new_table) const {
   Field_enum *res = down_cast<Field_enum *>(Field::new_field(root, new_table));
-  if (res) res->typelib = copy_typelib(root, typelib);
+  if (res == nullptr || (res->typelib = copy_typelib(root, typelib)) == nullptr)
+    return nullptr;
   return res;
 }
 

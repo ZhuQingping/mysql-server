@@ -72,7 +72,7 @@ struct Column {
 /// When the join or aggregate iterator is constructed, we extract the columns
 /// that are needed to satisfy the SQL query.
 struct Table {
-  explicit Table(TABLE *table_arg);
+  explicit Table(TABLE *table_arg, bool create_fields = true);
   TABLE *table;
   Prealloced_array<Column, 8> columns;
 
@@ -85,6 +85,9 @@ struct Table {
   // accessed with EQRefIterator, so that the cache in EQRefIterator
   // is not disturbed.
   bool store_contents_of_null_rows{false};
+
+  bool has_blob_column{false};
+  void AddColumn(Field *col);
 };
 
 /// A structure that contains a list of input tables for a hash join operation,
@@ -112,9 +115,18 @@ class TableCollection {
     return m_tables_to_get_rowid_for;
   }
 
- private:
-  void AddTable(TABLE *tab, bool store_contents_of_null_rows);
+  void set_store_rowids(bool store_rowids) { m_store_rowids = store_rowids; }
 
+  void set_tables_to_get_rowid_for(table_map map) {
+    m_tables_to_get_rowid_for = map;
+  }
+
+  void clear() { m_tables.clear(); }
+  void AddTable(Table *tab);
+  void AddTable(TABLE *tab, bool store_contents_of_null_rows);
+  void print(String &str);
+
+ private:
   Prealloced_array<Table, 4> m_tables{PSI_NOT_INSTRUMENTED};
 
   // We frequently use the bitmap to determine which side of the join an Item
@@ -216,15 +228,19 @@ void PrepareForRequestRowId(const Prealloced_array<pack_rows::Table, 4> &tables,
 inline bool ShouldCopyRowId(const TABLE *table) {
   // It is not safe to copy the row ID if we have a NULL-complemented row; the
   // value is undefined, or the buffer location can even be nullptr.
-  return !table->const_table && !(table->is_nullable() && table->null_row);
+  return !table->const_table && !(table->is_nullable() && table->null_row) &&
+         table->is_created() && table->has_storage_handler();
 }
 
 ALWAYS_INLINE uchar *StoreFromTableBuffersRaw(const TableCollection &tables,
                                               uchar *dptr) {
   for (const Table &tbl : tables.tables()) {
-    const TABLE *table = tbl.table;
+    TABLE *table = const_cast<TABLE *>(tbl.table);
 
     NullRowFlag null_row_flag = NullRowFlag::kNotNull;
+    // Preserve null-row information for tables that were not marked nullable
+    // before the row-packing call, e.g. read_const paths.
+    if (table->has_null_row()) table->set_nullable();
     if (table->is_nullable()) {
       if (table->has_null_row()) {
         null_row_flag = tbl.store_contents_of_null_rows && table->has_row()

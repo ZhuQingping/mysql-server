@@ -86,6 +86,8 @@ enum opt_hints_enum {
   GROUP_INDEX_HINT_ENUM,
   ORDER_INDEX_HINT_ENUM,
   DERIVED_CONDITION_PUSHDOWN_HINT_ENUM,
+  PRC_SUBQUERY_HINT_ENUM,
+  PRC_JOIN_HINT_ENUM,
   MAX_HINT_ENUM
 };
 
@@ -383,6 +385,8 @@ class Opt_hints_qb : public Opt_hints {
 
   /// Array of join order hints
   Mem_root_array<PT_qb_level_hint *> join_order_hints;
+  /// Array of PTRC hints.
+  Mem_root_array<PT_qb_level_hint *> ptrc_hints;
   /// Bit map of which hints are ignored.
   ulonglong join_order_hints_ignored;
 
@@ -486,9 +490,30 @@ class Opt_hints_qb : public Opt_hints {
   */
   void apply_join_order_hints(JOIN *join);
 
+  /**
+    Checks if PTRC hints are applicable and returns the forced/ignored table
+    maps for nested-loop joins, plus global subquery/join switches.
+
+    @param join JOIN object
+    @param[out] force_tab_map tables forced to use PTRC
+    @param[out] ignore_tab_map tables forced not to use PTRC
+    @param[out] force_subquery_ptrc true if PRC_SUBQUERY forces PTRC
+    @param[out] force_no_subquery_ptrc true if NO_PRC_SUBQUERY disables PTRC
+    @param[out] force_join_ptrc true if global PRC_JOIN forces PTRC
+    @param[out] ignore_join_ptrc true if global NO_PRC_JOIN disables PTRC
+  */
+  void apply_ptrc_hints(JOIN *join, table_map *force_tab_map,
+                        table_map *ignore_tab_map, bool *force_subquery_ptrc,
+                        bool *force_no_subquery_ptrc, bool *force_join_ptrc,
+                        bool *ignore_join_ptrc);
+
  private:
   void register_join_order_hint(PT_qb_level_hint *hint_arg) {
     join_order_hints.push_back(hint_arg);
+  }
+
+  void register_ptrc_hint(PT_qb_level_hint *hint_arg) {
+    ptrc_hints.push_back(hint_arg);
   }
 };
 

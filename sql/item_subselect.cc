@@ -829,6 +829,37 @@ void Item_subselect::update_used_tables() {
   used_tables_cache = m_subquery_used_tables;
 }
 
+void Item_subselect::get_item_params(const THD *,
+                                     Dependent_item_params *params) {
+  /*
+    Walk the subquery, and nested subqueries below it, to find outer references
+    to query blocks above this subquery. In deeper nested subqueries, references
+    to the immediate parent query block are not keys for this subquery's PTRC,
+    so compare the referenced table's nest level with this subquery's level.
+  */
+  WalkItem(this, enum_walk::PREFIX | enum_walk::SUBQUERY,
+           [params](Item *item_inner) {
+             Item *item = item_inner->real_item();
+             if (item->type() == Item::FIELD_ITEM) {
+               Item_field *item_field = down_cast<Item_field *>(item);
+               if (item_field->table_ref != nullptr &&
+                   item_field->table_ref->query_block->nest_level <
+                       params->nest_level) {
+                 Query_block *referenced_query_block =
+                     item_field->table_ref->query_block;
+                 Query_block *query_block = params->first_select;
+                 while (query_block != nullptr &&
+                        query_block != referenced_query_block) {
+                   query_block = query_block->outer_query_block();
+                 }
+                 if (query_block != nullptr)
+                   params->parameters.insert(item_field->field);
+               }
+             }
+             return false;
+           });
+}
+
 void Item_subselect::print(const THD *thd, String *str,
                            enum_query_type query_type) const {
   if (subquery) {

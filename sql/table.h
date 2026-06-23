@@ -4435,7 +4435,8 @@ class Autoinc_field_has_explicit_non_null_value_reset_guard {
 // QEP_TAB::rowid_status to see whether they actually need a row ID.
 // See QEP_TAB::rowid_status for more details.
 inline bool can_call_position(const TABLE *table) {
-  return !table->const_table && !(table->is_nullable() && table->null_row);
+  return !table->const_table && !table->null_row &&
+         table->has_storage_handler();
 }
 
 //////////////////////////////////////////////////////////////////////////

@@ -78,6 +78,7 @@
 #include "sql/parse_tree_node_base.h"
 #include "sql/parse_tree_nodes.h"  // PT_with_clause
 #include "sql/parser_yystype.h"
+#include "sql/partial_result_cache.h"
 #include "sql/pfs_batch_mode.h"
 #include "sql/protocol.h"
 #include "sql/query_options.h"
@@ -1427,6 +1428,15 @@ Query_term_set_op::setup_materialize_set_op(THD *thd, TABLE *dst_table,
 }
 
 void Query_expression::create_access_paths(THD *thd) {
+  auto ptrc_guard = create_scope_guard([&] {
+    if (item != nullptr && m_root_access_path != nullptr && is_simple() &&
+        (uncacheable & UNCACHEABLE_DEPENDENT) &&
+        !(uncacheable & (UNCACHEABLE_RAND | UNCACHEABLE_SIDEEFFECT))) {
+      m_root_access_path =
+          ptrc::CreateAccessPath(thd, item, m_root_access_path, 0, 0, nullptr);
+    }
+  });
+
   if (is_simple()) {
     JOIN *join = first_query_block()->join;
     assert(join && join->is_optimized());

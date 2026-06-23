@@ -170,6 +170,13 @@ SELECT (SELECT 1 FROM t6 WHERE d = c) AS RESULT FROM t5	{
       }
     },
     {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "chosen": false,
+        "cause": "Plan is const"
+      }
+    },
+    {
       "join_execution": {
         "select#": 1,
         "steps": [
@@ -195,18 +202,18 @@ SELECT (SELECT 1 FROM t6 WHERE d = c) AS RESULT FROM t5	{
 select (1-length(replace(TRACE, " ", ""))/length(TRACE))*100
 from information_schema.OPTIMIZER_TRACE;
 (1-length(replace(TRACE, " ", ""))/length(TRACE))*100
-53.9297
+53.2577
 set optimizer_trace="one_line=on";
 SELECT (SELECT 1 FROM t6 WHERE d = c) AS RESULT FROM t5 ;
 RESULT
 NULL
 select * from information_schema.OPTIMIZER_TRACE;
 QUERY	TRACE	MISSING_BYTES_BEYOND_MAX_MEM_SIZE	INSUFFICIENT_PRIVILEGES
-SELECT (SELECT 1 FROM t6 WHERE d = c) AS RESULT FROM t5	{"steps": [{"join_preparation": {"select#": 1,"steps": [{"join_preparation": {"select#": 2,"steps": [{"expanded_query": "/* select#2 */ select 1 from `t6` where (`t6`.`d` = `t5`.`c`)"}]}},{"expanded_query": "/* select#1 */ select (/* select#2 */ select 1 from `t6` where (`t6`.`d` = `t5`.`c`)) AS `RESULT` from `t5`"}]}},{"join_optimization": {"select#": 1,"steps": [{"table_dependencies": [{"table": "`t5`","row_may_be_null": false,"map_bit": 0,"depends_on_map_bits": []}]},{"rows_estimation": [{"table": "`t5`","rows": 1,"cost": 1,"table_type": "system","empty": false}]},{"attaching_conditions_to_tables": {"original_condition": null,"attached_conditions_computation": [],"attached_conditions_summary": []}},{"refine_plan": []}]}},{"join_optimization": {"select#": 2,"steps": [{"condition_processing": {"condition": "WHERE","original_condition": "(`t6`.`d` = NULL)","steps": [{"transformation": "equality_propagation","resulting_condition": "multiple equal(NULL, `t6`.`d`)"},{"transformation": "constant_propagation","resulting_condition": "multiple equal(NULL, `t6`.`d`)"},{"transformation": "trivial_condition_removal","resulting_condition": "multiple equal(NULL, `t6`.`d`)"}]}},{"substitute_generated_columns": {}},{"table_dependencies": [{"table": "`t6`","row_may_be_null": false,"map_bit": 0,"depends_on_map_bits": []}]},{"ref_optimizer_key_uses": [{"table": "`t6`","field": "d","equals": "NULL","null_rejecting": true}]},{"rows_estimation": [{"table": "`t6`","range_analysis": {"table_scan": {"rows": 2,"cost": 2.80085},"potential_range_indexes": [{"index": "d","usable": true,"key_parts": ["d"]}],"best_covering_index_scan": {"index": "d","cost": 0.455814,"chosen": true},"setup_range_conditions": [{"impossible_condition": {"cause": "comparison_with_null_always_false"}}],"impossible_range": true},"rows": 0,"cause": "impossible_where_condition"}]}],"empty_result": {"cause": "no matching row in const table"}}},{"join_execution": {"select#": 1,"steps": [{"subselect_execution": {"select#": 2,"steps": [{"join_execution": {"select#": 2,"steps": []}}]}}]}}]}	0	0
+SELECT (SELECT 1 FROM t6 WHERE d = c) AS RESULT FROM t5	{"steps": [{"join_preparation": {"select#": 1,"steps": [{"join_preparation": {"select#": 2,"steps": [{"expanded_query": "/* select#2 */ select 1 from `t6` where (`t6`.`d` = `t5`.`c`)"}]}},{"expanded_query": "/* select#1 */ select (/* select#2 */ select 1 from `t6` where (`t6`.`d` = `t5`.`c`)) AS `RESULT` from `t5`"}]}},{"join_optimization": {"select#": 1,"steps": [{"table_dependencies": [{"table": "`t5`","row_may_be_null": false,"map_bit": 0,"depends_on_map_bits": []}]},{"rows_estimation": [{"table": "`t5`","rows": 1,"cost": 1,"table_type": "system","empty": false}]},{"attaching_conditions_to_tables": {"original_condition": null,"attached_conditions_computation": [],"attached_conditions_summary": []}},{"refine_plan": []}]}},{"join_optimization": {"select#": 2,"steps": [{"condition_processing": {"condition": "WHERE","original_condition": "(`t6`.`d` = NULL)","steps": [{"transformation": "equality_propagation","resulting_condition": "multiple equal(NULL, `t6`.`d`)"},{"transformation": "constant_propagation","resulting_condition": "multiple equal(NULL, `t6`.`d`)"},{"transformation": "trivial_condition_removal","resulting_condition": "multiple equal(NULL, `t6`.`d`)"}]}},{"substitute_generated_columns": {}},{"table_dependencies": [{"table": "`t6`","row_may_be_null": false,"map_bit": 0,"depends_on_map_bits": []}]},{"ref_optimizer_key_uses": [{"table": "`t6`","field": "d","equals": "NULL","null_rejecting": true}]},{"rows_estimation": [{"table": "`t6`","range_analysis": {"table_scan": {"rows": 2,"cost": 2.80085},"potential_range_indexes": [{"index": "d","usable": true,"key_parts": ["d"]}],"best_covering_index_scan": {"index": "d","cost": 0.455814,"chosen": true},"setup_range_conditions": [{"impossible_condition": {"cause": "comparison_with_null_always_false"}}],"impossible_range": true},"rows": 0,"cause": "impossible_where_condition"}]}],"empty_result": {"cause": "no matching row in const table"}}},{"partial_result_cache": {"caching_result_of": "subquery","chosen": false,"cause": "Plan is const"}},{"join_execution": {"select#": 1,"steps": [{"subselect_execution": {"select#": 2,"steps": [{"join_execution": {"select#": 2,"steps": []}}]}}]}}]}	0	0
 select (1-length(replace(TRACE, " ", ""))/length(TRACE))*100
 from information_schema.OPTIMIZER_TRACE;
 (1-length(replace(TRACE, " ", ""))/length(TRACE))*100
-5.9961
+5.9935
 set end_markers_in_json=on;
 set optimizer_trace="one_line=off";
 EXPLAIN SELECT (SELECT 1 FROM t6 WHERE d = ifnull(c,null)) AS RESULT FROM t5 ;
@@ -373,6 +380,13 @@ EXPLAIN SELECT (SELECT 1 FROM t6 WHERE d = ifnull(c,null)) AS RESULT FROM t5	{
           "cause": "no matching row in const table"
         } /* empty_result */
       } /* join_optimization */
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "chosen": false,
+        "cause": "Plan is const"
+      } /* partial_result_cache */
     },
     {
       "join_explain": {
@@ -550,6 +564,13 @@ SELECT /* should be last */ (SELECT 1 FROM t6 WHERE d = ifnull(c,null)) AS RESUL
           "cause": "no matching row in const table"
         } /* empty_result */
       } /* join_optimization */
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "chosen": false,
+        "cause": "Plan is const"
+      } /* partial_result_cache */
     },
     {
       "join_execution": {
@@ -2400,6 +2421,16 @@ explain select * from t1 where s1 in (select s2 from t1)	{
       } /* join_optimization */
     },
     {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 2,
+        "estimate_rows": 2,
+        "estimate_distinct_val_ratio": 0,
+        "chosen": false,
+        "cause": "cost below threshold"
+      } /* partial_result_cache */
+    },
+    {
       "join_explain": {
         "select#": 1,
         "steps": [
@@ -2686,6 +2717,16 @@ explain select * from t1 where (s1,s2) in (select s2,s1 from t1)	{
           }
         ] /* steps */
       } /* join_optimization */
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 2,
+        "estimate_rows": 2,
+        "estimate_distinct_val_ratio": 0,
+        "chosen": false,
+        "cause": "cost below threshold"
+      } /* partial_result_cache */
     },
     {
       "join_explain": {
@@ -3321,6 +3362,11 @@ where a1 in (select b1 from t2_16 where b1 > '0')	{
       } /* join_optimization */
     },
     {
+      "partial_result_cache": {
+        "caching_result_of": "subquery"
+      } /* partial_result_cache */
+    },
+    {
       "join_explain": {
         "select#": 1,
         "steps": [
@@ -3702,6 +3748,16 @@ WHERE c2 IN ( SELECT c2 FROM t2 WHERE c2 IN ( 1 ) )	{
           }
         ] /* steps */
       } /* join_optimization */
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 9,
+        "estimate_rows": 9,
+        "estimate_distinct_val_ratio": 0,
+        "chosen": false,
+        "cause": "cost below threshold"
+      } /* partial_result_cache */
     },
     {
       "join_execution": {
@@ -4430,6 +4486,16 @@ concat(c1,'y') IN
       } /* join_optimization */
     },
     {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 3,
+        "estimate_rows": 3,
+        "estimate_distinct_val_ratio": 0,
+        "chosen": false,
+        "cause": "cost below threshold"
+      } /* partial_result_cache */
+    },
+    {
       "join_optimization": {
         "select#": 2,
         "steps": [
@@ -4541,6 +4607,16 @@ concat(c1,'y') IN
           }
         ] /* steps */
       } /* join_optimization */
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 3,
+        "estimate_rows": 3,
+        "estimate_distinct_val_ratio": 0,
+        "chosen": false,
+        "cause": "cost below threshold"
+      } /* partial_result_cache */
     },
     {
       "join_explain": {
@@ -5341,6 +5417,16 @@ select * from t1 where (t1.a,t1.b) not in (select c,d from t2 where c>0)	{
           }
         ] /* steps */
       } /* join_optimization */
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 2,
+        "estimate_rows": 2,
+        "estimate_distinct_val_ratio": 0,
+        "chosen": false,
+        "cause": "cost below threshold"
+      } /* partial_result_cache */
     },
     {
       "join_execution": {
@@ -7126,6 +7212,16 @@ select * from t6 where d in (select f1() from t2 where s="c")	{
       } /* join_optimization */
     },
     {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 4,
+        "estimate_rows": 4,
+        "estimate_distinct_val_ratio": 0,
+        "chosen": false,
+        "cause": "cost below threshold"
+      } /* partial_result_cache */
+    },
+    {
       "join_execution": {
         "select#": 1,
         "steps": [
@@ -8126,6 +8222,16 @@ select d into res from t6 where d in (select f1() from t2 where s=arg)	{
           }
         ] /* steps */
       } /* join_optimization */
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 4,
+        "estimate_rows": 4,
+        "estimate_distinct_val_ratio": 0,
+        "chosen": false,
+        "cause": "cost below threshold"
+      } /* partial_result_cache */
     },
     {
       "join_execution": {
@@ -10195,6 +10301,16 @@ select d into res from t6 where d in (select f1() from t2 where s=arg)	{
           }
         ] /* steps */
       } /* join_optimization */
+    },
+    {
+      "partial_result_cache": {
+        "caching_result_of": "subquery",
+        "distinct_rows": 4,
+        "estimate_rows": 4,
+        "estimate_distinct_val_ratio": 0,
+        "chosen": false,
+        "cause": "cost below threshold"
+      } /* partial_result_cache */
     },
     {
       "join_execution": {

@@ -141,6 +141,10 @@ struct timeval;
 struct User_level_lock;
 struct YYLTYPE;
 
+namespace ptrc {
+struct Memory_objects;
+}
+
 namespace dd {
 namespace cache {
 class Dictionary_client;
@@ -4755,6 +4759,8 @@ class THD : public MDL_context_owner,
  public:
   bool add_external(unsigned int slot, void *data);
   void *fetch_external(unsigned int slot);
+
+  ptrc::Memory_objects *ptrc_objects{nullptr};
 
  private:
   std::unordered_map<unsigned int, void *> external_store_;

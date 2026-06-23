@@ -273,7 +273,8 @@ static Field *create_tmp_field_from_item(Item *item, TABLE *table) {
       } else {
         new_field = item->make_string_field(table);
       }
-      new_field->set_derivation(item->collation.derivation);
+      if (new_field != nullptr)
+        new_field->set_derivation(item->collation.derivation);
       break;
     case DECIMAL_RESULT:
       new_field = Field_new_decimal::create_from_item(item);

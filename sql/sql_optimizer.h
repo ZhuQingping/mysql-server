@@ -509,6 +509,12 @@ class JOIN {
     Initialized by Query_block::get_optimizable_conditions().
   */
   Item *having_cond;
+  /*
+    Part of HAVING pushed to an internal temporary table condition. PTRC uses
+    this to reject dependent subqueries in HAVING even after having_cond has
+    been split by JOIN::add_having_as_tmp_table_cond().
+  */
+  Item *pushed_having_cond{nullptr};
   Item *having_for_explain;  ///< Saved optimized HAVING for EXPLAIN
   /**
     Pointer set to query_block->get_table_list() at the start of

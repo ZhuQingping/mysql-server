@@ -90,6 +90,7 @@
 #include "sql/opt_costmodel.h"
 #include "sql/opt_explain_format.h"
 #include "sql/opt_trace.h"  // Opt_trace_object
+#include "sql/partial_result_cache.h"
 #include "sql/query_options.h"
 #include "sql/record_buffer.h"  // Record_buffer
 #include "sql/sort_param.h"
@@ -842,10 +843,18 @@ AccessPath *PossiblyAttachFilter(AccessPath *path,
 
 AccessPath *CreateNestedLoopAccessPath(THD *thd, AccessPath *outer,
                                        AccessPath *inner, JoinType join_type,
-                                       bool pfs_batch_mode) {
+                                       bool pfs_batch_mode,
+                                       qep_tab_map outer_tables = 0,
+                                       qep_tab_map inner_tables = 0,
+                                       JOIN *join = nullptr) {
   AccessPath *path = new (thd->mem_root) AccessPath;
   path->type = AccessPath::NESTED_LOOP_JOIN;
   path->nested_loop_join().outer = outer;
+  if (join != nullptr && join_type != JoinType::ANTI &&
+      join_type != JoinType::SEMI) {
+    inner = ptrc::CreateAccessPath(thd, nullptr, inner, outer_tables,
+                                   inner_tables, join);
+  }
   path->nested_loop_join().inner = inner;
   path->nested_loop_join().join_type = join_type;
   if (join_type == JoinType::ANTI || join_type == JoinType::SEMI) {
@@ -2700,8 +2709,11 @@ AccessPath *ConnectJoins(plan_idx upper_first_idx, plan_idx first_idx,
         subtree_path = PossiblyAttachFilter(subtree_path, join_conditions, thd,
                                             conditions_depend_on_outer_tables);
 
+        qep_tab_map prefix_tables_map =
+            TablesBetween(qep_tabs->join()->const_tables, i);
         path = CreateNestedLoopAccessPath(thd, path, subtree_path, join_type,
-                                          pfs_batch_mode);
+                                          pfs_batch_mode, prefix_tables_map,
+                                          right_tables, qep_tab->join());
         SetCostOnNestedLoopAccessPath(*thd->cost_model(), qep_tab->position(),
                                       path);
       }
@@ -2931,9 +2943,12 @@ AccessPath *ConnectJoins(plan_idx upper_first_idx, plan_idx first_idx,
         path = PossiblyAttachFilter(path, join_conditions, thd,
                                     conditions_depend_on_outer_tables);
       } else {
+        qep_tab_map prefix_tables_map =
+            TablesBetween(qep_tabs->join()->const_tables, i);
         path = CreateNestedLoopAccessPath(
             thd, path, table_path, JoinType::INNER,
-            qep_tab->pfs_batch_update(qep_tab->join()));
+            qep_tab->pfs_batch_update(qep_tab->join()), prefix_tables_map,
+            right_tables, qep_tab->join());
         SetCostOnNestedLoopAccessPath(*thd->cost_model(), qep_tab->position(),
                                       path);
       }
@@ -3536,6 +3551,16 @@ int join_read_const_table(JOIN_TAB *tab, POSITION *pos) {
   THD *const thd = tab->join()->thd;
   table->const_table = true;
   assert(!thd->is_error());
+
+  /*
+    PTRC may use const-table columns as cache keys after const rows have
+    already been read. Initialize nullable-column flags before later PTRC
+    record packing skips const-table record reset.
+  */
+  if (table->s->null_bytes > 0) {
+    assert(!table->has_null_row());
+    memset(table->null_flags, 0, table->s->null_bytes);
+  }
 
   if (table->reginfo.lock_type >= TL_WRITE_ALLOW_WRITE) {
     const enum_sql_command sql_command = tab->join()->thd->lex->sql_command;
