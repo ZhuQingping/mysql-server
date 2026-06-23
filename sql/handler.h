@@ -91,6 +91,8 @@ class PQ_Leader_context;
 class PQ_Worker_context;
 class PQ_row_sink;
 enum class PQ_leader_scan_mode : uint;
+struct Key_ref;
+struct PQ_shared_info;
 struct PQ_Worker_open_context;
 struct System_status_var;
 
@@ -4507,6 +4509,16 @@ class handler {
   Item *pushed_idx_cond;
   uint pushed_idx_cond_keyno; /* The index which the above condition is for */
 
+  /* Commercial Parallel Query handler state. */
+  bool pq_reverse_scan{false};
+  bool pq_ref_depend{false};
+  bool pq_ref{false};
+  bool pq_table_scan{false};
+  bool do_parallel_scan{false};
+  uint pq_range_type{0};
+  key_range pq_ref_key{};
+  void *pq_ctx{nullptr};
+
   /**
     next_insert_id is the next value which should be inserted into the
     auto_increment column: in a inserting-multi-row statement (like INSERT
@@ -4752,6 +4764,11 @@ class handler {
   int ha_index_first(uchar *buf);
   int ha_index_last(uchar *buf);
   int ha_index_next_same(uchar *buf, const uchar *key, uint keylen);
+  int ha_pq_init(uint dop, uint keyno);
+  bool ha_reverse_scan() const { return pq_reverse_scan; }
+  void ha_set_reverse_scan(bool reverse) { pq_reverse_scan = reverse; }
+  int ha_pq_end();
+  int ha_pq_next(uchar *buf, void *scan_ctx);
   int ha_reset();
   /* this is necessary in many places, e.g. in HANDLER command */
   int ha_index_or_rnd_end() {
@@ -4917,11 +4934,31 @@ class handler {
     return HA_ERR_UNSUPPORTED;
   }
 
+  /** Commercial leader-side PQ init bridge. */
+  virtual int pq_leader_scan_init(uint keyno [[maybe_unused]],
+                                  void *&scan_ctx,
+                                  uint n_threads [[maybe_unused]]) {
+    scan_ctx = nullptr;
+    return HA_ERR_UNSUPPORTED;
+  }
+
   /** Initialize worker-side pull-row scan context. */
   virtual int pq_worker_scan_init(
       PQ_Worker_open_context *open_ctx [[maybe_unused]],
       PQ_Worker_context **worker_ctx) {
     if (worker_ctx != nullptr) *worker_ctx = nullptr;
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** Commercial worker-side PQ init bridge. */
+  virtual int pq_worker_scan_init(uint keyno [[maybe_unused]],
+                                  void *scan_ctx [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  /** Commercial dependent-ref range build bridge. */
+  virtual int pq_ref_build_ranges(void *scan_ctx [[maybe_unused]],
+                                  Key_ref &key_ref [[maybe_unused]]) {
     return HA_ERR_UNSUPPORTED;
   }
 
@@ -4931,6 +4968,17 @@ class handler {
     if (eof != nullptr) *eof = true;
     return HA_ERR_UNSUPPORTED;
   }
+
+  /** Commercial pull one row into record. */
+  virtual int pq_worker_scan_next(void *scan_ctx [[maybe_unused]],
+                                  uchar *buf [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  virtual void init_shared_info() {}
+  virtual void set_shared_info(PQ_shared_info *info [[maybe_unused]]) {}
+  virtual bool is_sharing_data() { return false; }
+  virtual void reset_shared_info() {}
 
   /** Run an internal worker-side callback conversion smoke. */
   virtual int pq_worker_scan_callback_smoke(
@@ -5086,11 +5134,17 @@ class handler {
   }
 
   /** End worker-side PQ scan context. Idempotent. */
+  virtual int pq_worker_scan_end() { return 0; }
+
+  /** End typed worker-side PQ scan context. Idempotent. */
   virtual int pq_worker_scan_end(PQ_Worker_context *worker_ctx [[maybe_unused]]) {
     return 0;
   }
 
-  /** End leader-side PQ scan context. Idempotent. */
+  /** End commercial leader-side PQ scan context. Idempotent. */
+  virtual int pq_leader_scan_end(void *leader_ctx [[maybe_unused]]) { return 0; }
+
+  /** End typed leader-side PQ scan context. Idempotent. */
   virtual int pq_leader_scan_end(PQ_Leader_context *leader_ctx [[maybe_unused]]) {
     return 0;
   }

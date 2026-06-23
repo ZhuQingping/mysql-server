@@ -98,6 +98,7 @@
 #include "sql/opt_hints.h"
 #include "sql/protocol.h"
 #include "sql/psi_memory_key.h"
+#include "sql/parallel_query/pq_resource_stat.h"
 #include "sql/query_options.h"
 #include "sql/record_buffer.h"  // Record_buffer
 #include "sql/rpl_filter.h"
@@ -3496,6 +3497,67 @@ int handler::ha_index_next_same(uchar *buf, const uchar *key, uint keylen) {
   // (m_unique != nullptr in case of multi-value index read)
   // In case of range scan, duplicate records are filtered in
   // multi_range_read_next()
+
+  if (!result && !mrr_have_range && m_unique != nullptr &&
+      filter_dup_records()) {
+    result = HA_ERR_KEY_NOT_FOUND;
+  }
+
+  table->set_row_status_from_handler(result);
+  return result;
+}
+
+int handler::ha_pq_init(uint dop, uint keyno) {
+  DBUG_TRACE;
+  assert(table_share->tmp_table != NO_TMP_TABLE || m_lock_type != F_UNLCK);
+
+  void *scan_ctx = nullptr;
+  const int result = pq_leader_scan_init(keyno, scan_ctx, dop);
+  if (result == 0) {
+    pq_ctx = scan_ctx;
+    pq_range_type = PQ_QUICK_SELECT_NONE;
+    pq_ref = false;
+    ha_set_reverse_scan(false);
+  } else {
+    pq_ctx = nullptr;
+  }
+  return result;
+}
+
+int handler::ha_pq_end() {
+  DBUG_TRACE;
+
+  int result = 0;
+  if (pq_ctx != nullptr) {
+    result = pq_leader_scan_end(pq_ctx);
+    pq_ctx = nullptr;
+  } else {
+    result = pq_worker_scan_end();
+  }
+
+  pq_table_scan = false;
+  pq_ref = false;
+  pq_ref_depend = false;
+  do_parallel_scan = false;
+  ha_set_reverse_scan(false);
+  return result;
+}
+
+int handler::ha_pq_next(uchar *buf, void *scan_ctx) {
+  int result;
+  DBUG_TRACE;
+  assert(table_share->tmp_table != NO_TMP_TABLE || m_lock_type != F_UNLCK);
+
+  m_update_generated_read_fields = table->has_gcol();
+
+  MYSQL_TABLE_IO_WAIT(PSI_TABLE_FETCH_ROW,
+                      pq_table_scan ? MAX_KEY : active_index, result,
+                      { result = pq_worker_scan_next(scan_ctx, buf); })
+  if (!result && m_update_generated_read_fields) {
+    result = update_generated_read_fields(
+        buf, table, pq_table_scan ? MAX_KEY : active_index);
+    m_update_generated_read_fields = false;
+  }
 
   if (!result && !mrr_have_range && m_unique != nullptr &&
       filter_dup_records()) {

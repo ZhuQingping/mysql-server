@@ -724,7 +724,7 @@ Completion Report - Batch C1c:
 
 ### Batch D1 - Handler/InnoDB full worker path
 
-Status: pending
+Status: in progress
 
 目标：
 
@@ -732,6 +732,58 @@ Status: pending
 - 接 fullscan、clustered range、secondary range、ref/depend_ref、ICP、
   Record_buffer、read-view、KILL/error cleanup；
 - partition/MVI/reverse/intrinsic temp table 按高风险 gate 逐项打开或记录。
+
+#### Batch D1.0 - handler commercial PQ API bridge
+
+Status: completed
+
+目标：
+
+- 先恢复商用 handler 层字段和薄包装函数，给后续 worker iterator 切回
+  `ha_pq_next()` / pull-row path 提供稳定接口；
+- 保留当前 8.0.46 typed `PQ_Leader_context` / `PQ_Worker_context` API；
+- 不修改 handler `inited` 状态机，不打开 InnoDB 正路径。
+
+Completion Report - Batch D1.0:
+
+- changed files:
+  - `sql/handler.h`
+  - `sql/handler.cc`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added commercial handler state fields:
+    `pq_reverse_scan`、`pq_ref_depend`、`pq_ref`、`pq_table_scan`、
+    `do_parallel_scan`、`pq_range_type`、`pq_ref_key`、`pq_ctx`；
+  - added public wrappers:
+    `ha_pq_init()`、`ha_pq_end()`、`ha_pq_next()`、
+    `ha_reverse_scan()`、`ha_set_reverse_scan()`；
+  - added commercial virtual bridge methods:
+    `pq_leader_scan_init(uint, void *&, uint)`、
+    `pq_worker_scan_init(uint, void *)`、
+    `pq_ref_build_ranges(void *, Key_ref &)`、
+    `pq_worker_scan_next(void *, uchar *)`、
+    no-arg `pq_worker_scan_end()` and `pq_leader_scan_end(void *)`；
+  - all new virtual defaults fail closed with `HA_ERR_UNSUPPORTED` or no-op
+    cleanup；
+  - `ha_pq_next()` mirrors the commercial wrapper shape for generated-column
+    update, MVI duplicate filtering, and row status update, but remains
+    unreachable until an engine overrides the commercial pull API。
+- validation:
+  - `git diff --check -- sql/handler.h sql/handler.cc` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`。
+- risks carried forward:
+  - this batch deliberately does not add `inited == PQ`; true handler state
+    transitions must be restored together with InnoDB pull-row path；
+  - `PQ_shared_info` is only forward-declared in `handler.h`; real shared
+    hash-join/worker data support remains later；
+  - default no-op `pq_worker_scan_end()` / `pq_leader_scan_end(void *)` are
+    safe for the bridge surface but must be overridden by InnoDB before real
+    execution is opened。
+- review:
+  - independent Review Agent accepted the bridge; no critical, important, or
+    minor findings were reported。
 
 ### Batch E1 - Commercial MTR migration
 
