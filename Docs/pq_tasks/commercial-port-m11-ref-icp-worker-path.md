@@ -2461,7 +2461,7 @@ Completion Report - M11-F6a-1 Coding:
 
 #### M11-F6a-2: Worker Constant-ref Ownership / Cleanup Smoke
 
-Status: taskbook created；pending design review；no source edits yet。
+Status: coding completed locally；pending Code / Docs / Test review。
 
 Goal:
 
@@ -2567,6 +2567,56 @@ Design Review Prompt - M11-F6a-2:
 - Blocking findings
 - Required taskbook fixes
 - Safe coding recommendation
+
+Completion Report - M11-F6a-2 Coding:
+
+- Changed files:
+  - `sql/parallel_query/pq_iterators.cc`
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+  - `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+  - `Docs/pq_tasks/README.md`
+  - `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- Implementation:
+  - added private SQL-only `PQ_worker_constant_ref_cleanup_smoke` scoped
+    lifetime helper in `pq_iterators.cc`；
+  - added DBUG-only `pq_worker_ref_ctx_cleanup_smoke` and
+    `pq_worker_ref_ctx_cleanup_fail_smoke` paths；
+  - added four diagnostic status variables:
+    `Parallel_worker_ref_ctx_cleanup_attempts`,
+    `Parallel_worker_ref_ctx_cleanup_success`,
+    `Parallel_worker_ref_ctx_cleanup_failures`,
+    `Parallel_worker_ref_ctx_cleanup_unsupported`；
+  - kept `sql_parallel.cc`, storage / InnoDB, `PQRefIterator::Read()`,
+    `ha_pq_next()`, `pq_worker_scan_init()`, `pq_worker_scan_next()`, worker
+    TABLE open, MQ, and row production untouched。
+- MTR coverage:
+  - no-DBUG zero-delta for F6a-1/F6a-2 counters around normal M9-C2 C2 queries；
+  - DBUG success cleanup and injected pre-row failure cleanup；
+  - explicit zero deltas for `Parallel_workers_launched`,
+    `Parallel_ranges_dispatched`, `Parallel_worker_result_smoke_rows`,
+    `Parallel_orderby_worker_adapter_rows`,
+    `Parallel_exchange_sort_worker_frame_smoke_rows`, and
+    `Parallel_callback_smoke_rows`；
+  - `pq_stats` updated for four new status variables。
+- Verification:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_ref_icp pq_stats --parallel=1 --vardir=/tmp/pq_f6a2_target_vardir --tmpdir=/tmp/pq_f6a2_target_tmp` passed；
+  - `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq_f6a2_full_vardir --tmpdir=/tmp/pq_f6a2_full_tmp` passed, 89 tests successful。
+- Residual risk:
+  - DBUG cleanup smoke still obtains the exact ref key through the current
+    leader-local M9-C2 iterator, so its SELECTs increase existing leader-local
+    executed/secondary-row counters；the test labels this as diagnostic noise and
+    separately proves worker/range/worker-row/MQ counters remain zero。
+- Review:
+  - pending independent Code / Docs / Test / Reference Review Agent。
+- Safe next task after review:
+  - decide whether to continue with F6b private row-token handoff or add another
+    no-row source inventory if review finds worker-owned context semantics still
+    too leader-local。
 
 Design / Source / Test Review Prompt:
 

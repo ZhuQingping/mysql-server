@@ -9956,6 +9956,14 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_unsupported,
                                     worker_ref_ctx_unsupported)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_key_bytes,
                                     worker_ref_ctx_key_bytes)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_cleanup_attempts,
+                                    worker_ref_ctx_cleanup_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_cleanup_success,
+                                    worker_ref_ctx_cleanup_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_cleanup_failures,
+                                    worker_ref_ctx_cleanup_failures)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_cleanup_unsupported,
+                                    worker_ref_ctx_cleanup_unsupported)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_reject_probes,
                                     secondary_reverse_reject_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_ref_reject_probes,
@@ -12143,6 +12151,18 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_worker_ref_ctx_attempts, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_ctx_key_bytes",
      (char *)&show_pq_worker_ref_ctx_key_bytes, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_cleanup_attempts",
+     (char *)&show_pq_worker_ref_ctx_cleanup_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_cleanup_failures",
+     (char *)&show_pq_worker_ref_ctx_cleanup_failures, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_cleanup_success",
+     (char *)&show_pq_worker_ref_ctx_cleanup_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_cleanup_unsupported",
+     (char *)&show_pq_worker_ref_ctx_cleanup_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_ctx_success", (char *)&show_pq_worker_ref_ctx_success,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_ctx_unsupported",

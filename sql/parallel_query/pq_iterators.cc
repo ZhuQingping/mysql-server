@@ -72,6 +72,46 @@ struct PQ_worker_constant_ref_context_shape {
   bool owned_key_bytes{false};
 };
 
+class PQ_worker_constant_ref_cleanup_smoke {
+ public:
+  explicit PQ_worker_constant_ref_cleanup_smoke(
+      const PQ_worker_constant_ref_context_shape &ctx, bool *cleanup_reached)
+      : m_owned_key(ctx.owned_key),
+        m_keyno(ctx.keyno),
+        m_keypart_map(ctx.keypart_map),
+        m_key_length(ctx.key_length),
+        m_valid(ctx.owned_key_bytes && ctx.exact_read && ctx.constant_ref &&
+                !ctx.reverse && ctx.key_length == ctx.owned_key.size()),
+        m_cleanup_reached(cleanup_reached) {}
+
+  PQ_worker_constant_ref_cleanup_smoke(
+      const PQ_worker_constant_ref_cleanup_smoke &) = delete;
+  PQ_worker_constant_ref_cleanup_smoke &operator=(
+      const PQ_worker_constant_ref_cleanup_smoke &) = delete;
+
+  ~PQ_worker_constant_ref_cleanup_smoke() {
+    m_owned_key.clear();
+    m_keyno = MAX_KEY;
+    m_keypart_map = 0;
+    m_key_length = 0;
+    m_valid = false;
+    if (m_cleanup_reached != nullptr) {
+      *m_cleanup_reached = true;
+    }
+  }
+
+  bool valid() const { return m_valid; }
+  size_t owned_key_size() const { return m_owned_key.size(); }
+
+ private:
+  std::vector<uchar> m_owned_key;
+  uint m_keyno{MAX_KEY};
+  key_part_map m_keypart_map{0};
+  uint m_key_length{0};
+  bool m_valid{false};
+  bool *m_cleanup_reached{nullptr};
+};
+
 bool pq_copy_key_endpoint(const key_range &src, PQ_copied_key_endpoint *dst) {
   if (dst == nullptr) return false;
   dst->range = src;
@@ -710,6 +750,45 @@ class PQSecondaryCoveringRefIterator final : public TableRowIterator {
         pq_global_stats.worker_ref_ctx_key_bytes.fetch_add(
             ctx.owned_key.size(), std::memory_order_relaxed);
       }
+    });
+
+    auto run_ref_ctx_cleanup_smoke = [&](bool inject_failure) {
+      pq_global_stats.worker_ref_ctx_cleanup_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+      PQ_worker_constant_ref_context_shape ctx;
+      if (pq_build_worker_constant_ref_context_shape(table(), m_ref, ref_key,
+                                                     &ctx)) {
+        pq_global_stats.worker_ref_ctx_cleanup_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+        return;
+      }
+
+      bool cleanup_reached = false;
+      bool cleanup_valid = false;
+      {
+        PQ_worker_constant_ref_cleanup_smoke scoped_ctx(ctx, &cleanup_reached);
+        cleanup_valid = scoped_ctx.valid() &&
+                        scoped_ctx.owned_key_size() == ref_key.length;
+      }
+
+      if (cleanup_reached && cleanup_valid) {
+        pq_global_stats.worker_ref_ctx_cleanup_success.fetch_add(
+            1, std::memory_order_relaxed);
+      } else {
+        pq_global_stats.worker_ref_ctx_cleanup_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+      }
+      if (inject_failure) {
+        pq_global_stats.worker_ref_ctx_cleanup_failures.fetch_add(
+            1, std::memory_order_relaxed);
+      }
+    };
+
+    DBUG_EXECUTE_IF("pq_worker_ref_ctx_cleanup_smoke", {
+      run_ref_ctx_cleanup_smoke(false);
+    });
+    DBUG_EXECUTE_IF("pq_worker_ref_ctx_cleanup_fail_smoke", {
+      run_ref_ctx_cleanup_smoke(true);
     });
 
     pq_record_buffer_probe(table());
