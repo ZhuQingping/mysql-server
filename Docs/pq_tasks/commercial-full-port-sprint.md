@@ -679,6 +679,49 @@ Completion Report - Batch C1b:
   - noted no current call sites, so mutex/cond initialization risk is not
     reachable until future hooks call the budget guard。
 
+#### Batch C1c - PQ thread-budget runtime init and commercial status surface
+
+Status: completed and committed
+
+目标：
+
+- 对齐商用 PQ 线程预算同步对象的 server lifecycle；
+- 暴露商用基础 `PQ_*` status，便于后续真实 hook 打开后观察线程/内存预算；
+- 不打开 optimizer / executor / handler / InnoDB 行为。
+
+Completion Report - Batch C1c:
+
+- changed files:
+  - `sql/mysqld.cc`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - included `sql/parallel_query/pq_resource_stat.h` in `mysqld.cc`；
+  - added PSI keys for `LOCK_pq_threads_running` and
+    `COND_pq_threads_running`；
+  - initialized the PQ mutex/cond in `init_thread_environment()` and destroyed
+    them in `clean_up_mutexes()`；
+  - registered the PQ mutex/cond with server PSI instrumentation；
+  - added basic commercial status variables:
+    `PQ_threads_refused`、`PQ_memory_refused`、`PQ_threads_running`、
+    `PQ_memory_used`、`PQ_stmt_executed`。
+- validation:
+  - `git diff --check -- sql/mysqld.cc` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`。
+- risks carried forward:
+  - status counters are infrastructure only; current true execution still
+    depends on later C/D batches；
+  - `PQ_stmt_executed` is present for commercial parity but is not yet updated
+    by the current scaffold execution path；
+  - no optimizer or execution hook was opened in this batch。
+- review:
+  - independent Review Agent accepted the patch；
+  - confirmed PSI key declaration/registration/init/destroy is complete；
+  - confirmed basic `PQ_*` status variable types match current global
+    counters；
+  - confirmed no optimizer/executor/handler/InnoDB behavior was opened。
+
 ### Batch D1 - Handler/InnoDB full worker path
 
 Status: pending

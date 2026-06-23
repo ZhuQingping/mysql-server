@@ -867,6 +867,7 @@ MySQL clients support the protocol:
 #include "sql/ssl_init_callback.h"
 #include "sql/sys_vars.h"         // fixup_enforce_gtid_consistency_...
 #include "sql/sys_vars_shared.h"  // intern_find_sys_var
+#include "sql/parallel_query/pq_resource_stat.h"
 #include "sql/parallel_query/sql_parallel.h"  // PQ_global_stats, pq_global_stats
 #include "sql/table_cache.h"      // table_cache_manager
 #include "sql/tc_log.h"           // tc_log
@@ -1132,7 +1133,9 @@ static PSI_mutex_key key_LOCK_rotate_binlog_master_key;
 static PSI_mutex_key key_LOCK_partial_revokes;
 static PSI_mutex_key key_LOCK_authentication_policy;
 static PSI_mutex_key key_LOCK_global_conn_mem_limit;
+static PSI_mutex_key key_LOCK_pq_threads_running;
 static PSI_rwlock_key key_rwlock_LOCK_server_shutting_down;
+static PSI_cond_key key_COND_pq_threads_running;
 #endif /* HAVE_PSI_INTERFACE */
 
 /**
@@ -2795,6 +2798,8 @@ static void clean_up_mutexes() {
   mysql_mutex_destroy(&LOCK_authentication_policy);
   mysql_mutex_destroy(&LOCK_global_conn_mem_limit);
   mysql_rwlock_destroy(&LOCK_server_shutting_down);
+  mysql_mutex_destroy(&LOCK_pq_threads_running);
+  mysql_cond_destroy(&COND_pq_threads_running);
 }
 
 /****************************************************************************
@@ -5379,6 +5384,9 @@ static int init_thread_environment() {
                    MY_MUTEX_INIT_FAST);
   mysql_rwlock_init(key_rwlock_LOCK_server_shutting_down,
                     &LOCK_server_shutting_down);
+  mysql_mutex_init(key_LOCK_pq_threads_running, &LOCK_pq_threads_running,
+                   MY_MUTEX_INIT_FAST);
+  mysql_cond_init(key_COND_pq_threads_running, &COND_pq_threads_running);
   return 0;
 }
 
@@ -9318,6 +9326,13 @@ static int show_queries(THD *thd, SHOW_VAR *var, char *) {
   return 0;
 }
 
+static int show_pq_memory(THD *, SHOW_VAR *var, char *buf) {
+  var->type = SHOW_LONG;
+  var->value = buf;
+  *((long *)buf) = (long)get_pq_memory_total();
+  return 0;
+}
+
 static int show_net_compression(THD *thd, SHOW_VAR *var, char *buff) {
   var->type = SHOW_MY_BOOL;
   var->value = buff;
@@ -11404,6 +11419,15 @@ SHOW_VAR status_vars[] = {
      (char *)&show_replica_rows_last_search_algorithm_used, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
 #endif
+    {"PQ_threads_refused", (char *)&parallel_threads_refused, SHOW_INT,
+     SHOW_SCOPE_GLOBAL},
+    {"PQ_memory_refused", (char *)&parallel_memory_refused, SHOW_INT,
+     SHOW_SCOPE_GLOBAL},
+    {"PQ_threads_running", (char *)&parallel_threads_running, SHOW_INT,
+     SHOW_SCOPE_GLOBAL},
+    {"PQ_memory_used", (char *)&show_pq_memory, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"PQ_stmt_executed", (char *)&pq_stmt_executed, SHOW_INT,
+     SHOW_SCOPE_GLOBAL},
     {"Queries", (char *)&show_queries, SHOW_FUNC, SHOW_SCOPE_ALL},
     {"Questions", (char *)offsetof(System_status_var, questions),
      SHOW_LONGLONG_STATUS, SHOW_SCOPE_ALL},
@@ -14367,7 +14391,8 @@ static PSI_mutex_info all_server_mutexes[]=
   { &key_LOCK_delegate_connection_mutex, "LOCK_delegate_connection_mutex", PSI_FLAG_SINGLETON, 0, PSI_DOCUMENT_ME},
   { &key_LOCK_group_replication_connection_mutex, "LOCK_group_replication_connection_mutex", PSI_FLAG_SINGLETON, 0, PSI_DOCUMENT_ME},
 { &key_LOCK_authentication_policy, "LOCK_authentication_policy", PSI_FLAG_SINGLETON, 0, "A lock to ensure execution of CREATE USER or ALTER USER sql and SET @@global.authentication_policy variable are serialized"},
-  { &key_LOCK_global_conn_mem_limit, "LOCK_global_conn_mem_limit", PSI_FLAG_SINGLETON, 0, PSI_DOCUMENT_ME}
+  { &key_LOCK_global_conn_mem_limit, "LOCK_global_conn_mem_limit", PSI_FLAG_SINGLETON, 0, PSI_DOCUMENT_ME},
+  { &key_LOCK_pq_threads_running, "LOCK_pq_threads_running", PSI_FLAG_SINGLETON, 0, PSI_DOCUMENT_ME}
 };
 /* clang-format on */
 
@@ -14483,7 +14508,8 @@ static PSI_cond_info all_server_conds[]=
   { &key_cond_slave_worker_hash, "Relay_log_info::replica_worker_hash_cond", 0, 0, PSI_DOCUMENT_ME},
   { &key_monitor_info_run_cond, "Source_IO_monitor::run_cond", 0, 0, PSI_DOCUMENT_ME},
   { &key_COND_delegate_connection_cond_var, "THD::COND_delegate_connection_cond_var", 0, 0, PSI_DOCUMENT_ME},
-  { &key_COND_group_replication_connection_cond_var, "THD::COND_group_replication_connection_cond_var", 0, 0, PSI_DOCUMENT_ME}
+  { &key_COND_group_replication_connection_cond_var, "THD::COND_group_replication_connection_cond_var", 0, 0, PSI_DOCUMENT_ME},
+  { &key_COND_pq_threads_running, "COND_pq_threads_running", PSI_FLAG_SINGLETON, 0, PSI_DOCUMENT_ME}
 };
 /* clang-format on */
 
