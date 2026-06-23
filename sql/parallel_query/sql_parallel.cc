@@ -1202,6 +1202,8 @@ bool Gather_operator::run_worker_attach_contract_smoke(
   bool icp_record_buffer_negative_smoke = false;
   bool handler_ref_cmp_smoke_pending = false;
   std::vector<uchar> handler_ref_cmp_smoke_ref;
+  bool handler_ref_two_row_smoke_pending = false;
+  std::vector<std::vector<uchar>> handler_ref_two_row_smoke_refs;
   Item *saved_leader_pushed_idx_cond = nullptr;
   uint saved_leader_pushed_idx_cond_keyno = MAX_KEY;
   auto install_leader_icp_sentinel = [&]() {
@@ -1322,6 +1324,53 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     install_leader_icp_sentinel();
   });
 
+  DBUG_EXECUTE_IF("pq_orderby_handler_ref_two_row_cmp_smoke", {
+    pq_global_stats.orderby_handler_ref_two_row_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+
+    bool two_row_failed = worker->m_open_ctx.worker_table == nullptr ||
+                          worker->m_open_ctx.worker_handler == nullptr ||
+                          worker->m_open_ctx.worker_table->record[0] == nullptr ||
+                          worker->m_open_ctx.worker_handler->ha_rnd_init(true) != 0;
+    for (uint i = 0; !two_row_failed && i < 2; ++i) {
+      int error = worker->m_open_ctx.worker_handler->ha_rnd_next(
+          worker->m_open_ctx.worker_table->record[0]);
+      while (error == HA_ERR_RECORD_DELETED) {
+        error = worker->m_open_ctx.worker_handler->ha_rnd_next(
+            worker->m_open_ctx.worker_table->record[0]);
+      }
+      if (error != 0) {
+        two_row_failed = true;
+        break;
+      }
+
+      worker->m_open_ctx.worker_handler->position(
+          worker->m_open_ctx.worker_table->record[0]);
+      const uint ref_length = worker->m_open_ctx.worker_handler->ref_length;
+      if (ref_length == 0 || worker->m_open_ctx.worker_handler->ref == nullptr) {
+        two_row_failed = true;
+        break;
+      }
+      handler_ref_two_row_smoke_refs.emplace_back(
+          worker->m_open_ctx.worker_handler->ref,
+          worker->m_open_ctx.worker_handler->ref + ref_length);
+      two_row_failed =
+          handler_ref_two_row_smoke_refs.back().size() != ref_length;
+    }
+    if (worker->m_open_ctx.worker_handler != nullptr &&
+        worker->m_open_ctx.worker_handler->inited) {
+      worker->m_open_ctx.worker_handler->ha_rnd_end();
+    }
+
+    if (two_row_failed || handler_ref_two_row_smoke_refs.size() < 2) {
+      pq_global_stats.orderby_handler_ref_two_row_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      cleanup();
+      return true;
+    }
+    handler_ref_two_row_smoke_pending = true;
+  });
+
   if (worker->m_open_ctx.worker_handler == nullptr ||
       worker->m_open_ctx.worker_handler->pq_worker_scan_init(
           &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
@@ -1350,8 +1399,8 @@ bool Gather_operator::run_worker_attach_contract_smoke(
                       !converted ||
                       worker->m_open_ctx.worker_handler->ref_length == 0 ||
                       worker->m_open_ctx.worker_handler->ref == nullptr;
-
     std::vector<uchar> copied_ref;
+
     if (!ref_failed) {
       worker->m_open_ctx.worker_handler->position(
           worker->m_open_ctx.worker_table->record[0]);
@@ -1417,6 +1466,7 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       handler_ref_cmp_smoke_ref = copied_ref;
       handler_ref_cmp_smoke_pending = true;
     });
+
   });
 
   failed = false;
@@ -1438,6 +1488,42 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     pq_global_stats.orderby_handler_ref_cmp_equal.fetch_add(
         1, std::memory_order_relaxed);
     pq_global_stats.orderby_handler_ref_cmp_post_cleanup_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  if (handler_ref_two_row_smoke_pending) {
+    if (leader_table == nullptr || leader_table->file == nullptr ||
+        handler_ref_two_row_smoke_refs.size() < 2 ||
+        handler_ref_two_row_smoke_refs[0].empty() ||
+        handler_ref_two_row_smoke_refs[1].empty()) {
+      pq_global_stats.orderby_handler_ref_two_row_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+
+    const int cmp_forward =
+        leader_table->file->cmp_ref(handler_ref_two_row_smoke_refs[0].data(),
+                                    handler_ref_two_row_smoke_refs[1].data());
+    const int cmp_reverse =
+        leader_table->file->cmp_ref(handler_ref_two_row_smoke_refs[1].data(),
+                                    handler_ref_two_row_smoke_refs[0].data());
+    const bool antisymmetric =
+        (cmp_forward < 0 && cmp_reverse > 0) ||
+        (cmp_forward > 0 && cmp_reverse < 0);
+    if (cmp_forward == 0 || cmp_reverse == 0 || !antisymmetric) {
+      pq_global_stats.orderby_handler_ref_two_row_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+
+    pq_global_stats.orderby_handler_ref_two_row_success.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_handler_ref_two_row_refs.fetch_add(
+        handler_ref_two_row_smoke_refs.size(), std::memory_order_relaxed);
+    pq_global_stats.orderby_handler_ref_two_row_cmp_nonzero.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_handler_ref_two_row_antisymmetric_success.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_handler_ref_two_row_post_cleanup_success.fetch_add(
         1, std::memory_order_relaxed);
   }
   pq_global_stats.worker_attach_smoke_success.fetch_add(

@@ -9359,6 +9359,170 @@ Completion Report - M11-E6c:
     sort-key-equal two-row ordering, default heap integration, and readiness
     flags。
 
+### M11-E6d: Two-row cmp_ref Comparator Contract
+
+Status: committed；Code / Docs / Test Review accepted。
+
+Goal:
+
+- 在 E6c 自等价 `cmp_ref(ref, ref)` 之后，建立 two-row / equal-key private
+  comparator contract；
+- 在 worker TABLE / handler 已打开且 PQ worker scan 尚未初始化前，使用
+  DBUG-only local `ha_rnd_init()` / `ha_rnd_next()` 读取至少两条真实 worker
+  row，对每条 worker record 调用 `handler::position(record)` 并 deep-copy
+  `handler::ref/ref_length`；
+- worker scan / worker table cleanup 后，通过 still-open leader handler
+  调用 `cmp_ref(ref0, ref1)` 和 `cmp_ref(ref1, ref0)`，验证比较结果反对称；
+- 只证明 private comparator contract，不接默认 `Exchange_sort` heap reader。
+
+Non-goals:
+
+- 不要求 `cmp_ref(ref0, ref1) < 0` 必然成立；只要求不同 row ref 可被
+  handler 比较且结果反对称，因为物理 ref 顺序可能与 SQL 插入顺序不同；
+- 不构造真实 Filesort sort-key，也不打开 equal sort-key user-visible ORDER
+  BY；
+- 不替换 `pq_orderby_cached_compare_records()` 的 byte-vector row_id 比较；
+- 不改 `Query_result_mq`、`PQWR` 或 `PQOF` frame 格式；
+- 不放开 optimizer `HAS_ORDER_BY` serial boundary。
+
+Allowed files for E6d code:
+
+- `sql/parallel_query/sql_parallel.{h,cc}`：
+  - private SQL-owned row sink for two-row handler refs；
+  - DBUG-only dispatcher / counters；
+- `sql/mysqld.cc`：
+  - only for E6d status counters；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- `Docs/pq_tasks/README.md` and this taskbook。
+
+Forbidden files / behavior:
+
+- `sql/parallel_query/query_result_mq.{h,cc}`；
+- `sql/parallel_query/exchange_sort.{h,cc}` default comparator or heap reader
+  replacement；
+- `PQ_worker_result_frame_header` / `PQWR` changes；
+- `PQOF` header / flags format changes；
+- optimizer eligibility, `HAS_ORDER_BY`, readiness flags, visible ORDER BY PQ；
+- `sql/handler.*` and `storage/innobase/**`。
+
+TDD plan:
+
+- RED: add DBUG-only MTR assertions for E6d two-row comparator counters:
+  - attempts delta >= 1；
+  - success delta >= 1；
+  - rows/ref-count delta >= 2；
+  - cmp nonzero delta >= 1；
+  - antisymmetric success delta >= 1；
+  - post-cleanup success delta >= 1；
+  - unsupported delta == 0；
+  - no-DBUG/default-path E6d counters stay 0；
+  - existing visible ORDER BY guards continue to report
+    `Not parallel HAS_ORDER_BY`。
+- RED must fail before implementation because E6d counters stay `0`；
+- GREEN: implement only private two-row ref sink and post-cleanup `cmp_ref()`
+  validation；
+- replay focused MTR, `pq_stats`, and full `parallel_query` suite。
+
+Implementation notes:
+
+- E6d 没有改 `Query_result_mq`、`PQWR`、`PQOF` 或 `Exchange_sort`；
+- two-row refs 只在 `pq_orderby_handler_ref_two_row_cmp_smoke` DBUG flag 下
+  采集；
+- 采集阶段在 `pq_worker_scan_init()` 之前执行，避免同一个 worker handler
+  scan state 与 PQ callback scan 混用；
+- 采集后立即 `ha_rnd_end()`，随后继续原有 worker attach smoke，worker
+  cleanup 完成后才使用 still-open leader handler 调用
+  `cmp_ref(ref0, ref1)` / `cmp_ref(ref1, ref0)`；
+- E6d 只要求两个不同 refs 比较结果非零且反对称，不假设物理 ref 顺序等于
+  SQL 插入顺序。
+
+Completion Report - M11-E6d Coding:
+
+- Status: implementation completed locally；Code / Docs / Test Review accepted；
+- Changed files:
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`；
+  - `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`；
+  - `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `sql/mysqld.cc`；
+  - `sql/parallel_query/sql_parallel.h`；
+  - `sql/parallel_query/sql_parallel.cc`。
+- RED evidence:
+  - after adding E6d status counters and MTR assertions, focused
+    `pq_worker_attach_contract_smoke` failed because E6d positive counters
+    stayed `0`；
+  - observed failing deltas: attempts / success / refs / cmp_nonzero /
+    antisymmetric / post_cleanup expected positive, actual `0`。
+- GREEN evidence:
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query pq_worker_attach_contract_smoke --parallel=1
+    --vardir=/tmp/pq_e6d_green7_vardir
+    --tmpdir=/tmp/pq_e6d_green7_tmp` passed；
+  - `pq_stats --record` executed SQL successfully but hit the known final
+    result-copy errno `1`; generated log was copied manually to
+    `pq_stats.result`；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query pq_stats --parallel=1
+    --vardir=/tmp/pq_e6d_stats_replay_vardir
+    --tmpdir=/tmp/pq_e6d_stats_replay_tmp` passed；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query --parallel=1
+    --vardir=/tmp/pq_e6d_full_vardir --tmpdir=/tmp/pq_e6d_full_tmp` passed
+    89/89；
+  - `git diff --check` passed。
+- Boundary confirmation:
+  - default ORDER BY PQ path remains disabled；
+  - `HAS_ORDER_BY` serial boundary and visible ORDER BY negative guards remain；
+  - no handler / InnoDB / optimizer eligibility / worker MQ wire-format change。
+
+Code / Docs / Test Review - M11-E6d:
+
+- First Review Agent verdict: `REVISE`；
+- Important finding:
+  - initial E6d implementation reused pre-`pq_worker_scan_init()` copied ref
+    under the combined DBUG flag, causing E6a/E6b/E6c positive counters to pass
+    without exercising the original `pq_worker_scan_callback_smoke()` path；
+- Minor finding:
+  - no-DBUG/default-path test checked only two E6d counters, while the taskbook
+    required all E6d counters to stay `0` without the DBUG flag。
+- Fixes:
+  - restored the original E6a/E6b/E6c callback path unconditionally inside
+    `pq_orderby_worker_handler_ref_positive_smoke`；
+  - kept E6d as an independent post-cleanup two-row `cmp_ref()` check；
+  - extended no-DBUG MTR coverage to attempts / success / unsupported / refs /
+    cmp_nonzero / antisymmetric / post_cleanup counters。
+- Re-validation after fixes:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query pq_worker_attach_contract_smoke --parallel=1
+    --vardir=/tmp/pq_e6d_reviewfix_replay_vardir
+    --tmpdir=/tmp/pq_e6d_reviewfix_replay_tmp` passed；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query pq_stats --parallel=1
+    --vardir=/tmp/pq_e6d_reviewfix_stats_vardir
+    --tmpdir=/tmp/pq_e6d_reviewfix_stats_tmp` passed；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query --parallel=1
+    --vardir=/tmp/pq_e6d_reviewfix_full_vardir
+    --tmpdir=/tmp/pq_e6d_reviewfix_full_tmp` passed 89/89。
+- Second Review Agent verdict: `ACCEPT`；
+- Final review conclusion:
+  - original callback contract remains exercised；
+  - E6d post-cleanup two-row comparator check is independent；
+  - no-DBUG coverage includes all E6d counters；
+  - no default ORDER BY path, MQ wire, optimizer, handler, or InnoDB boundary
+    was changed。
+
+Required review after E6d coding:
+
+- Code Review: confirm no default `Exchange_sort` comparator / heap reader /
+  visible ORDER BY path changed；
+- Docs Review: confirm E6d does not claim real ORDER BY readiness；
+- Test Review: confirm no-DBUG and visible ORDER BY negative guards remain。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

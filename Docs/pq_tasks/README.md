@@ -5,17 +5,20 @@
 ## Current Summary
 
 - Last synced: 2026-06-22
-- Active update: M11-E6c Private cmp_ref Comparator Contract
-  已完成实现、验证和 Code / Docs / Test Review，准备提交。M11-E6a 已提交
-  为 `70197ead960`，证明 private/debug-only
+- Active update: M11-E6d Two-row cmp_ref Comparator Contract
+  已完成本地实现、验证和 Code / Docs / Test Review，准备提交。M11-E6a
+  已提交为 `70197ead960`，证明 private/debug-only
   `position(record)` + deep-copied handler ref + `cmp_ref(ref, ref)==0`
   contract；M11-E6b 已提交为 `03025f83ba6`，证明 private `PQOF` ORDER BY
-  frame 可传输 E6a 真实 handler ref。E6c 当前证明 owned copied ref 可跨过
-  worker cleanup boundary，并在 cleanup 后通过 still-open leader handler
-  调用 `cmp_ref()`；默认 cached comparator、visible ORDER BY PQ、
-  `HAS_ORDER_BY` 和 ORDER BY readiness flags 均保持不变。验证：`mysqld`
-  build passed，`pq_worker_attach_contract_smoke` passed，`pq_stats`
-  passed，full `parallel_query` suite passed 89/89。
+  frame 可传输 E6a 真实 handler ref；M11-E6c 已提交为 `8905f9d1289`，
+  证明 owned copied ref 可跨过 worker cleanup boundary，并在 cleanup 后通过
+  still-open leader handler 调用 `cmp_ref(ref, ref)`。E6d 进一步用两条真实
+  worker row 的 deep-copied refs 验证 cleanup 后 still-open leader handler
+  `cmp_ref(ref0, ref1)` / `cmp_ref(ref1, ref0)` 非零且反对称；不替换默认
+  cached comparator，不打开 visible ORDER BY PQ、`HAS_ORDER_BY` 或 ORDER BY
+  readiness flags。验证：`mysqld` build passed，
+  `pq_worker_attach_contract_smoke` passed，`pq_stats` passed，full
+  `parallel_query` suite passed 89/89。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
   ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史

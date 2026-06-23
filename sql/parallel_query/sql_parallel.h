@@ -312,6 +312,13 @@ struct PQ_global_stats {
   std::atomic<uint64> orderby_handler_ref_cmp_bytes{0};  ///< E6c
   std::atomic<uint64> orderby_handler_ref_cmp_equal{0};  ///< E6c
   std::atomic<uint64> orderby_handler_ref_cmp_post_cleanup_success{0};  ///< E6c
+  std::atomic<uint64> orderby_handler_ref_two_row_attempts{0};  ///< E6d
+  std::atomic<uint64> orderby_handler_ref_two_row_success{0};  ///< E6d
+  std::atomic<uint64> orderby_handler_ref_two_row_unsupported{0};  ///< E6d
+  std::atomic<uint64> orderby_handler_ref_two_row_refs{0};  ///< E6d
+  std::atomic<uint64> orderby_handler_ref_two_row_cmp_nonzero{0};  ///< E6d
+  std::atomic<uint64> orderby_handler_ref_two_row_antisymmetric_success{0};  ///< E6d
+  std::atomic<uint64> orderby_handler_ref_two_row_post_cleanup_success{0};  ///< E6d
   std::atomic<uint64> leader_row_stream_error_smoke_attempts{0};  ///< Error smoke
   std::atomic<uint64> leader_row_stream_error_smoke_selected{0};  ///< Error selected
   std::atomic<uint64> leader_row_stream_error_smoke_errors{0};  ///< Error seen
@@ -601,6 +608,17 @@ struct PQ_global_stats {
     orderby_handler_ref_cmp_bytes.store(0, std::memory_order_relaxed);
     orderby_handler_ref_cmp_equal.store(0, std::memory_order_relaxed);
     orderby_handler_ref_cmp_post_cleanup_success.store(
+        0, std::memory_order_relaxed);
+    orderby_handler_ref_two_row_attempts.store(0, std::memory_order_relaxed);
+    orderby_handler_ref_two_row_success.store(0, std::memory_order_relaxed);
+    orderby_handler_ref_two_row_unsupported.store(0,
+                                                  std::memory_order_relaxed);
+    orderby_handler_ref_two_row_refs.store(0, std::memory_order_relaxed);
+    orderby_handler_ref_two_row_cmp_nonzero.store(0,
+                                                  std::memory_order_relaxed);
+    orderby_handler_ref_two_row_antisymmetric_success.store(
+        0, std::memory_order_relaxed);
+    orderby_handler_ref_two_row_post_cleanup_success.store(
         0, std::memory_order_relaxed);
     leader_row_stream_error_smoke_attempts.store(0,
                                                  std::memory_order_relaxed);

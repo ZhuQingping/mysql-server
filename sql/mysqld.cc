@@ -10091,6 +10091,22 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_cmp_equal,
                                   orderby_handler_ref_cmp_equal)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_cmp_post_cleanup_success,
                                   orderby_handler_ref_cmp_post_cleanup_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_two_row_attempts,
+                                  orderby_handler_ref_two_row_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_two_row_success,
+                                  orderby_handler_ref_two_row_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_two_row_unsupported,
+                                  orderby_handler_ref_two_row_unsupported)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_two_row_refs,
+                                  orderby_handler_ref_two_row_refs)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_handler_ref_two_row_cmp_nonzero,
+                                  orderby_handler_ref_two_row_cmp_nonzero)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_handler_ref_two_row_antisymmetric_success,
+    orderby_handler_ref_two_row_antisymmetric_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_handler_ref_two_row_post_cleanup_success,
+    orderby_handler_ref_two_row_post_cleanup_success)
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
@@ -12067,6 +12083,27 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_handler_ref_cmp_unsupported",
      (char *)&show_pq_orderby_handler_ref_cmp_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_two_row_antisymmetric_success",
+     (char *)&show_pq_orderby_handler_ref_two_row_antisymmetric_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_two_row_attempts",
+     (char *)&show_pq_orderby_handler_ref_two_row_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_two_row_cmp_nonzero",
+     (char *)&show_pq_orderby_handler_ref_two_row_cmp_nonzero, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_two_row_post_cleanup_success",
+     (char *)&show_pq_orderby_handler_ref_two_row_post_cleanup_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_two_row_refs",
+     (char *)&show_pq_orderby_handler_ref_two_row_refs, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_two_row_success",
+     (char *)&show_pq_orderby_handler_ref_two_row_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_handler_ref_two_row_unsupported",
+     (char *)&show_pq_orderby_handler_ref_two_row_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_worker_handler_ref_success",
      (char *)&show_pq_orderby_worker_handler_ref_success, SHOW_FUNC,
