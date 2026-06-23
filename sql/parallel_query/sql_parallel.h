@@ -70,16 +70,24 @@
   leader THD and what error code propagates to THD::pq_error.
 */
 
-#include "sql/parallel_query/exchange.h"
-#include "sql/parallel_query/pq_handler.h"
-
 #include <atomic>
 #include <cstdint>
+#include <set>
 
+#include "include/my_alloc.h"
 #include "my_thread.h"
+#include "sql/join_optimizer/access_path.h"
+#include "sql/mem_root_array.h"
+#include "sql/parallel_query/exchange.h"
+#include "sql/parallel_query/pq_handler.h"
+#include "sql/parallel_query/pq_hash_join_shared_context.h"
 
 class THD;
 class Gather_operator;
+class Item_subselect;
+class JOIN;
+class QEP_TAB;
+struct ORDER;
 struct TABLE;
 
 // ---------------------------------------------------------------------------
@@ -1041,6 +1049,20 @@ struct PQ_worker_info {
   }
 };
 
+/**
+  Commercial PQ table descriptor carried by Gather_operator.
+
+  This is a state holder only in C1a. The current 8.0.46 typed handler path
+  still owns the active worker-open contract through PQ_Worker_open_context.
+*/
+struct PQTab {
+  TABLE *m_table{nullptr};
+  void *m_pq_ctx{nullptr};
+  QEP_TAB *m_tab{nullptr};
+  uint keyno{0};
+  bool table_scan{false};
+};
+
 // ---------------------------------------------------------------------------
 // PQ_worker_manager: worker lifecycle interface
 // ---------------------------------------------------------------------------
@@ -1230,7 +1252,29 @@ class Gather_operator {
   explicit Gather_operator(uint32 dop, uint32 ring_size = PQ_MQ_DEFAULT_RING_SIZE)
       : m_dop(dop), m_ring_size(ring_size) {}
 
+  Gather_operator(uint32 dop, MEM_ROOT *root,
+                  uint32 ring_size = PQ_MQ_DEFAULT_RING_SIZE)
+      : m_dop(dop),
+        m_ring_size(ring_size),
+        m_uncorrelated_subqueries(root) {}
+
   ~Gather_operator();
+
+  /*
+    Commercial alignment fields.
+
+    These are inert in C1a. They allow subsequent batches to migrate
+    make_pq_gather_operator(), worker plan clone, ORDER BY, and hash join
+    wiring without replacing the current 8.0.46 worker lifecycle contract.
+  */
+  JOIN *m_template_join{nullptr};
+  PQTab pq_tabs[END_TAB];
+  std::set<PQTabType> tab_set{DIV_TAB};
+  int m_ha_err{0};
+  unique_ptr_destroy_only<HashJoin::PQHashJoinSharedContext>
+      m_pq_hash_join_shared_context;
+  Mem_root_array<Item_subselect *> m_uncorrelated_subqueries;
+  std::set<const ORDER *> m_desc_groups;
 
   /**
     Initialize the Gather_operator: allocate workers and Exchange.

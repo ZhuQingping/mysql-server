@@ -568,7 +568,7 @@ D1 必须处理：
 
 ### Batch C1 - SQL main hook alignment
 
-Status: pending
+Status: in progress
 
 目标：
 
@@ -576,6 +576,52 @@ Status: pending
   handler hook；
 - 先让商用 plan rewrite 能生成和 explain，不要求所有场景执行成功；
 - 不成功必须记录 blocker/gate，不等同 skip；fallback/skip 必须有明确 reason。
+
+#### Batch C1a - Gather_operator commercial state carriers
+
+Status: completed and committed
+
+目标：
+
+- 先把商用 `Gather_operator` 依赖的状态字段引入当前 8.0.46 代码；
+- 不打开 `make_pq_gather_operator()`、worker plan clone、ORDER BY/hash join
+  执行路径；
+- 保持现有 worker lifecycle 和 fail-closed 行为不变。
+
+Completion Report - Batch C1a:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.h`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added commercial-like `PQTab` state descriptor；
+  - added `Gather_operator(uint32 dop, MEM_ROOT *root, uint32 ring_size)`
+    constructor for later MEM_ROOT-owned subquery state；
+  - added inert commercial alignment fields:
+    `m_template_join`、`pq_tabs`、`tab_set`、`m_ha_err`、
+    `m_pq_hash_join_shared_context`、`m_uncorrelated_subqueries`、
+    `m_desc_groups`；
+  - included the current 8.0.46 headers needed for `PQTabType`、
+    `Mem_root_array` and the complete
+    `HashJoin::PQHashJoinSharedContext` type。
+- validation:
+  - `git diff --check -- sql/parallel_query/sql_parallel.h` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`。
+- risks carried forward:
+  - this batch is only a state-carrier step; it does not migrate commercial
+    `make_pq_gather_operator()` or leader/worker QEP rewrite；
+  - `PQTab::m_pq_ctx` remains opaque until D1/C1 later connects the handler
+    and InnoDB worker context；
+  - `tab_set` initial value follows commercial intent but must be rechecked
+    when the optimizer table-classification hook is opened。
+- review:
+  - independent Review Agent accepted the patch；
+  - confirmed `PQHashJoinSharedContext` complete-type ownership is safe；
+  - confirmed new fields are inert and do not open new execution behavior；
+  - noted `access_path.h` include is broad but acceptable for C1a; future
+    cleanup may split `PQTabType` into a smaller shared type header.
 
 ### Batch D1 - Handler/InnoDB full worker path
 
