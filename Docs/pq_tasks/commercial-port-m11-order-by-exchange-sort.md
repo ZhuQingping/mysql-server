@@ -9699,6 +9699,172 @@ Completion Report - M11-E6e Coding:
   - confirmed MTR covers no-DBUG zero counters, positive adapter counters,
     unsupported `0`, `pq_stats`, and visible ORDER BY negative guards。
 
+### M11-E6f: ORDER BY Readiness Inventory and Query_result_mq Stable Handler-ref Wire Contract
+
+Status: taskbook started；docs/design-only before source coding。
+
+Decision input:
+
+- Current Branch Explorer recommends an E6f docs-only readiness /
+  prerequisite inventory before any further source smoke, because the current
+  branch is still fail-closed and E6a-E6e evidence is private；
+- Commercial Reference Explorer recommends the next source direction after E6e
+  should be a private `Query_result_mq` stable handler-ref wire contract,
+  because the commercial chain depends on
+  `position(record) -> file->ref -> MQ deep copy -> leader decode ->
+  handler::cmp_ref()` before the default heap comparator has real row-id input；
+- These recommendations are combined here: first record the inventory and
+  reviewed wire contract, then code only a private/DBUG contract in a later
+  reviewed E6f coding step。
+
+Commercial behavior to preserve:
+
+- worker-side `file->position(record)` fills `handler::ref` before sending the
+  row；
+- when stable output is enabled, `Query_result_mq::send_data()` deep-copies
+  `file->ref` bytes of length `file->ref_length` into the MQ frame；
+- leader-side exchange code decodes row-id bytes before reconstructing the
+  record image；
+- `Exchange_sort` receives the opened divided-table handler and `ref_length`；
+- default heap comparison uses `handler::cmp_ref(row_id_0, row_id_1)` only when
+  stable output is required and row-id bytes are present。
+
+Current branch inventory:
+
+- E6a proves only a private/debug-only worker attach contract:
+  `position(record)` can produce a deep-copied handler ref and
+  `cmp_ref(ref, ref)==0`；
+- E6b proves only a private `PQOF` ORDER BY frame can carry the E6a copied
+  handler ref；
+- E6c proves the copied handler ref survives worker cleanup and can be compared
+  after cleanup through a still-open leader handler；
+- E6d proves two real worker row refs can be compared after cleanup with
+  non-zero / antisymmetric `cmp_ref()` results；
+- E6e proves only a private equal-sort-key comparator adapter can call
+  `handler::cmp_ref()` on controlled cached records；
+- current `Query_result_mq::send_data()` still sends only `PQWR` field-value
+  payloads；`m_stable_output` is stored but does not add handler-ref bytes to
+  the wire；
+- current `Exchange_sort` default cached comparator still compares `row_id`
+  bytes directly, then `worker_id`；it is not the commercial `cmp_ref()`
+  default comparator；
+- current `PQOrderByExecutionPreflight` still keeps ORDER BY execution
+  fail-closed, including false prerequisites for worker ORDER BY frame
+  producer, heap read, row-id tie-break, default ordered read, Filesort /
+  Sort_param runtime state, and leader materialization；
+- ordinary user-visible ORDER BY still stops at the `HAS_ORDER_BY` serial
+  boundary。
+
+Readiness interpretation:
+
+- E6a-E6e private evidence must not be treated as:
+  - `rowid_tiebreak_ready=true`；
+  - `exchange_sort_heap_read_ready=true`；
+  - `default_ordered_read_ready=true`；
+  - `worker_order_frame_producer_ready=true`；
+  - visible ORDER BY PQ eligibility；
+  - proof that default `pq_orderby_cached_compare_records()` is commercial
+    ready。
+- E6f may add new diagnostics named as private wire / smoke / contract
+  counters only；it must not reduce missing prerequisite counters or increment
+  `Parallel_orderby_execution_preflight_ready`。
+
+E6f design goal:
+
+- define a private stable handler-ref wire contract for `Query_result_mq` that
+  can be tested without routing user-visible ORDER BY through PQ；
+- prove deep-copy semantics for handler refs in the worker-result wire shape；
+- keep existing normal `PQWR` field-value behavior compatible with M11-B
+  worker-result tests；
+- keep the contract explicit that `position()` must have happened before
+  `send_data()` and that E6f does not itself establish runtime readiness。
+
+Proposed coding shape after design review:
+
+- add a private helper around `Query_result_mq` worker-result frame construction
+  that is not reachable from production `Query_result_mq::send_data()` in E6f；
+- keep `Query_result_mq::send_data()` constructor-flag behavior unchanged in
+  E6f：`m_stable_output` must remain unused by the production send path until a
+  later reviewed runtime wiring phase；
+- when stable output is explicitly requested by the private helper and a valid
+  handler/ref is supplied, place deep-copied handler-ref bytes in a stable-ref
+  wire contract isolated by a reserved `PQWR` `flags` bit；
+- normal non-stable `PQWR` frames must keep `flags == 0` and remain
+  byte-compatible for existing row-value decode paths；
+- add a stable decode helper that first validates the stable-ref flag and then
+  exposes borrowed row-id bytes and ref length from the raw frame；
+- ordinary `pq_decode_worker_result_row()` must not silently decode stable-ref
+  frames as normal field-value frames；it must reject or otherwise fail safely
+  when the stable-ref flag is present；
+- do not change `PQ_worker_result_frame_header` size, field order, magic,
+  version, message type numbering, or the existing non-stable row payload
+  layout；
+- fail closed when `ref_length == 0`, handler is null, `handler::ref` is null,
+  the stable frame would overflow `uint32`, or the frame header/length is
+  inconsistent；
+- add DBUG-only MTR that constructs a stable-output `Query_result_mq` or helper
+  frame with copied handler ref, mutates the original source buffer after send,
+  then verifies the decoded wire bytes remain unchanged；
+- add negative DBUG MTR paths proving:
+  - invalid stable-ref inputs do not produce a fake row id；
+  - invalid flags, version, or length fail closed；
+  - a stable-ref frame does not decode successfully through the normal
+    non-stable `pq_decode_worker_result_row()` path。
+
+Allowed files for E6f coding:
+
+- `sql/parallel_query/query_result_mq.{h,cc}`；
+- `sql/parallel_query/sql_parallel.{h,cc}` only for DBUG smoke entry and
+  counters if the smoke is not self-contained；
+- `sql/mysqld.cc` only for E6f private status counters；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- `Docs/pq_tasks/README.md` and this taskbook。
+
+Forbidden files / behavior:
+
+- `sql/parallel_query/pq_optimizer.*` and any `HAS_ORDER_BY` eligibility
+  relaxation；
+- `PQOrderByExecutionPreflight` readiness flag changes；
+- default `pq_orderby_cached_compare_records()` replacement；
+- default `Exchange_sort` heap reader or `ParallelScanIterator::Read()` ORDER
+  BY path；
+- `sql/sql_executor.*`, `sql/sql_optimizer.*`,
+  `sql/join_optimizer/access_path.*`；
+- `sql/handler.*` and `storage/innobase/**`；
+- visible ORDER BY PQ activation；
+- production `Query_result_mq::send_data()` behavior changes；
+- `pq_make_join_readinfo()` / `pq_check_stable_sort()` production-path wiring；
+- `PQ_worker_result_frame_header` size/order/magic/type renumbering。
+
+Required review before E6f coding:
+
+- Design Review: confirm inventory correctly separates private evidence from
+  default runtime readiness；
+- Commercial Reference Review: confirm the next source step should be stable
+  handler-ref wire before default heap comparator；
+- Scope Review: confirm existing non-stable `PQWR` decode remains compatible,
+  stable-ref frames are isolated by a reserved flag, normal decode does not
+  silently accept stable frames, and visible ORDER BY remains blocked。
+
+Validation for this docs/design step:
+
+- `git diff --check`；
+- no build or MTR required before source coding；
+- optional read-only confirmation that current `Query_result_mq::send_data()`
+  still does not use `m_stable_output`, current ORDER BY preflight remains
+  fail-closed, and current visible ORDER BY still reports `HAS_ORDER_BY`。
+
+Next recommended sequence after E6f design review:
+
+1. E6f coding: private `Query_result_mq` stable handler-ref wire contract；
+2. E6g design: default `Exchange_sort` handler-ref comparator / heap reader
+   precondition review；
+3. E6g coding: guarded default heap comparator smoke only after stable wire
+   evidence exists；
+4. E7 design: user-visible ORDER BY gate remains deferred until wire,
+   comparator, default reader, kill/cleanup, Filesort state, and preflight
+   readiness are all reviewed。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
