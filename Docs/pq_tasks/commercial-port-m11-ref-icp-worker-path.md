@@ -9,8 +9,9 @@ committed；F5-A reverse boundary contract completed and committed；F5-C
 partition worker ownership design completed and committed；F5-C1 partition
 reject diagnostic completed and committed；F5-B MVI inventory / design accepted；
 F5-B1 debug-only MVI reject diagnostic completed and committed；F5-E ICP +
-native `Record_buffer` combined path design accepted；
-real worker-side ICP positive row production remains blocked。
+native `Record_buffer` combined path design accepted；F5-E1/E2 completed；
+M11-F5 closure accepted；M11-F6 positive-path phase selection design is the
+current next step。Real worker-side ICP positive row production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -2073,6 +2074,144 @@ Closure Review Result:
   - added F5-B1 commit id to README；
 - final verdict: `ACCEPT`；
 - required fixes before commit: None。
+
+### M11-F6: Ref / ICP Positive-path Phase Selection
+
+Status: design-only taskbook created；source and MTR edits are forbidden until
+Design / Source / Test Review accepts a single next path。
+
+Goal:
+
+- 从 M11-F5 closure 后的新阶段重新选择一个最小 ref / ICP worker-side
+  positive path；
+- 不在 F6 直接编码正向执行；
+- 明确候选路径的 ownership、cleanup、read-view、fallback-before-row、
+  ERROR/KILL、MTR 合同；
+- 防止把 native `Record_buffer`、MVI、partition、reverse、secondary MIN、
+  ORDER BY 或 worker MQ row production 混进同一阶段。
+
+Current Facts:
+
+- 当前分支已有 leader-local 能力：
+  - strict covering integer secondary forward range；
+  - constant covering ref；
+  - dependent covering ref leader-local gate；
+  - leader-local non-covering secondary range ICP + clustered lookup。
+- 这些能力仍不是商用 worker-side ref / ICP path；
+- `PQRefIterator::Read()` 和 `PQblockScanIterator::Read()` positive worker
+  row production 仍 blocked；
+- `pq_worker_scan_next()` 仍不允许作为用户可见或默认 worker pull-row path；
+- native `Record_buffer` / InnoDB prefetch cache 仍只完成 negative /
+  diagnostic boundary；
+- MVI unique filter、partition、reverse、secondary MIN positive path 仍
+  blocked；
+- ORDER BY source work 已按 M11-E handoff 停止，visible ORDER BY PQ 仍由
+  `HAS_ORDER_BY` 拒绝。
+
+Candidate Paths Considered:
+
+1. Worker-side constant covering ref:
+   - 优点：输入形态最窄，当前已有 leader-local C2 正例和 ref equality smoke；
+   - 必须新增 worker-owned handler context、per-probe range/ref ownership、
+     no-row fallback-before-row 语义、ERROR/KILL cleanup；
+   - 仍不能依赖 native `Record_buffer` 或 worker-side ICP。
+
+2. Worker-side covering secondary forward range:
+   - 优点：当前已有 M9-B3d leader-local positive gate；
+   - 风险：multi-row cursor lifetime、range partition、read-view 和 EOF /
+     error 边界更宽，容易滑向 generic `pq_worker_scan_next()`。
+
+3. Worker-side non-covering secondary range ICP:
+   - 优点：贴近商用 ICP 差异；
+   - 风险：需要 worker-side pushed condition clone/refix、clustered lookup、
+     condition remainder、read/write set 和 row materialization cleanup；
+   - 当前不应作为第一个 positive coding target。
+
+4. Native `Record_buffer` / MVI / partition / reverse / secondary MIN:
+   - 已由 F5 closure 明确 blocked；
+   - 不作为 F6 第一正向候选。
+
+Phase Decision:
+
+- F6 选择 **worker-side constant covering ref** 作为后续最小正向候选；
+- 下一步不是直接打开 `PQRefIterator::Read()`，而是创建
+  `M11-F6a Worker-side Constant Ref Contract`；
+- F6a 应先证明 worker-owned ref context 和 handler ownership，而不是发送
+  worker row 或接默认 iterator；
+- F6b 才能考虑 private worker-row token / MQ handoff；
+- F6c 之后才评估是否把用户可见 constant covering ref 从 leader-local
+  gate 迁移到 worker-side path；
+- native `Record_buffer`、worker-side ICP、MVI、partition、reverse、
+  secondary MIN 和 ORDER BY 继续保持独立后续阶段。
+
+Allowed Files for F6:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`；
+- `Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`，仅允许
+  E6g-5d status / review / commit-id 同步，不允许新增 ORDER BY source
+  work 或 positive gate。
+
+Forbidden for F6:
+
+- any `sql/**` or `storage/**` source changes；
+- any MTR test/result changes；
+- any `PQRefIterator::Read()` / `PQblockScanIterator::Read()` positive row
+  production；
+- any `pq_worker_scan_next()` enablement；
+- any worker MQ row production；
+- any native `Record_buffer` positive path；
+- any MVI unique filter, partition, reverse, secondary MIN positive path；
+- any ORDER BY / `Exchange_sort` / `HAS_ORDER_BY` / visible ORDER BY gate
+  change。
+
+Proposed F6a Design Requirements:
+
+- define worker-owned constant-ref context lifetime and cleanup；
+- distinguish fallback boundaries:
+  - before worker start / commit point, no-row or unsupported shape may fall
+    back or fail closed without exposing partial results；
+  - after worker start / commit point, ERROR/KILL/EOF must be propagated through
+    the worker path and must not silently serial-fallback；
+- define read-view ownership for worker handler and leader-visible consistency；
+- define ERROR/KILL detach propagation before any row token；
+- keep existing M9-C2 user-visible leader-local constant covering ref behavior
+  stable until F6c or later；
+- require focused MTR windows for:
+  - no-row ref probe；
+  - one-row ref probe；
+  - duplicate-key ref probe；
+  - worker ERROR before first row；
+  - KILL / detach cleanup；
+  - existing leader-local C2 counters not regressing。
+
+Validation for F6:
+
+- docs-only：`git diff --check`；
+- no build/MTR required unless source or test files change。
+
+Design / Source / Test Review Prompt:
+
+请作为 M11-F6 Design / Source / Test Review Agent，只读审查本 F6 任务书：
+
+1. F6 是否正确从 F5 closure 后只选择一个最小 positive path；
+2. worker-side constant covering ref 是否比 covering range、non-covering ICP、
+   native `Record_buffer`、MVI、partition、reverse、secondary MIN 更适合作为
+   第一正向候选；
+3. F6 是否保持 design-only，不误开 `PQRefIterator::Read()`、
+   `PQblockScanIterator::Read()`、`pq_worker_scan_next()` 或 worker MQ row；
+4. F6a 的前置合同是否覆盖 ownership、cleanup、read-view、
+   fallback-before-row、ERROR/KILL 和 MTR 护栏；
+5. 是否还有必须写入 F6 的 hard stop 或测试要求。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Required fixes before commit
+- Safe next task recommendation
 
 Review Prompt:
 

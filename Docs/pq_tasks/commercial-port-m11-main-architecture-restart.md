@@ -124,8 +124,10 @@ F 负责继续评估 `PQRefIterator`、`ha_pq_next`、secondary ICP worker path�
 `pq_worker_scan_next()` 仍 intentionally unsupported，M9 ref/ICP 是
 leader-local gate。F 已创建独立 taskbook：
 [commercial-port-m11-ref-icp-worker-path.md](commercial-port-m11-ref-icp-worker-path.md)。
-M11-F0 为 design-only / read-only，review accept 后再决定 F1 是否只做
-probe/guard-only。
+M11-F0-F5 已完成 design / diagnostic / negative guard / closure。当前推荐
+进入 M11-F6 design-only positive-path phase selection，从 ref / ICP
+worker-side 缺口中只选择一个最小正向候选；任何 positive coding 仍需新的
+reviewed phase。
 
 ## 验收边界
 
@@ -139,9 +141,11 @@ probe/guard-only。
 ## 当前推荐下一步
 
 1. 不再继续 M11-E source coding，ORDER BY 真实执行保持 blocked；
-2. review M11-F0 Ref / ICP Worker Path Continuation Contract；
-3. F0 review accept 后，再进入 M11-F1 worker-side ref/ICP shape
-   probe/guard-only 任务。
+2. 完成 M11-F6 Ref / ICP positive-path phase selection design review；
+3. F6 review accept 后，再进入 F6a worker-side constant covering ref
+   contract；F6a 仍不得打开 `PQRefIterator::Read()`、
+   `PQblockScanIterator::Read()`、`pq_worker_scan_next()` 或 worker MQ row
+   production。
 
 ## Review
 

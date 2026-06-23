@@ -10650,8 +10650,8 @@ Validation evidence:
 
 ### M11-E6g-5d: Fail-closed ORDER BY Audit
 
-Status: docs/status audit completed，target validation passed，waiting Docs /
-Source review before commit。
+Status: docs/status audit completed，target validation passed，Docs / Source
+review accepted，committed as `8991c90dc04`。
 
 Goal:
 
@@ -10693,6 +10693,16 @@ Required validation:
 - full `parallel_query` suite is optional for docs-only E6g-5d because E6g-5c
   already passed full suite immediately before this audit, but may be rerun if
   any MTR/source file changes。
+
+Review result:
+
+- Docs / Source / Task Review initially requested one stale validation wording
+  fix；
+- fix applied: E6g-5d records `git diff --check` as passed；
+- final verdict: `ACCEPT`；
+- committed as `8991c90dc04`；
+- no `sql/**`、`storage/**`、MTR source/result 或 ORDER BY visible gate
+  changes were included。
 
 Next-step constraint:
 
