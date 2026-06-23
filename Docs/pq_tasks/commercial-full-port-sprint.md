@@ -568,7 +568,7 @@ D1 必须处理：
 
 ### Batch C1 - SQL main hook alignment
 
-Status: in progress
+Status: completed
 
 目标：
 
@@ -1405,6 +1405,76 @@ Completion Report - Batch D1.6b-kill:
     materialization；
   - reviewer confirmed the MTR verifies selected stream without row/executed
     counter increments and preserves `ER_QUERY_INTERRUPTED`。
+
+#### Batch D1.6b-budget - threaded row-stream thread budget contract
+
+Status: in progress
+
+目标：
+
+- 为 threaded callback row producer 接入 PQ thread budget acquire/release
+  contract；
+- 默认 `parallel_max_threads=0` 仍表示未配置预算，不改变现有 debug-gated
+  threaded tests；
+- 预算拒绝时不启动 worker，不增加 `Parallel_workers_launched`，不泄漏
+  `PQ_threads_running`；
+- 为后续用户可见 threaded iterator 接入准备资源治理语义。
+
+Planned implementation:
+
+- `sql/parallel_query/sql_parallel.h`
+  - `Gather_operator` 增加 `m_thread_budget_acquired`；
+- `sql/parallel_query/sql_parallel.cc`
+  - `run_worker_callback_threaded_producer()` 在启动 worker 前按
+    `parallel_max_threads > 0` 获取预算；
+  - debug-only `pq_read_threaded_force_thread_budget_refuse` 强制执行拒绝路径；
+  - `start_workers()` 失败和 `destroy()` 释放已获取预算；
+- `mysql-test/suite/parallel_query/t|r/pq_read_threaded_thread_budget_refuse`
+  - 验证预算拒绝时 `PQ_threads_refused` 增加、`PQ_threads_running` 和
+    `Parallel_workers_launched` 不增加。
+
+Validation:
+
+- `git diff --check -- sql/parallel_query/sql_parallel.cc sql/parallel_query/sql_parallel.h mysql-test/suite/parallel_query/t/pq_read_threaded_thread_budget_refuse.test mysql-test/suite/parallel_query/r/pq_read_threaded_thread_budget_refuse.result Docs/pq_tasks/commercial-full-port-sprint.md`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr parallel_query.pq_read_threaded_thread_budget_refuse parallel_query.pq_read_threaded_shadow_dop1 parallel_query.pq_read_threaded_worker_error --parallel=1 --vardir=/tmp/pq-d16bbudget-target-vardir --tmpdir=/tmp/pq-d16bbudget-target-tmpdir`
+
+Risk constraints:
+
+- no default user-visible PQ enablement；
+- no global/sysvar contract change for `parallel_max_threads` in this batch；
+- no worker THD scheduling policy change beyond guarded budget acquire/release。
+
+Completion Report - Batch D1.6b-budget:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/parallel_query/sql_parallel.cc`
+  - `mysql-test/suite/parallel_query/t/pq_read_threaded_thread_budget_refuse.test`
+  - `mysql-test/suite/parallel_query/r/pq_read_threaded_thread_budget_refuse.result`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - `Gather_operator` now tracks acquired thread budget；
+  - threaded callback producer acquires budget before worker launch when
+    `parallel_max_threads > 0`；
+  - default `parallel_max_threads=0` keeps existing tests and behavior
+    unchanged；
+  - start failure and destroy both release acquired budget；
+  - debug-only refusal flag verifies the negative path without changing sysvar
+    surface。
+- validation:
+  - `git diff --check -- sql/parallel_query/sql_parallel.cc sql/parallel_query/sql_parallel.h mysql-test/suite/parallel_query/t/pq_read_threaded_thread_budget_refuse.test mysql-test/suite/parallel_query/r/pq_read_threaded_thread_budget_refuse.result Docs/pq_tasks/commercial-full-port-sprint.md`
+    passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr parallel_query.pq_read_threaded_thread_budget_refuse parallel_query.pq_read_threaded_shadow_dop1 parallel_query.pq_read_threaded_worker_error --parallel=1 --vardir=/tmp/pq-d16bbudget-target-vardir --tmpdir=/tmp/pq-d16bbudget-target-tmpdir`
+    passed, all 4 tests successful。
+- review:
+  - independent Review Agent accepted the batch；
+  - reviewer confirmed budget is acquired only after successful
+    `check_pq_running_threads()` and released on start failure / destroy；
+  - reviewer confirmed default `parallel_max_threads=0` preserves existing
+    threaded behavior；
+  - reviewer confirmed the MTR covers refused/running/workers deltas。
 
 ### Batch E1 - Commercial MTR migration
 

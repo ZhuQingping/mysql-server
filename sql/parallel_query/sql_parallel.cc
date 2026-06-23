@@ -573,6 +573,11 @@ void Gather_operator::destroy() {
     m_workers = nullptr;
   }
 
+  if (m_thread_budget_acquired) {
+    release_pq_running_threads(m_dop);
+    m_thread_budget_acquired = false;
+  }
+
   // Clean up Exchange_nosort.
   if (m_exchange != nullptr) {
     m_exchange->cleanup();
@@ -2930,7 +2935,7 @@ bool Gather_operator::prepare_leader_row_stream_error_smoke(
 bool Gather_operator::run_worker_callback_threaded_producer(
     THD *leader_thd, TABLE *leader_table, uint32 max_rows) {
   if (leader_thd == nullptr || leader_table == nullptr || m_dop == 0 ||
-      max_rows == 0 || !m_initialized) {
+      max_rows == 0 || !m_initialized || m_thread_budget_acquired) {
     return true;
   }
 
@@ -2957,7 +2962,22 @@ bool Gather_operator::run_worker_callback_threaded_producer(
     worker->m_task_rows_sent.store(0, std::memory_order_release);
   }
 
+  bool enforce_thread_budget = parallel_max_threads > 0;
+  DBUG_EXECUTE_IF("pq_read_threaded_force_thread_budget_refuse", {
+    enforce_thread_budget = true;
+  });
+  if (enforce_thread_budget) {
+    if (!check_pq_running_threads(m_dop, 0)) {
+      return true;
+    }
+    m_thread_budget_acquired = true;
+  }
+
   if (start_workers(leader_thd)) {
+    if (m_thread_budget_acquired) {
+      release_pq_running_threads(m_dop);
+      m_thread_budget_acquired = false;
+    }
     for (uint32 i = 0; i < m_dop; ++i) {
       auto *worker = get_worker(i);
       if (worker != nullptr) worker->m_task = PQ_worker_task::NOOP;

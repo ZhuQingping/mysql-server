@@ -1,0 +1,49 @@
+# Verify threaded row-stream respects PQ thread budget refusal.
+
+--source include/have_innodb_16k.inc
+--source include/have_debug.inc
+
+CREATE TABLE pq_read_threaded_thread_budget_refuse_t (
+  id INT PRIMARY KEY,
+  v INT
+) ENGINE=InnoDB;
+INSERT INTO pq_read_threaded_thread_budget_refuse_t VALUES (1,10),(2,20);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+
+SET @threads_refused_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'PQ_threads_refused');
+SET @threads_running_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'PQ_threads_running');
+SET @workers_launched_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_workers_launched');
+
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_read_threaded_shadow_path,pq_read_threaded_force_thread_budget_refuse";
+--error ER_GET_ERRNO
+SELECT id, v FROM pq_read_threaded_thread_budget_refuse_t WHERE v >= 0;
+SET SESSION debug=@old_debug;
+
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'PQ_threads_refused') -
+  @threads_refused_before) AS threads_refused_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'PQ_threads_running') -
+  @threads_running_before) AS threads_running_delta;
+SELECT (
+  (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+   WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
+  @workers_launched_before) AS workers_launched_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE pq_read_threaded_thread_budget_refuse_t;

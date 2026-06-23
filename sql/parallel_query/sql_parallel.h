@@ -1276,6 +1276,7 @@ class Gather_operator {
   PQ_stats m_stats;                    ///< Per-query execution stats
   bool m_all_finished{false};          ///< All workers reached terminal state
   bool m_initialized{false};           ///< init() has been called
+  bool m_thread_budget_acquired{false}; ///< Runtime thread budget acquired
   uint32 m_ring_size{PQ_MQ_DEFAULT_RING_SIZE};  ///< MQ ring buffer size
 
  public:
