@@ -337,6 +337,12 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_result_stable_ref_deep_copy_success{0};  ///< E6f
   std::atomic<uint64> worker_result_stable_ref_normal_rejects{0};  ///< E6f
   std::atomic<uint64> worker_result_stable_ref_invalid_rejects{0};  ///< E6f
+  std::atomic<uint64> stable_ref_adapter_attempts{0};  ///< E6g-3
+  std::atomic<uint64> stable_ref_adapter_success{0};  ///< E6g-3
+  std::atomic<uint64> stable_ref_adapter_unsupported{0};  ///< E6g-3
+  std::atomic<uint64> stable_ref_adapter_bytes{0};  ///< E6g-3
+  std::atomic<uint64> stable_ref_adapter_deep_copy_success{0};  ///< E6g-3
+  std::atomic<uint64> stable_ref_adapter_ref_length_mismatch{0};  ///< E6g-3
   std::atomic<uint64> leader_row_stream_error_smoke_attempts{0};  ///< Error smoke
   std::atomic<uint64> leader_row_stream_error_smoke_selected{0};  ///< Error selected
   std::atomic<uint64> leader_row_stream_error_smoke_errors{0};  ///< Error seen
@@ -671,6 +677,14 @@ struct PQ_global_stats {
                                                   std::memory_order_relaxed);
     worker_result_stable_ref_invalid_rejects.store(0,
                                                    std::memory_order_relaxed);
+    stable_ref_adapter_attempts.store(0, std::memory_order_relaxed);
+    stable_ref_adapter_success.store(0, std::memory_order_relaxed);
+    stable_ref_adapter_unsupported.store(0, std::memory_order_relaxed);
+    stable_ref_adapter_bytes.store(0, std::memory_order_relaxed);
+    stable_ref_adapter_deep_copy_success.store(0,
+                                               std::memory_order_relaxed);
+    stable_ref_adapter_ref_length_mismatch.store(
+        0, std::memory_order_relaxed);
     leader_row_stream_error_smoke_attempts.store(0,
                                                  std::memory_order_relaxed);
     leader_row_stream_error_smoke_selected.store(0,

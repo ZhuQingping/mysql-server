@@ -5,20 +5,20 @@
 ## Current Summary
 
 - Last synced: 2026-06-22
-- Active update: M11-E6g-2 Exchange_sort ref-owner smoke implementation.
-  E6g-1 已提交为 `74e00d1065a`，明确商用默认 heap comparator 依赖
-  leader-side `Exchange_sort` 持有正确 handler/ref_length/stable_output
-  ownership、decoded stable row-id 生命周期、Filesort/Sort_param runtime
-  state 和 worker producer；在这些 owner 未明确前，不编码默认 comparator、
-  heap reader、ORDER BY readiness 或 visible ORDER BY gate。E6g-2 当前本地
-  实现新增 DBUG-only `pq_exchange_sort_ref_owner_smoke`：绑定 still-open
-  leader handler 与精确 `ref_length` 到 private owner shape，验证 owned
-  row-id bytes，并拒绝 length mismatch、null handler、null row-id。E6g-2
-  不调用 `handler::cmp_ref()`，不替换默认 heap comparator，不连接 production
-  `Query_result_mq::send_data()`，不打开 visible ORDER BY PQ 或 readiness
-  flag。已完成本地 RED/GREEN 验证：`mysqld` build passed，
-  `pq_commercial_order_by_frames` passed，`pq_stats` passed，full
-  `parallel_query` suite passed 89/89；当前等待独立 Code/Docs/Test review。
+- Active update: M11-E6g-3 stable-ref adapter smoke implementation.
+  E6g-2 已提交为 `fe34564e5f0`，证明 `Exchange_sort` 可在 DBUG-only
+  smoke 中绑定 still-open leader handler 和精确 `ref_length`，并对 owned
+  row-id bytes 的 mismatch / null handler / null row-id fail-closed。E6g-3
+  当前本地实现新增 DBUG-only `pq_worker_result_stable_ref_adapter_smoke`：
+  复用 worker attach 真实 `position(record)` handler ref 和 E6f `PQWR`
+  stable-ref wire helper，decode 后立即 deep-copy 到 owned row-id bytes，
+  并用 leader handler exact `ref_length` 做严格长度校验。仍不改
+  production `Query_result_mq::send_data()` / `m_stable_output`，不调用
+  `handler::cmp_ref()`，不替换默认 comparator，不打开 readiness 或 visible
+  ORDER BY gate。已完成设计检视反馈修正、`mysqld` build passed、
+  `pq_worker_attach_contract_smoke` + `pq_stats` targeted MTR passed、
+  `git diff --check` passed、full `parallel_query` suite passed 89/89；
+  Code / Docs / Test Review accepted，当前准备提交。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
   ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史

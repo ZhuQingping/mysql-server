@@ -115,6 +115,11 @@ bool pq_run_query_result_mq_stable_ref_smoke(const uchar *handler_ref,
                                              uint32 *normal_decode_rejects,
                                              uint32 *invalid_rejects);
 
+bool pq_run_query_result_mq_stable_ref_adapter_smoke(
+    const uchar *handler_ref, uint32 handler_ref_len,
+    uint32 expected_ref_length, uint32 *ref_bytes, uint32 *owned_ref_success,
+    uint32 *length_mismatch_rejects);
+
 /*
   This is used to get result from a query executed by PQ worker
 */

@@ -10190,6 +10190,90 @@ Review result:
   local smoke, nor `handler::cmp_ref()` tie-break integration. Next task must
   remain DBUG-only and keep visible ORDER BY PQ closed。
 
+### M11-E6g-3: Stable-ref Adapter Smoke
+
+Status: local implementation completed，full validation and Code / Docs / Test
+review accepted，ready to commit。
+
+Goal:
+
+- connect the E6f `PQWR` stable-ref wire contract to the E6g-2 leader
+  handler/ref_length owner contract；
+- use the existing worker attach smoke path where a worker handler reads a real
+  row and calls `position(record)`；
+- send the captured handler `ref` through a private stable-ref frame, decode it,
+  and immediately deep-copy the borrowed decoded row-id pointer into owned
+  bytes；
+- validate owned row-id length against the still-open leader handler's exact
+  `ref_length`；
+- keep ORDER BY PQ user-visible execution closed。
+
+Design review feedback applied:
+
+- Design Review Agent `019ef23b-bfbc-7a43-bbe4-938d89c31b85` initially returned
+  `REVISE`；
+- applied the required corrections:
+  - helper now explicitly receives `expected_ref_length` from
+    `leader_table->file->ref_length`；
+  - helper requires `handler_ref_len == expected_ref_length` before success；
+  - decoded `row_id_len` and owned vector length must equal the same expected
+    value；
+  - DBUG flag and counters use adapter naming:
+    `pq_worker_result_stable_ref_adapter_smoke` and
+    `Parallel_worker_result_stable_ref_adapter_*`。
+
+Implemented:
+
+- added `pq_run_query_result_mq_stable_ref_adapter_smoke()`；
+- the helper sends a stable-ref `PQWR` ROW frame through a local MQ, decodes it
+  with `pq_decode_worker_result_stable_ref_row()`, copies row-id bytes into an
+  owned `std::vector<uchar>`, cleans up MQ, then verifies the owned copy；
+- added a wrong expected-length negative check to prove mismatch rejection；
+- wired the helper only under DBUG flag
+  `pq_worker_result_stable_ref_adapter_smoke` inside
+  `Gather_operator::run_worker_attach_contract_smoke()`；
+- added status variables:
+  - `Parallel_worker_result_stable_ref_adapter_attempts`；
+  - `Parallel_worker_result_stable_ref_adapter_success`；
+  - `Parallel_worker_result_stable_ref_adapter_unsupported`；
+  - `Parallel_worker_result_stable_ref_adapter_bytes`；
+  - `Parallel_worker_result_stable_ref_adapter_deep_copy_success`；
+  - `Parallel_worker_result_stable_ref_adapter_ref_length_mismatch`；
+- extended `pq_worker_attach_contract_smoke` and `pq_stats`。
+
+Hard boundaries preserved:
+
+- no production `Query_result_mq::send_data()` or `m_stable_output` behavior
+  change；
+- no default comparator or heap reader change；
+- no `handler::cmp_ref()` call in E6g-3；
+- no `pq_optimizer.*`, AccessPath, handler/InnoDB implementation, readiness
+  flag, or visible ORDER BY gate change；
+- decoded stable-ref borrowed pointers do not escape the helper。
+
+Validation evidence:
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- first `pq_worker_attach_contract_smoke` run failed only because the result
+  file was stale; new adapter counters all returned expected values；
+- `pq_stats --record` hit the known final-copy errno 1, then
+  `pq_stats.result` was updated from the generated log；
+- targeted MTR passed:
+  `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_worker_attach_contract_smoke pq_stats --parallel=1 --vardir=/tmp/pq_e6g3_target_vardir --tmpdir=/tmp/pq_e6g3_target_tmp`；
+- `git diff --check` passed；
+- full `parallel_query` suite passed 89/89:
+  `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query --parallel=1 --vardir=/tmp/pq_e6g3_full_vardir --tmpdir=/tmp/pq_e6g3_full_tmp`；
+
+Review result:
+
+- Code / Docs / Test Review Agent `019ef241-1fb0-75b2-ad57-1d0b61ec3d42`
+  returned `ACCEPT`；
+- no Critical or Important findings；
+- one Minor documentation drift finding was fixed before commit；
+- commit allowed；
+- residual risk carried forward: E6g-3 remains a DBUG-only adapter smoke and
+  does not prove production ORDER BY PQ readiness。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

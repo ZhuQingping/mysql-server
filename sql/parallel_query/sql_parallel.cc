@@ -1624,6 +1624,37 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       pq_global_stats.worker_result_stable_ref_invalid_rejects.fetch_add(
           stable_ref_invalid_rejects, std::memory_order_relaxed);
     });
+    DBUG_EXECUTE_IF("pq_worker_result_stable_ref_adapter_smoke", {
+      pq_global_stats.stable_ref_adapter_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+
+      uint32 stable_ref_adapter_bytes = 0;
+      uint32 stable_ref_adapter_deep_copy = 0;
+      uint32 stable_ref_adapter_length_mismatch = 0;
+      const bool adapter_failed =
+          leader_table == nullptr || leader_table->file == nullptr ||
+          leader_table->file->ref_length == 0 ||
+          pq_run_query_result_mq_stable_ref_adapter_smoke(
+              handler_ref_two_row_smoke_refs[0].data(),
+              static_cast<uint32>(handler_ref_two_row_smoke_refs[0].size()),
+              leader_table->file->ref_length, &stable_ref_adapter_bytes,
+              &stable_ref_adapter_deep_copy,
+              &stable_ref_adapter_length_mismatch);
+      if (adapter_failed) {
+        pq_global_stats.stable_ref_adapter_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+        return true;
+      }
+
+      pq_global_stats.stable_ref_adapter_success.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats.stable_ref_adapter_bytes.fetch_add(
+          stable_ref_adapter_bytes, std::memory_order_relaxed);
+      pq_global_stats.stable_ref_adapter_deep_copy_success.fetch_add(
+          stable_ref_adapter_deep_copy, std::memory_order_relaxed);
+      pq_global_stats.stable_ref_adapter_ref_length_mismatch.fetch_add(
+          stable_ref_adapter_length_mismatch, std::memory_order_relaxed);
+    });
   }
   pq_global_stats.worker_attach_smoke_success.fetch_add(
       1, std::memory_order_relaxed);

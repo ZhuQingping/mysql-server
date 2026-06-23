@@ -10142,6 +10142,18 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_result_stable_ref_normal_rejects,
                                   worker_result_stable_ref_normal_rejects)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_result_stable_ref_invalid_rejects,
                                   worker_result_stable_ref_invalid_rejects)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_adapter_attempts,
+                                  stable_ref_adapter_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_adapter_success,
+                                  stable_ref_adapter_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_adapter_unsupported,
+                                  stable_ref_adapter_unsupported)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_adapter_bytes,
+                                  stable_ref_adapter_bytes)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_adapter_deep_copy_success,
+                                  stable_ref_adapter_deep_copy_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_adapter_ref_length_mismatch,
+                                  stable_ref_adapter_ref_length_mismatch)
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
@@ -12213,6 +12225,23 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_result_stable_ref_unsupported",
      (char *)&show_pq_worker_result_stable_ref_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_stable_ref_adapter_attempts",
+     (char *)&show_pq_stable_ref_adapter_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_stable_ref_adapter_bytes",
+     (char *)&show_pq_stable_ref_adapter_bytes, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_stable_ref_adapter_deep_copy_success",
+     (char *)&show_pq_stable_ref_adapter_deep_copy_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_stable_ref_adapter_ref_length_mismatch",
+     (char *)&show_pq_stable_ref_adapter_ref_length_mismatch, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_stable_ref_adapter_success",
+     (char *)&show_pq_stable_ref_adapter_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_stable_ref_adapter_unsupported",
+     (char *)&show_pq_stable_ref_adapter_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_handler_ref_two_row_antisymmetric_success",
      (char *)&show_pq_orderby_handler_ref_two_row_antisymmetric_success,

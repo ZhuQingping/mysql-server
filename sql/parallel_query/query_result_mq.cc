@@ -791,6 +791,94 @@ bool pq_run_query_result_mq_stable_ref_smoke(const uchar *handler_ref,
          *normal_decode_rejects != 1 || *invalid_rejects != 3;
 }
 
+bool pq_run_query_result_mq_stable_ref_adapter_smoke(
+    const uchar *handler_ref, uint32 handler_ref_len,
+    uint32 expected_ref_length, uint32 *ref_bytes, uint32 *owned_ref_success,
+    uint32 *length_mismatch_rejects) {
+  if (handler_ref == nullptr || handler_ref_len == 0 ||
+      expected_ref_length == 0 || ref_bytes == nullptr ||
+      owned_ref_success == nullptr || length_mismatch_rejects == nullptr) {
+    return true;
+  }
+  *ref_bytes = 0;
+  *owned_ref_success = 0;
+  *length_mismatch_rejects = 0;
+  if (handler_ref_len != expected_ref_length) {
+    ++(*length_mismatch_rejects);
+    return true;
+  }
+
+  PQ_mq_event sender_event;
+  PQ_mq_event receiver_event;
+  char ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue queue(&sender_event, &receiver_event, ring, sizeof(ring));
+  MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (handle.init()) return true;
+
+  const std::vector<uchar> expected_ref(handler_ref,
+                                        handler_ref + handler_ref_len);
+  const uchar null_bitmap[] = {0};
+  std::vector<uchar> field_payload;
+  pq_worker_result_append_uint32(&field_payload, 1);
+  field_payload.push_back('8');
+
+  bool failed = pq_send_worker_result_stable_ref_frame(
+      &handle, 1, null_bitmap, sizeof(null_bitmap), field_payload.data(),
+      static_cast<uint32>(field_payload.size()), handler_ref, handler_ref_len);
+
+  void *raw_data = nullptr;
+  uint32 raw_len = 0;
+  if (!failed && handle.receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+    failed = true;
+  }
+
+  PQ_worker_result_stable_ref stable_ref;
+  if (!failed &&
+      pq_decode_worker_result_stable_ref_row(raw_data, raw_len, &stable_ref)) {
+    failed = true;
+  }
+
+  std::vector<uchar> owned_ref;
+  if (!failed) {
+    if (stable_ref.row_id == nullptr || stable_ref.row_id_len == 0 ||
+        stable_ref.row_id_len != expected_ref_length ||
+        stable_ref.field_count != 1 || stable_ref.null_bitmap_len != 1) {
+      failed = true;
+    } else {
+      owned_ref.assign(stable_ref.row_id,
+                       stable_ref.row_id + stable_ref.row_id_len);
+    }
+  }
+
+  handle.cleanup();
+
+  if (!failed) {
+    if (owned_ref.size() != expected_ref_length ||
+        owned_ref.size() != expected_ref.size() ||
+        memcmp(owned_ref.data(), expected_ref.data(), expected_ref.size()) !=
+            0) {
+      failed = true;
+    } else {
+      *ref_bytes = static_cast<uint32>(owned_ref.size());
+      ++(*owned_ref_success);
+    }
+  }
+
+  if (!failed && *ref_bytes != expected_ref_length) {
+    ++(*length_mismatch_rejects);
+  } else if (!failed) {
+    const uint32 wrong_expected = expected_ref_length + 1;
+    if (*ref_bytes != wrong_expected) {
+      ++(*length_mismatch_rejects);
+    } else {
+      failed = true;
+    }
+  }
+
+  return failed || *ref_bytes != expected_ref_length ||
+         *owned_ref_success != 1 || *length_mismatch_rejects != 1;
+}
+
 Query_result_mq::Query_result_mq(JOIN *join, MQueue_handle *msg_handler,
                                  bool stab_output)
     : Query_result(), m_join(join), m_handler(msg_handler),
