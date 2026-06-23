@@ -562,6 +562,38 @@ bool pq_orderby_handler_ref_adapter_smoke(handler *tie_break_file,
            (*cmp_forward > 0 && *cmp_reverse < 0));
 }
 
+bool pq_orderby_fail_closed_ref_adapter_shape(
+    handler *tie_break_file, const uchar *left_ref, uint32 left_ref_len,
+    const uchar *right_ref, uint32 right_ref_len, bool sort_keys_equal,
+    int *cmp_forward, int *cmp_reverse, uint32 *rejects) {
+  if (cmp_forward == nullptr || cmp_reverse == nullptr || rejects == nullptr) {
+    return true;
+  }
+  *cmp_forward = 0;
+  *cmp_reverse = 0;
+  *rejects = 0;
+
+  auto reject = [&rejects]() {
+    ++(*rejects);
+    return true;
+  };
+
+  if (!sort_keys_equal) return reject();
+  if (tie_break_file == nullptr || tie_break_file->ref_length == 0) {
+    return reject();
+  }
+  if (left_ref == nullptr || right_ref == nullptr || left_ref_len == 0 ||
+      right_ref_len == 0 || left_ref_len != right_ref_len ||
+      left_ref_len != tie_break_file->ref_length) {
+    return reject();
+  }
+  if (memcmp(left_ref, right_ref, left_ref_len) == 0) return reject();
+
+  return pq_orderby_handler_ref_adapter_smoke(
+      tie_break_file, left_ref, left_ref_len, right_ref, right_ref_len,
+      cmp_forward, cmp_reverse);
+}
+
 bool pq_validate_orderby_frame(const void *raw_data, uint32 raw_len,
                                const PQ_orderby_frame_header **header,
                                const uchar **payload) {

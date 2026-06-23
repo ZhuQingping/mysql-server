@@ -10176,6 +10176,21 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_pair_adapter_tiebreak_success,
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
     stable_ref_pair_adapter_ref_length_mismatch,
     stable_ref_pair_adapter_ref_length_mismatch)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_shape_attempts,
+                                  orderby_ref_adapter_shape_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_shape_success,
+                                  orderby_ref_adapter_shape_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_shape_unsupported,
+                                  orderby_ref_adapter_shape_unsupported)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_shape_rejects,
+                                  orderby_ref_adapter_shape_rejects)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_shape_cmp_nonzero,
+                                  orderby_ref_adapter_shape_cmp_nonzero)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_ref_adapter_shape_antisymmetric_success,
+    orderby_ref_adapter_shape_antisymmetric_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_shape_tiebreak_success,
+                                  orderby_ref_adapter_shape_tiebreak_success)
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
@@ -12294,6 +12309,27 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_result_stable_ref_pair_adapter_unsupported",
      (char *)&show_pq_stable_ref_pair_adapter_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_shape_antisym_success",
+     (char *)&show_pq_orderby_ref_adapter_shape_antisymmetric_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_shape_attempts",
+     (char *)&show_pq_orderby_ref_adapter_shape_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_shape_cmp_nonzero",
+     (char *)&show_pq_orderby_ref_adapter_shape_cmp_nonzero, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_shape_rejects",
+     (char *)&show_pq_orderby_ref_adapter_shape_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_shape_success",
+     (char *)&show_pq_orderby_ref_adapter_shape_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_shape_tiebreak_success",
+     (char *)&show_pq_orderby_ref_adapter_shape_tiebreak_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_shape_unsupported",
+     (char *)&show_pq_orderby_ref_adapter_shape_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_handler_ref_two_row_antisymmetric_success",
      (char *)&show_pq_orderby_handler_ref_two_row_antisymmetric_success,

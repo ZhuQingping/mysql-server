@@ -10483,6 +10483,91 @@ Acceptance criteria for E6g-5:
   opened；
 - next coding task has explicit allowed/forbidden files and review gates。
 
+Review result - M11-E6g-5:
+
+- Design / Source Review Agent `019ef258-3894-70d0-9477-c0f9ec6e5dd4`
+  returned `ACCEPT`；
+- docs-only commit allowed；
+- committed as `2b9a2a23d30`；
+- residual constraint for E6g-5b:
+  - comparator use must remain DBUG/private only；
+  - do not replace `pq_orderby_cached_compare_records()` or batch comparator；
+  - do not treat E6g-4 smoke evidence as production ORDER BY readiness。
+
+### M11-E6g-5b: DBUG-only Fail-closed Comparator Adapter Shape
+
+Status: local implementation completed，full validation passed，Code / Docs /
+Test review accepted，ready to commit。
+
+Goal:
+
+- implement the E6g-5 fail-closed comparator adapter as a DBUG-only/private
+  shape；
+- require stable-ref decoded/deep-copied owned row-id bytes before handler
+  `cmp_ref()` may be used；
+- require caller-proven sort-key equality；
+- expose positive and fail-closed negative counters；
+- keep default comparator / heap reader / visible ORDER BY PQ closed。
+
+Implemented:
+
+- added `pq_orderby_fail_closed_ref_adapter_shape()` in `exchange_sort.*`；
+- the helper rejects:
+  - null output pointers；
+  - `sort_keys_equal == false`；
+  - null handler or zero handler `ref_length`；
+  - null/empty row-id bytes；
+  - row-id length mismatch against handler `ref_length`；
+  - equal row-id buffers；
+- on valid input, it delegates to existing
+  `pq_orderby_handler_ref_adapter_smoke()` and therefore requires
+  forward/reverse `cmp_ref()` results to be non-zero and antisymmetric；
+- added DBUG flag `pq_orderby_fail_closed_ref_adapter_shape_smoke` in
+  `Gather_operator::run_worker_attach_contract_smoke()`；
+- the DBUG hook independently collects two real worker refs, sends them through
+  stable-ref pair MQ decode/deep-copy, then calls the new fail-closed adapter
+  shape；
+- added negative sort-key-not-equal smoke inside the same DBUG path to prove a
+  reject counter；
+- added status variables:
+  - `Parallel_orderby_ref_adapter_shape_attempts`；
+  - `Parallel_orderby_ref_adapter_shape_success`；
+  - `Parallel_orderby_ref_adapter_shape_unsupported`；
+  - `Parallel_orderby_ref_adapter_shape_rejects`；
+  - `Parallel_orderby_ref_adapter_shape_cmp_nonzero`；
+  - `Parallel_orderby_ref_adapter_shape_antisym_success`；
+  - `Parallel_orderby_ref_adapter_shape_tiebreak_success`；
+- extended `pq_worker_attach_contract_smoke` and `pq_stats`。
+
+Hard boundaries preserved:
+
+- no default `pq_orderby_cached_compare_records()` /
+  `pq_orderby_cached_compare_batches()` replacement；
+- no default heap reader or materializer behavior change；
+- no `ParallelScanIterator::Read()` integration；
+- no `pq_optimizer.*`, `HAS_ORDER_BY`, preflight readiness, AccessPath,
+  handler/InnoDB, sysvar, or visible ORDER BY gate change；
+- no production `Query_result_mq::send_data()` / `m_stable_output` behavior
+  change。
+
+Validation evidence:
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- first target MTR failed only because `.result` files were stale；
+- targeted MTR passed:
+  `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_worker_attach_contract_smoke pq_stats --parallel=1 --vardir=/tmp/pq_e6g5b_target3_vardir --tmpdir=/tmp/pq_e6g5b_target3_tmp`；
+- full `parallel_query` suite passed 89/89:
+  `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query --parallel=1 --vardir=/tmp/pq_e6g5b_full_vardir --tmpdir=/tmp/pq_e6g5b_full_tmp`；
+- `git diff --check` passed；
+- Code / Docs / Test Review Agent `019ef25e-faf4-7f03-92e6-e1600a836889`
+  returned `ACCEPT`；
+- commit allowed；
+- residual risks carried forward:
+  - E6g-5b is still DBUG-only smoke evidence；
+  - do not treat it as production ORDER BY readiness；
+  - keep comparator use private until a production caller can prove sort-key
+    equality and owned stable row-id lifetime by contract。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

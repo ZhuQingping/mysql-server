@@ -1237,6 +1237,8 @@ bool Gather_operator::run_worker_attach_contract_smoke(
   std::vector<std::vector<uchar>> handler_ref_two_row_smoke_refs;
   bool stable_ref_pair_cmp_smoke_pending = false;
   std::vector<std::vector<uchar>> stable_ref_pair_cmp_smoke_refs;
+  bool ref_adapter_shape_smoke_pending = false;
+  std::vector<std::vector<uchar>> ref_adapter_shape_smoke_refs;
   Item *saved_leader_pushed_idx_cond = nullptr;
   uint saved_leader_pushed_idx_cond_keyno = MAX_KEY;
   auto install_leader_icp_sentinel = [&]() {
@@ -1417,6 +1419,18 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       return true;
     }
     stable_ref_pair_cmp_smoke_pending = true;
+  });
+  DBUG_EXECUTE_IF("pq_orderby_fail_closed_ref_adapter_shape_smoke", {
+    pq_global_stats.orderby_ref_adapter_shape_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+
+    if (collect_two_worker_refs(&ref_adapter_shape_smoke_refs)) {
+      pq_global_stats.orderby_ref_adapter_shape_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      cleanup();
+      return true;
+    }
+    ref_adapter_shape_smoke_pending = true;
   });
 
   if (worker->m_open_ctx.worker_handler == nullptr ||
@@ -1734,6 +1748,77 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     pq_global_stats.stable_ref_pair_adapter_antisymmetric_success.fetch_add(
         1, std::memory_order_relaxed);
     pq_global_stats.stable_ref_pair_adapter_tiebreak_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  if (ref_adapter_shape_smoke_pending) {
+    std::vector<uchar> left_owned_ref;
+    std::vector<uchar> right_owned_ref;
+    uint32 ref_adapter_shape_bytes = 0;
+    uint32 ref_adapter_shape_deep_copy = 0;
+    bool adapter_shape_failed =
+        leader_table == nullptr || leader_table->file == nullptr ||
+        leader_table->file->ref_length == 0 ||
+        ref_adapter_shape_smoke_refs.size() < 2 ||
+        ref_adapter_shape_smoke_refs[0].empty() ||
+        ref_adapter_shape_smoke_refs[1].empty() ||
+        pq_run_query_result_mq_stable_ref_pair_smoke(
+            ref_adapter_shape_smoke_refs[0].data(),
+            static_cast<uint32>(ref_adapter_shape_smoke_refs[0].size()),
+            ref_adapter_shape_smoke_refs[1].data(),
+            static_cast<uint32>(ref_adapter_shape_smoke_refs[1].size()),
+            leader_table->file->ref_length, &left_owned_ref, &right_owned_ref,
+            &ref_adapter_shape_bytes, &ref_adapter_shape_deep_copy);
+    if (!adapter_shape_failed &&
+        (ref_adapter_shape_bytes != leader_table->file->ref_length * 2 ||
+         ref_adapter_shape_deep_copy != 2)) {
+      adapter_shape_failed = true;
+    }
+
+    int adapter_shape_forward = 0;
+    int adapter_shape_reverse = 0;
+    uint32 adapter_shape_rejects = 0;
+    if (!adapter_shape_failed) {
+      adapter_shape_failed = pq_orderby_fail_closed_ref_adapter_shape(
+          leader_table->file, left_owned_ref.data(),
+          static_cast<uint32>(left_owned_ref.size()), right_owned_ref.data(),
+          static_cast<uint32>(right_owned_ref.size()), true,
+          &adapter_shape_forward, &adapter_shape_reverse,
+          &adapter_shape_rejects);
+    }
+
+    uint32 negative_rejects = 0;
+    int negative_forward = 0;
+    int negative_reverse = 0;
+    const bool negative_sort_key_rejected =
+        !adapter_shape_failed && !left_owned_ref.empty() &&
+        !right_owned_ref.empty() &&
+        pq_orderby_fail_closed_ref_adapter_shape(
+            leader_table->file, left_owned_ref.data(),
+            static_cast<uint32>(left_owned_ref.size()), right_owned_ref.data(),
+            static_cast<uint32>(right_owned_ref.size()), false,
+            &negative_forward, &negative_reverse, &negative_rejects) &&
+        negative_rejects == 1;
+
+    const bool adapter_shape_antisymmetric =
+        (adapter_shape_forward < 0 && adapter_shape_reverse > 0) ||
+        (adapter_shape_forward > 0 && adapter_shape_reverse < 0);
+    if (adapter_shape_failed || adapter_shape_rejects != 0 ||
+        adapter_shape_forward == 0 || adapter_shape_reverse == 0 ||
+        !adapter_shape_antisymmetric || !negative_sort_key_rejected) {
+      pq_global_stats.orderby_ref_adapter_shape_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+
+    pq_global_stats.orderby_ref_adapter_shape_success.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_ref_adapter_shape_rejects.fetch_add(
+        negative_rejects, std::memory_order_relaxed);
+    pq_global_stats.orderby_ref_adapter_shape_cmp_nonzero.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_ref_adapter_shape_antisymmetric_success.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_ref_adapter_shape_tiebreak_success.fetch_add(
         1, std::memory_order_relaxed);
   }
   pq_global_stats.worker_attach_smoke_success.fetch_add(

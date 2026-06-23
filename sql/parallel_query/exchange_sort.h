@@ -284,6 +284,11 @@ bool pq_orderby_handler_ref_adapter_smoke(handler *tie_break_file,
                                           int *cmp_forward,
                                           int *cmp_reverse);
 
+bool pq_orderby_fail_closed_ref_adapter_shape(
+    handler *tie_break_file, const uchar *left_ref, uint32 left_ref_len,
+    const uchar *right_ref, uint32 right_ref_len, bool sort_keys_equal,
+    int *cmp_forward, int *cmp_reverse, uint32 *rejects);
+
 bool pq_run_orderby_handler_ref_wire_smoke(const uchar *record_image,
                                            uint32 record_image_len,
                                            const uchar *handler_ref,
