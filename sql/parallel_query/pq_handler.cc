@@ -130,6 +130,10 @@ std::shared_ptr<PQ_Ctx> PQ_Scan_ctx::create_context(
   return ctx;
 }
 
+size_t PQ_Scan_ctx::max_threads() const {
+  return m_reader != nullptr ? m_reader->max_threads() : 0;
+}
+
 bool PQ_Ctx::check_ref_key(const PQ_Ref_info &ref_info) {
   auto &config = m_scan_ctx->m_config;
   if (ref_info.pq_ref_key_len != config.m_ref_key_len) {
@@ -224,6 +228,74 @@ std::shared_ptr<PQ_Ctx> PQ_Worker_context::get_ctx(
 
   for (;;) {
     auto *slices = m_leader.pq_slices_map[ref_key];
+    assert(slices != nullptr);
+    if (slices == nullptr) {
+      return nullptr;
+    }
+
+    auto range = slices->fetch_one();
+    if (range != nullptr && range->need_split()) {
+      range->split();
+      continue;
+    }
+
+    if (range != nullptr) {
+      ctx = range->scan_ctx()->create_context(range);
+      if (ctx != nullptr) {
+        m_local_ctxs.enqueue(ctx);
+      }
+      return ctx;
+    }
+
+    for (;;) {
+      ctx = m_local_ctxs.dequeue();
+      if (ctx != nullptr && ref_info.pq_ref_depend) {
+        if (!ctx->check_ref_key(ref_info)) {
+          m_local_ctxs.enqueue(ctx);
+          continue;
+        }
+        m_local_ctxs.enqueue(ctx);
+        return ctx;
+      }
+
+      if (ctx == nullptr) {
+        m_local_ctxs.rotate();
+      } else {
+        m_local_ctxs.enqueue(ctx);
+      }
+      return ctx;
+    }
+  }
+}
+
+bool Parallel_worker::dispatch_ctx(const PQ_Ref_info &ref_info,
+                                   std::shared_ptr<PQ_Ctx_Base> *ctx) {
+  for (;;) {
+    auto next_ctx = get_ctx(ref_info);
+    if (next_ctx == nullptr) {
+      *ctx = nullptr;
+      return true;
+    }
+    *ctx = next_ctx;
+    return false;
+  }
+}
+
+std::shared_ptr<PQ_Ctx_Base> Parallel_worker::get_ctx(
+    const PQ_Ref_info &ref_info) {
+  std::shared_ptr<PQ_Ctx_Base> ctx = nullptr;
+
+  PQ_ref_key ref_key;
+  if (ref_info.pq_ref_depend) {
+    ref_key = PQ_ref_key(ref_info.pq_ref_key_ptr, ref_info.pq_ref_key_len);
+  }
+
+  if (!pq_key_map[ref_key]) {
+    return ctx;
+  }
+
+  for (;;) {
+    auto *slices = pq_slices_map[ref_key];
     assert(slices != nullptr);
     if (slices == nullptr) {
       return nullptr;

@@ -785,6 +785,86 @@ Completion Report - Batch D1.0:
   - independent Review Agent accepted the bridge; no critical, important, or
     minor findings were reported。
 
+#### Batch D1.1 - pq_handler commercial type alignment
+
+Status: completed
+
+目标：
+
+- 在现有 8.0.46 typed `pq_handler` API 上补齐商用实现依赖的类型名和
+  生命周期 carrier；
+- 让后续 InnoDB 商用代码可以引用 `PQ_Config_Base`、
+  `PQ_Scan_ctx_Base`、`PQ_Ctx_Base`、`Parallel_leader_Base`、
+  `Parallel_worker`、`PQ_shared_info`、`Key_ref`；
+- 保持当前 typed `PQ_Leader_context` / `PQ_Worker_context` 调用点不变；
+- 不打开 handler/InnoDB 执行路径。
+
+Planned implementation:
+
+- `sql/parallel_query/pq_handler.h`
+  - add commercial-compatible aliases for existing typed classes where the
+    semantics already match；
+  - add `Parallel_worker` as a commercial-name worker dispatcher over
+    `PQ_slices_map` / `PQ_ref_map`；
+  - add `PQ_temp_table_type`、`PQ_shared_info`、`Key_ref` definitions。
+- `sql/parallel_query/pq_handler.cc`
+  - implement `Parallel_worker::dispatch_ctx()` and `get_ctx()` using the same
+    dispatch semantics as `PQ_Worker_context`。
+
+Completion Report - Batch D1.1:
+
+- changed files:
+  - `sql/parallel_query/pq_handler.h`
+  - `sql/parallel_query/pq_handler.cc`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added commercial-compatible aliases:
+    `Iter_Base`、`Iters`、`Ranges`、`Slices_mngr`、
+    `PQ_Config_Base`、`PQ_Scan_ctx_Base`、`PQ_Ctx_Base`、
+    `Parallel_leader_Base`；
+  - added `PQ_Scan_ctx::max_threads()` and default `index_s_own()` for
+    commercial subclass compatibility；
+  - added commercial-compatible `Parallel_worker` dispatcher over
+    `PQ_slices_map` / `PQ_ref_map`；
+  - added `PQ_temp_table_type`、`PQ_shared_info`、`Key_ref` carriers；
+  - kept existing typed `PQ_Leader_context` / `PQ_Worker_context` call sites
+    unchanged and did not open any handler/InnoDB path。
+- validation:
+  - `git diff --check -- sql/parallel_query/pq_handler.h sql/parallel_query/pq_handler.cc Docs/pq_tasks/commercial-full-port-sprint.md` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`。
+- risks carried forward:
+  - `PQ_Config_Base` is an alias to current `PQ_Config`; it intentionally does
+    not restore commercial raw-pointer `clear()` ownership yet；
+  - `Parallel_worker` is a compatibility adapter and is not wired into
+    `row_prebuilt_t` or `ha_innodb_pq.cc` in this batch；
+  - dependent-ref, partition, MVI, reverse scan, and temp-table sharing remain
+    later gated execution work。
+- review:
+  - independent Review Agent accepted the patch；
+  - confirmed aliases and carriers do not break existing typed API or open
+    execution paths；
+  - noted that `PQ_Config_Base` / `PQ_Scan_ctx_Base` / `PQ_Ctx_Base` /
+    `Parallel_leader_Base` are aliases, not independent commercial base
+    classes, so future direct commercial `row0pread_pq.h` porting still needs
+    adaptation。
+
+Validation:
+
+- `git diff --check -- sql/parallel_query/pq_handler.h sql/parallel_query/pq_handler.cc Docs/pq_tasks/commercial-full-port-sprint.md`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+
+Risk constraints:
+
+- `Parallel_worker` is infrastructure only until `row_prebuilt_t` and
+  `ha_innodb_pq.cc` are aligned；
+- `PQ_shared_info` is carrier-only; temp table/hash join sharing is not opened
+  in this batch；
+- high-risk partition/MVI/reverse/ref-dependent execution remains gated by
+  later D1.x batches。
+
 ### Batch E1 - Commercial MTR migration
 
 Status: pending

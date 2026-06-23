@@ -508,6 +508,9 @@ class PQ_Scan_ctx {
   /// S-unlock the index after partitioning.
   virtual void index_s_unlock() = 0;
 
+  /// @return true if the current thread owns the index S-latch.
+  virtual bool index_s_own() const { return false; }
+
   /// Partition the data source into ranges for parallel scan.
   virtual void partition(const PQ_Borders &scan_borders, size_t level,
                          PQ_Ranges &ranges) = 0;
@@ -526,6 +529,7 @@ class PQ_Scan_ctx {
   PQ_Leader_context *reader() const { return m_reader; }
   size_t id() const { return m_id; }
   size_t depth() const { return m_depth; }
+  size_t max_threads() const;
 
   /// Error state management.
   void set_error_state(int err) {
@@ -731,6 +735,47 @@ class PQ_Worker_context {
   std::shared_ptr<PQ_ref_key> p_ref_key{};
 };
 
+using Iter_Base = PQ_Iter;
+using Iters = PQ_Iter_pair;
+using Ranges = PQ_Ranges;
+using Slices_mngr = PQ_slices_manager;
+using PQ_Config_Base = PQ_Config;
+using PQ_Scan_ctx_Base = PQ_Scan_ctx;
+using PQ_Ctx_Base = PQ_Ctx;
+using Parallel_leader_Base = PQ_Leader_context;
+
+/**
+  Commercial-compatible worker dispatcher.
+
+  The current 8.0.46-facing code uses PQ_Worker_context, while the commercial
+  InnoDB path stores a Parallel_worker in row_prebuilt_t. Keep this adapter
+  separate so future InnoDB code can use the commercial name without changing
+  existing typed worker call sites.
+*/
+class Parallel_worker final {
+ public:
+  Parallel_worker(bool reverse, PQ_slices_map &queue_map,
+                  PQ_ref_map &key_map)
+      : m_local_ctxs(reverse),
+        pq_slices_map(queue_map),
+        pq_key_map(key_map) {}
+
+  ~Parallel_worker() { m_local_ctxs.clear(); }
+
+  bool dispatch_ctx(const PQ_Ref_info &ref_info,
+                    std::shared_ptr<PQ_Ctx_Base> *ctx);
+  std::shared_ptr<PQ_Ctx_Base> get_ctx(const PQ_Ref_info &ref_info);
+
+  void clear_ctx() { m_local_ctxs.clear(); }
+
+  std::shared_ptr<PQ_ref_key> p_ref_key{};
+
+ private:
+  PQ_dual_queue<PQ_Ctx_Base> m_local_ctxs;
+  PQ_slices_map &pq_slices_map;
+  PQ_ref_map &pq_key_map;
+};
+
 template <typename T>
 void PQ_single_queue<T>::push(std::vector<std::shared_ptr<T>> &elements,
                               bool no_reverse) {
@@ -796,6 +841,26 @@ class PQ_row_sink {
 
   /** @return true when an early stop requested by should_abort() is normal. */
   virtual bool stop_is_success() const { return false; }
+};
+
+enum class PQ_temp_table_type {
+  TEMP_MEM,
+  TEMP_INNODB,
+  TEMP_HEAP,
+  TEMP_UNKNOWN
+};
+
+struct PQ_shared_info {
+  PQ_temp_table_type m_type{PQ_temp_table_type::TEMP_UNKNOWN};
+  void *m_share{nullptr};
+  void *m_table{nullptr};
+};
+
+struct Key_ref {
+  int keyno{0};
+  const uchar *key{nullptr};
+  key_part_map keypart_map{0};
+  bool reverse{false};
 };
 
 /**
