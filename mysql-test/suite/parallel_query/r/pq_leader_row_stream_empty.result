@@ -1,0 +1,61 @@
+CREATE TABLE pq_leader_row_stream_empty_t (
+id INT PRIMARY KEY,
+v INT
+) ENGINE=InnoDB;
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+SET @stream_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_attempts');
+SET @stream_selected_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_selected');
+SET @stream_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_rows');
+SET @queries_executed_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed');
+SET @rows_scanned_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_rows_scanned');
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_leader_row_stream_smoke";
+SELECT id, v FROM pq_leader_row_stream_empty_t WHERE v >= 0;
+id	v
+SET SESSION debug=@old_debug;
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_attempts') -
+@stream_attempts_before) >= 1 AS stream_attempt_delta;
+stream_attempt_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_selected') -
+@stream_selected_before) >= 1 AS stream_selected_delta;
+stream_selected_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_rows') -
+@stream_rows_before) AS stream_rows_delta;
+stream_rows_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed') -
+@queries_executed_before) AS queries_executed_delta;
+queries_executed_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_rows_scanned') -
+@rows_scanned_before) AS rows_scanned_delta;
+rows_scanned_delta
+0
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+DROP TABLE pq_leader_row_stream_empty_t;

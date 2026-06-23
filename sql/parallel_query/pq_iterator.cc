@@ -162,7 +162,7 @@ bool PQTableScanIterator::Init() {
     if (m_gather == nullptr ||
         m_gather->prepare_leader_row_stream_smoke(thd(), table(), m_leader_ctx,
                                                   2, &rows_enqueued) ||
-        rows_enqueued != 2) {
+        rows_enqueued > 2) {
       cleanup_pq_resources(true);
       PrintError(HA_ERR_INTERNAL_ERROR);
       return true;

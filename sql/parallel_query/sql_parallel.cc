@@ -2851,7 +2851,7 @@ bool Gather_operator::run_worker_callback_limited_producer(
                                                    &row_sink) != 0;
   }
   if (!failed) {
-    failed = row_sink.rows_sent() == 0 || exchange->enqueue_finish_smoke(0);
+    failed = exchange->enqueue_finish_smoke(0);
   }
 
   if (worker->m_worker_ctx != nullptr &&

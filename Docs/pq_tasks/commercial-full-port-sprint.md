@@ -1183,6 +1183,85 @@ Completion Report - Batch D1.5:
     `row_search_mvcc()` uses leader snapshot and cannot be reached from ref/range
     typed iterators。
 
+#### Batch D1.6a - callback row producer EOF contract
+
+Status: completed and committed
+
+目标：
+
+- 将现有 callback/Parallel_reader row producer 的内部 EOF contract 从 smoke
+  假设收敛为可测试的 producer contract；
+- 仍只在显式 debug/experimental gate 下运行，不打开默认用户可见 PQ；
+- 保持 typed/commercial `pq_worker_scan_next()` fail-closed；
+- 为后续 D1.6b 用户可见 iterator 接入准备 empty/natural EOF 验证。
+
+Design review result:
+
+- D1.6 row producer Agent 和并发/快照 Review Agent 均建议 split：
+  - D1.6a：先 productionize callback row producer 的内部 contract，
+    仍 behind explicit gate；
+  - D1.6b：再接入真实用户可见 iterator/eligibility。
+- Blockers carried before D1.6b:
+  - leader snapshot / worker materialization contract needs explicit tests；
+  - kill/early-exit and worker error priority are still not production-grade；
+  - SQL worker thread budget and InnoDB Parallel_reader budget are still mixed；
+  - empty/EOF semantics must be unified before user-visible execution。
+
+Planned implementation:
+
+- `sql/parallel_query/sql_parallel.cc`
+  - allow `run_worker_callback_limited_producer()` to finish successfully with
+    zero rows；
+  - keep FINISH as the only EOF signal。
+- `sql/parallel_query/pq_iterator.cc`
+  - update guarded `pq_leader_row_stream_smoke` to accept 0..row_limit rows
+    instead of exactly two rows。
+- `mysql-test/suite/parallel_query/t|r/pq_leader_row_stream_empty`
+  - add empty-table EOF coverage under the existing debug gate。
+
+Validation:
+
+- `git diff --check -- sql/parallel_query/sql_parallel.cc sql/parallel_query/pq_iterator.cc mysql-test/suite/parallel_query/t/pq_leader_row_stream_empty.test mysql-test/suite/parallel_query/r/pq_leader_row_stream_empty.result Docs/pq_tasks/commercial-full-port-sprint.md`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr parallel_query.pq_leader_row_stream_empty parallel_query.pq_leader_row_stream_smoke --parallel=1 --vardir=/tmp/pq-d16a-target-vardir --tmpdir=/tmp/pq-d16a-target-tmpdir`
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq-d16a-mtr-vardir --tmpdir=/tmp/pq-d16a-mtr-tmpdir`
+
+Risk constraints:
+
+- no default user-visible PQ enablement in this batch；
+- do not change optimizer eligibility；
+- do not change `PQblockScanIterator` / `PQRefIterator` next behavior；
+- do not claim snapshot、kill、or worker error priority are complete。
+
+Completion Report - Batch D1.6a:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/parallel_query/pq_iterator.cc`
+  - `mysql-test/suite/parallel_query/t/pq_leader_row_stream_empty.test`
+  - `mysql-test/suite/parallel_query/r/pq_leader_row_stream_empty.result`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - `run_worker_callback_limited_producer()` no longer treats zero produced
+    rows as failure；
+  - `pq_leader_row_stream_smoke` accepts natural EOF with 0..row_limit rows；
+  - added empty-table debug-gated row stream test。
+- validation:
+  - `git diff --check -- sql/parallel_query/sql_parallel.cc sql/parallel_query/pq_iterator.cc mysql-test/suite/parallel_query/t/pq_leader_row_stream_empty.test mysql-test/suite/parallel_query/r/pq_leader_row_stream_empty.result Docs/pq_tasks/commercial-full-port-sprint.md`
+    passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr parallel_query.pq_leader_row_stream_empty parallel_query.pq_leader_row_stream_smoke --parallel=1 --vardir=/tmp/pq-d16a-target-vardir --tmpdir=/tmp/pq-d16a-target-tmpdir`
+    passed, all 3 tests successful；
+  - `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq-d16a-mtr-vardir --tmpdir=/tmp/pq-d16a-mtr-tmpdir`
+    passed, all 90 tests successful。
+- review:
+  - independent Code Review Agent accepted the batch；
+  - reviewer confirmed D1.6a remains debug/experimental gated and does not
+    open default user-visible PQ；
+  - reviewer confirmed zero-row EOF is signaled by FINISH, while
+    unsupported/error paths remain failures；
+  - reviewer noted the new MTR files must be explicitly included in the commit。
+
 ### Batch E1 - Commercial MTR migration
 
 Status: pending
