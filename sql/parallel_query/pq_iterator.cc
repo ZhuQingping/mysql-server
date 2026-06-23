@@ -527,6 +527,9 @@ int PQTableScanIterator::Read() {
   auto *exchange = m_gather->get_exchange();
 
   for (;;) {
+    DBUG_EXECUTE_IF("pq_leader_row_stream_force_kill", {
+      thd()->killed = THD::KILL_QUERY;
+    });
     if (m_gather->check_leader_kill(thd())) {
       m_gather->propagate_kill_to_workers(thd());
       cleanup_pq_resources(true);

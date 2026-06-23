@@ -412,7 +412,7 @@ Completion Report - Batch B0:
 
 ### Batch B1 - Commercial SQL/PQ core replacement
 
-Status: in progress
+Status: completed
 
 目标：
 
@@ -1341,6 +1341,70 @@ Completion Report - Batch D1.6b-pre:
   - follow-up Review Agent was retried with a reduced prompt but failed due
     intermittent subagent connection failures；the original Important finding
     is covered by the new distinguishable-code MTR。
+
+#### Batch D1.6b-kill - row-stream leader kill priority contract
+
+Status: in progress
+
+目标：
+
+- 为 debug-gated leader row stream Read 路径补齐 kill priority smoke；
+- 验证 leader kill 在 materialize rows 前生效；
+- 确认 kill 场景不会计入 `Parallel_queries_executed` 或
+  `Parallel_leader_row_stream_smoke_rows`；
+- 仍不打开默认用户可见 PQ，也不恢复 typed worker pull-row。
+
+Planned implementation:
+
+- `sql/parallel_query/pq_iterator.cc`
+  - 在 PQ row-stream `Read()` 循环中加入 debug-only
+    `pq_leader_row_stream_force_kill`，设置 `THD::KILL_QUERY` 后走现有
+    `check_leader_kill()` / `propagate_kill_to_workers()`；
+- `mysql-test/suite/parallel_query/t|r/pq_leader_row_stream_kill_priority`
+  - 使用 `pq_leader_row_stream_smoke + pq_leader_row_stream_force_kill`；
+  - 断言 SQL 返回 `ER_QUERY_INTERRUPTED`；
+  - 断言 stream attempt/selected 增加，但 row/executed 计数不增加。
+
+Validation:
+
+- `git diff --check -- sql/parallel_query/pq_iterator.cc mysql-test/suite/parallel_query/t/pq_leader_row_stream_kill_priority.test mysql-test/suite/parallel_query/r/pq_leader_row_stream_kill_priority.result Docs/pq_tasks/commercial-full-port-sprint.md`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr parallel_query.pq_leader_row_stream_kill_priority parallel_query.pq_leader_row_stream_error_priority parallel_query.pq_leader_row_stream_error_smoke parallel_query.pq_leader_row_stream_empty parallel_query.pq_leader_row_stream_smoke --parallel=1 --vardir=/tmp/pq-d16bkill-target-vardir --tmpdir=/tmp/pq-d16bkill-target-tmpdir`
+
+Risk constraints:
+
+- no optimizer eligibility change；
+- no default user-visible PQ enablement；
+- no worker THD async KILL propagation change；
+- external KILL for threaded/groupby paths remains covered by existing tests。
+
+Completion Report - Batch D1.6b-kill:
+
+- changed files:
+  - `sql/parallel_query/pq_iterator.cc`
+  - `mysql-test/suite/parallel_query/t/pq_leader_row_stream_kill_priority.test`
+  - `mysql-test/suite/parallel_query/r/pq_leader_row_stream_kill_priority.result`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added debug-only `pq_leader_row_stream_force_kill` inside the PQ row-stream
+    `Read()` loop；
+  - the flag sets `THD::KILL_QUERY` before the existing
+    `check_leader_kill()` branch, so normal kill propagation and cleanup are
+    used；
+  - added MTR coverage proving row-stream selection happens but no row or
+    executed-query counters are incremented after kill。
+- validation:
+  - `git diff --check -- sql/parallel_query/pq_iterator.cc mysql-test/suite/parallel_query/t/pq_leader_row_stream_kill_priority.test mysql-test/suite/parallel_query/r/pq_leader_row_stream_kill_priority.result Docs/pq_tasks/commercial-full-port-sprint.md`
+    passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr parallel_query.pq_leader_row_stream_kill_priority parallel_query.pq_leader_row_stream_error_priority parallel_query.pq_leader_row_stream_error_smoke parallel_query.pq_leader_row_stream_empty parallel_query.pq_leader_row_stream_smoke --parallel=1 --vardir=/tmp/pq-d16bkill-target-vardir --tmpdir=/tmp/pq-d16bkill-target-tmpdir`
+    passed, all 6 tests successful。
+- review:
+  - independent Review Agent accepted the batch；
+  - reviewer confirmed the forced kill is debug-gated before row
+    materialization；
+  - reviewer confirmed the MTR verifies selected stream without row/executed
+    counter increments and preserves `ER_QUERY_INTERRUPTED`。
 
 ### Batch E1 - Commercial MTR migration
 
