@@ -2217,7 +2217,9 @@ Design / Source / Test Review Prompt:
 
 ### M11-F6a: Worker-side Constant Covering Ref Contract
 
-Status: design-only taskbook created；no source or MTR edits in F6a。
+Status: design-only taskbook committed as `69d629abc7a`；M11-F6a-1
+worker constant-ref context shape coding is in progress as the first follow-up
+task。
 
 Goal:
 
@@ -2356,6 +2358,106 @@ Validation for F6a:
 
 - docs-only：`git diff --check`；
 - no build/MTR required unless source or test files change。
+
+#### M11-F6a-1: Worker Constant-ref Context Shape
+
+Status: coding in progress；pending build / MTR / review。
+
+Goal:
+
+- Add a private owned constant-ref context shape for the future worker-side ref
+  path；
+- prove that exact constant ref key bytes are deep-copied into owned storage；
+- expose DBUG-only diagnostics so the contract can be tested without enabling
+  worker rows or MQ handoff；
+- keep existing M9-C2 leader-local constant covering ref user-visible behavior
+  unchanged。
+
+Allowed Files for F6a-1:
+
+- `sql/parallel_query/pq_iterators.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/mysqld.cc`；
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`；
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md`；
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`。
+
+Forbidden for F6a-1:
+
+- implementing `PQRefIterator::Read()` or `PQblockScanIterator::Read()`；
+- calling `ha_pq_next()` or enabling `pq_worker_scan_next()`；
+- worker MQ row production or private row-token handoff；
+- storage / InnoDB source changes；
+- worker-side ICP clone/refix/pushdown；
+- native `Record_buffer` positive path；
+- changing current user-visible M9-C2 row results or fallback behavior。
+
+Implementation Contract:
+
+- The helper must reject null table/ref/key inputs, invalid key numbers,
+  non-exact reads, empty key bytes, empty keypart maps, and dependent refs；
+- accepted context must record owned key bytes, key number, keypart map, key
+  length, exact-read flag, `reverse=false`, and `constant_ref=true`；
+- DBUG-only `pq_worker_ref_ctx_shape_smoke` may validate the context and
+  increment diagnostic counters；
+- normal no-DBUG execution must not increment the new context-shape counters；
+- the DBUG smoke must not launch workers, dispatch ranges, produce MQ rows, or
+  change `pq_worker_scan_next()` behavior。
+
+Validation for F6a-1:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  `pq_commercial_ref_icp pq_stats`；
+- review agent must verify code, docs, and reference contract before commit。
+
+Completion Report - M11-F6a-1 Coding:
+
+- Changed files:
+  - `sql/parallel_query/pq_iterators.cc`
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+  - `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+  - `Docs/pq_tasks/README.md`
+  - `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+  - `Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md`
+- Implementation:
+  - added private `PQ_worker_constant_ref_context_shape` and helper that
+    rejects unsupported shapes and deep-copies exact constant ref key bytes into
+    owned storage；
+  - added DBUG-only `pq_worker_ref_ctx_shape_smoke` diagnostics and four global
+    status variables；
+  - added MTR windows proving normal no-DBUG execution keeps the new counters at
+    zero, while DBUG smoke validates owned context shape without launching
+    workers or dispatching ranges；
+  - kept `PQRefIterator::Read()`, `ha_pq_next()`, `pq_worker_scan_next()` and
+    worker MQ row production untouched。
+- Verification:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_ref_icp pq_stats --parallel=1 --vardir=/tmp/pq_f6a1_target_vardir --tmpdir=/tmp/pq_f6a1_target_tmp` passed；
+  - `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq_f6a1_full_vardir --tmpdir=/tmp/pq_f6a1_full_tmp` passed, 89 tests successful。
+- Review:
+  - F6a-1 Code / Docs / Test / Reference Review Agent first returned
+    `REVISE` because the taskbook omitted
+    `commercial-port-m11-main-architecture-restart.md` from allowed files；
+  - after adding that allowed file, re-review returned `ACCEPT` with no
+    remaining blocking findings。
+- Residual risk:
+  - DBUG positive smoke still runs the current M9-C2 leader-local ref iterator,
+    so it increases existing leader-local executed/secondary-row counters in
+    that diagnostic window；the test explicitly verifies workers/ranges remain
+    zero and documents this as diagnostic noise, not worker-side progress。
+- Safe next task:
+  - M11-F6a-2 private no-row/no-MQ ownership and cleanup smoke for worker
+    constant-ref context；still no worker row production and no
+    `pq_worker_scan_next()`。
 
 Design / Source / Test Review Prompt:
 

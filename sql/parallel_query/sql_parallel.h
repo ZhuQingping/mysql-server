@@ -284,6 +284,10 @@ struct PQ_global_stats {
   std::atomic<uint64> secondary_ref_empty_probes{0};  ///< Ref probes with no row
   std::atomic<uint64> secondary_ref_fallback_probes{0};  ///< Probe fallbacks
   std::atomic<uint64> secondary_ref_rows_produced{0};  ///< Dep ref rows
+  std::atomic<uint64> worker_ref_ctx_attempts{0};  ///< F6a-1 ctx shape
+  std::atomic<uint64> worker_ref_ctx_success{0};  ///< F6a-1 ctx ok
+  std::atomic<uint64> worker_ref_ctx_unsupported{0};  ///< F6a-1 reject
+  std::atomic<uint64> worker_ref_ctx_key_bytes{0};  ///< F6a-1 owned bytes
   std::atomic<uint64> secondary_reverse_reject_probes{0};  ///< Reverse ref rejects
   std::atomic<uint64> secondary_reverse_ref_reject_probes{0};  ///< Reverse ref
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
@@ -634,6 +638,10 @@ struct PQ_global_stats {
     secondary_ref_empty_probes.store(0, std::memory_order_relaxed);
     secondary_ref_fallback_probes.store(0, std::memory_order_relaxed);
     secondary_ref_rows_produced.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_attempts.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_success.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_unsupported.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_key_bytes.store(0, std::memory_order_relaxed);
     secondary_reverse_reject_probes.store(0, std::memory_order_relaxed);
     secondary_reverse_ref_reject_probes.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);

@@ -61,6 +61,17 @@ struct PQ_copied_key_endpoint {
   bool present{false};
 };
 
+struct PQ_worker_constant_ref_context_shape {
+  std::vector<uchar> owned_key;
+  uint keyno{MAX_KEY};
+  key_part_map keypart_map{0};
+  uint key_length{0};
+  bool exact_read{false};
+  bool reverse{false};
+  bool constant_ref{false};
+  bool owned_key_bytes{false};
+};
+
 bool pq_copy_key_endpoint(const key_range &src, PQ_copied_key_endpoint *dst) {
   if (dst == nullptr) return false;
   dst->range = src;
@@ -75,6 +86,33 @@ bool pq_copy_key_endpoint(const key_range &src, PQ_copied_key_endpoint *dst) {
   dst->key.assign(src.key, src.key + src.length);
   dst->range.key = dst->key.empty() ? nullptr : dst->key.data();
   return true;
+}
+
+bool pq_build_worker_constant_ref_context_shape(
+    TABLE *table, const Index_lookup *ref, const key_range &ref_key,
+    PQ_worker_constant_ref_context_shape *ctx) {
+  if (ctx == nullptr) return true;
+
+  *ctx = PQ_worker_constant_ref_context_shape{};
+  if (table == nullptr || table->s == nullptr || ref == nullptr ||
+      ref->key < 0 || static_cast<uint>(ref->key) >= table->s->keys ||
+      ref_key.key == nullptr || ref_key.length == 0 ||
+      ref_key.keypart_map == 0 || ref_key.flag != HA_READ_KEY_EXACT ||
+      ref->depend_map != 0) {
+    return true;
+  }
+
+  ctx->keyno = static_cast<uint>(ref->key);
+  ctx->keypart_map = ref_key.keypart_map;
+  ctx->key_length = ref_key.length;
+  ctx->exact_read = true;
+  ctx->reverse = false;
+  ctx->constant_ref = true;
+  ctx->owned_key.assign(ref_key.key, ref_key.key + ref_key.length);
+  ctx->owned_key_bytes =
+      !ctx->owned_key.empty() && ctx->owned_key.data() != ref_key.key;
+
+  return !ctx->owned_key_bytes;
 }
 
 bool pq_secondary_covering_field_type_is_safe(const Field *field) {
@@ -652,6 +690,27 @@ class PQSecondaryCoveringRefIterator final : public TableRowIterator {
     ref_key.length = m_ref->key_length;
     ref_key.keypart_map = make_prev_keypart_map(m_ref->key_parts);
     ref_key.flag = HA_READ_KEY_EXACT;
+
+    DBUG_EXECUTE_IF("pq_worker_ref_ctx_shape_smoke", {
+      pq_global_stats.worker_ref_ctx_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+      PQ_worker_constant_ref_context_shape ctx;
+      if (pq_build_worker_constant_ref_context_shape(table(), m_ref, ref_key,
+                                                     &ctx) ||
+          !ctx.exact_read || ctx.reverse || !ctx.constant_ref ||
+          ctx.keyno != static_cast<uint>(m_ref->key) ||
+          ctx.keypart_map != ref_key.keypart_map ||
+          ctx.key_length != ref_key.length ||
+          ctx.owned_key.size() != ref_key.length) {
+        pq_global_stats.worker_ref_ctx_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+      } else {
+        pq_global_stats.worker_ref_ctx_success.fetch_add(
+            1, std::memory_order_relaxed);
+        pq_global_stats.worker_ref_ctx_key_bytes.fetch_add(
+            ctx.owned_key.size(), std::memory_order_relaxed);
+      }
+    });
 
     pq_record_buffer_probe(table());
     PQ_record_buffer_sink sink(table(), &m_rows);

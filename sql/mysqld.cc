@@ -9948,6 +9948,14 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ref_fallback_probes,
                                     secondary_ref_fallback_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_ref_rows_produced,
                                     secondary_ref_rows_produced)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_attempts,
+                                    worker_ref_ctx_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_success,
+                                    worker_ref_ctx_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_unsupported,
+                                    worker_ref_ctx_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_key_bytes,
+                                    worker_ref_ctx_key_bytes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_reject_probes,
                                     secondary_reverse_reject_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_ref_reject_probes,
@@ -12130,6 +12138,15 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_ref_rows_produced",
      (char *)&show_pq_secondary_ref_rows_produced, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_attempts",
+     (char *)&show_pq_worker_ref_ctx_attempts, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_key_bytes",
+     (char *)&show_pq_worker_ref_ctx_key_bytes, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_success", (char *)&show_pq_worker_ref_ctx_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_unsupported",
+     (char *)&show_pq_worker_ref_ctx_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_reverse_reject_probes",
      (char *)&show_pq_secondary_reverse_reject_probes, SHOW_FUNC,

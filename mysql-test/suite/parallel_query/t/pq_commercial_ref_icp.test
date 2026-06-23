@@ -1510,6 +1510,22 @@ SET @secondary_record_buffer_nonnull_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_secondary_record_buffer_nonnull_probes');
+SET @worker_ref_ctx_attempts_nodebug_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_ref_ctx_attempts');
+SET @worker_ref_ctx_success_nodebug_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_ref_ctx_success');
+SET @worker_ref_ctx_unsupported_nodebug_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_ref_ctx_unsupported');
+SET @worker_ref_ctx_bytes_nodebug_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_ref_ctx_key_bytes');
 
 SET @secondary_rows_produced_ref_before = (
   SELECT CAST(variable_value AS UNSIGNED)
@@ -1523,8 +1539,91 @@ SELECT
   (SELECT CAST(variable_value AS UNSIGNED)
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_secondary_rows_produced') -
-     @secondary_rows_produced_ref_before
-    AS c2_ref_rows_produced_delta;
+	     @secondary_rows_produced_ref_before
+	    AS c2_ref_rows_produced_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_worker_ref_ctx_attempts') -
+     @worker_ref_ctx_attempts_nodebug_before
+    AS f6a1_nodebug_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_worker_ref_ctx_success') -
+     @worker_ref_ctx_success_nodebug_before
+    AS f6a1_nodebug_success_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_worker_ref_ctx_unsupported') -
+     @worker_ref_ctx_unsupported_nodebug_before
+    AS f6a1_nodebug_unsupported_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_worker_ref_ctx_key_bytes') -
+     @worker_ref_ctx_bytes_nodebug_before
+    AS f6a1_nodebug_key_bytes_delta;
+
+SET @worker_ref_ctx_attempts_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_ref_ctx_attempts');
+SET @worker_ref_ctx_success_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_ref_ctx_success');
+SET @worker_ref_ctx_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_ref_ctx_unsupported');
+SET @worker_ref_ctx_bytes_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_ref_ctx_key_bytes');
+SET @worker_ref_ctx_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @worker_ref_ctx_ranges_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @old_debug = @@session.debug;
+SET SESSION debug = 'd,pq_worker_ref_ctx_shape_smoke';
+--sorted_result
+SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20;
+SET SESSION debug = @old_debug;
+SELECT
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_worker_ref_ctx_attempts') -
+      @worker_ref_ctx_attempts_before) >= 1
+    AS f6a1_attempts_seen,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_worker_ref_ctx_success') -
+      @worker_ref_ctx_success_before) >= 1
+    AS f6a1_success_seen,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_worker_ref_ctx_unsupported') -
+      @worker_ref_ctx_unsupported_before
+    AS f6a1_unsupported_delta,
+  ((SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_worker_ref_ctx_key_bytes') -
+      @worker_ref_ctx_bytes_before) > 0
+    AS f6a1_key_bytes_seen,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_workers_launched') -
+      @worker_ref_ctx_workers_before
+    AS f6a1_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+      FROM performance_schema.global_status
+      WHERE variable_name = 'Parallel_ranges_dispatched') -
+      @worker_ref_ctx_ranges_before
+    AS f6a1_ranges_dispatched_delta;
 
 --sorted_result
 SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
@@ -1597,7 +1696,7 @@ SELECT
   ((SELECT CAST(variable_value AS UNSIGNED)
       FROM performance_schema.global_status
       WHERE variable_name = 'Parallel_secondary_record_buffer_null_probes') -
-      @secondary_record_buffer_null_before) >= 3
+      @secondary_record_buffer_null_before) >= 4
     AS f5_record_buffer_null_probes_seen,
   (SELECT CAST(variable_value AS UNSIGNED)
       FROM performance_schema.global_status
