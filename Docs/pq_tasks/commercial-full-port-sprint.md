@@ -623,6 +623,62 @@ Completion Report - Batch C1a:
   - noted `access_path.h` include is broad but acceptable for C1a; future
     cleanup may split `PQTabType` into a smaller shared type header.
 
+#### Batch C1b - sql_parallel commercial entry surface and thread budget guard
+
+Status: completed and committed
+
+目标：
+
+- 先把商用 `sql_parallel` 主路径需要的入口符号和状态类型补齐到当前
+  8.0.46 分支；
+- 对齐商用 `check_pq_running_threads()` / `release_pq_running_threads()`
+  的全局线程预算等待/唤醒语义；
+- 不接 `JOIN::optimize()`、`sql_select.cc`、handler/InnoDB，不打开真实
+  plan rewrite 或 worker 执行。
+
+Completion Report - Batch C1b:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/parallel_query/pq_resource_stat.cc`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added commercial state carrier `PQ_optimized_var` and `PQ_exec_status`；
+  - declared commercial entry functions:
+    `make_pq_gather_operator()`、`make_pq_leader_plan()`、
+    `make_pq_unit_plan()`、`pq_worker_exec()`、
+    `pq_make_join_readinfo()`、`pq_check_stable_sort()`、
+    `EstimatePQGatherOperatorCost()`；
+  - implemented C1b fail-closed stubs: plan functions return `SEQ_EXEC` or
+    `nullptr`，join readinfo returns failure，cost function is no-op；
+  - added `check_pq_running_threads()` with mutex/cond timed wait and refusal
+    counter；
+  - updated `release_pq_running_threads()` to use the same mutex and broadcast
+    `COND_pq_threads_running` after release。
+- validation:
+  - `git diff --check -- sql/parallel_query/sql_parallel.h
+    sql/parallel_query/sql_parallel.cc sql/parallel_query/pq_resource_stat.cc`
+    passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`。
+- risks carried forward:
+  - `PQ_optimized_var` is only a type carrier; `JOIN::pq_optimized_var` remains
+    the existing opaque pointer until the optimizer state save/restore batch；
+  - per-THD `pq_threads_running` from commercial code is not introduced in this
+    batch to avoid widening THD layout changes；
+  - the thread-budget mutex/cond must be initialized before future real calls
+    are made from optimizer/execution hooks。
+- review:
+  - independent Review Agent accepted the patch；
+  - confirmed entry stubs fail closed and do not open optimizer/executor
+    behavior；
+  - confirmed thread-budget accounting is protected by the PQ mutex and
+    release broadcasts waiters；
+  - noted no current call sites, so mutex/cond initialization risk is not
+    reachable until future hooks call the budget guard。
+
 ### Batch D1 - Handler/InnoDB full worker path
 
 Status: pending

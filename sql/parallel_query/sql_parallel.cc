@@ -52,6 +52,7 @@
 #include <cstring>
 #include <vector>
 
+#include "my_systime.h"
 #include "my_dbug.h"
 #include "mysql/psi/mysql_thread.h"
 #include "mysqld_error.h"         // ER_QUERY_INTERRUPTED
@@ -59,6 +60,7 @@
 #include "sql/field.h"            // Field
 #include "sql/item.h"             // Item_int
 #include "sql/mysqld.h"           // key_thread_parallel_query_worker
+#include "sql/parallel_query/pq_resource_stat.h"
 #include "sql/handler.h"          // handler
 #include "sql/parallel_query/exchange_sort.h"  // Exchange_sort
 #include "sql/parallel_query/query_result_mq.h"  // pq_run_query_result_mq_contract_smoke
@@ -73,6 +75,85 @@
 // ---------------------------------------------------------------------------
 
 PQ_global_stats pq_global_stats;
+
+bool check_pq_running_threads(uint dop, ulong timeout_ms) {
+  bool success = false;
+
+  mysql_mutex_lock(&LOCK_pq_threads_running);
+  if (parallel_threads_running + dop > parallel_max_threads) {
+    if (timeout_ms > 0) {
+      struct timespec start_ts;
+      struct timespec end_ts;
+      struct timespec abstime;
+      ulong wait_timeout = timeout_ms;
+      int wait_result;
+
+      do {
+        set_timespec(&start_ts, 0);
+        abstime.tv_sec = start_ts.tv_sec + wait_timeout / TIME_THOUSAND;
+        abstime.tv_nsec =
+            start_ts.tv_nsec + (wait_timeout % TIME_THOUSAND) * TIME_MILLION;
+        if (abstime.tv_nsec >= TIME_BILLION) {
+          abstime.tv_sec++;
+          abstime.tv_nsec -= TIME_BILLION;
+        }
+
+        wait_result = mysql_cond_timedwait(&COND_pq_threads_running,
+                                           &LOCK_pq_threads_running, &abstime);
+        if (parallel_threads_running + dop <= parallel_max_threads) {
+          success = true;
+          break;
+        }
+        if (wait_result != 0) break;
+
+        set_timespec(&end_ts, 0);
+        const ulong diff_time =
+            (end_ts.tv_sec - start_ts.tv_sec) * TIME_THOUSAND +
+            (end_ts.tv_nsec - start_ts.tv_nsec) / TIME_MILLION;
+        if (diff_time >= wait_timeout) break;
+        wait_timeout -= diff_time;
+      } while (wait_timeout > 0);
+    }
+  } else {
+    success = true;
+  }
+
+  if (success) {
+    parallel_threads_running += dop;
+  } else {
+    ++parallel_threads_refused;
+  }
+  mysql_mutex_unlock(&LOCK_pq_threads_running);
+  return success;
+}
+
+Gather_operator *make_pq_gather_operator(JOIN *join [[maybe_unused]],
+                                          uint dop [[maybe_unused]]) {
+  return nullptr;
+}
+
+PQ_exec_status make_pq_leader_plan(JOIN *join [[maybe_unused]],
+                                   THD *thd [[maybe_unused]]) {
+  return PQ_exec_status::SEQ_EXEC;
+}
+
+PQ_exec_status make_pq_unit_plan(Query_expression *unit [[maybe_unused]],
+                                 THD *thd [[maybe_unused]]) {
+  return PQ_exec_status::SEQ_EXEC;
+}
+
+void *pq_worker_exec(void *arg [[maybe_unused]]) { return nullptr; }
+
+bool pq_make_join_readinfo(JOIN *join [[maybe_unused]],
+                           Gather_operator *gather [[maybe_unused]],
+                           QEP_TAB *div_tab [[maybe_unused]]) {
+  return true;
+}
+
+bool pq_check_stable_sort(JOIN *join [[maybe_unused]]) { return false; }
+
+void EstimatePQGatherOperatorCost(AccessPath *path [[maybe_unused]],
+                                  THD *thd [[maybe_unused]]) {}
 
 namespace {
 

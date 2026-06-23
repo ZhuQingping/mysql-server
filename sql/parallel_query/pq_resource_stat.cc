@@ -22,6 +22,9 @@
 
 #include "pq_resource_stat.h"
 
+#include "mysql/psi/mysql_cond.h"
+#include "mysql/psi/mysql_mutex.h"
+
 /**
  * wraps some basic variables and functions for PQ
  */
@@ -70,8 +73,11 @@ void sub_pq_memory(PSI_memory_key key, size_t length,
 }
 
 void release_pq_running_threads(uint dop) {
+  mysql_mutex_lock(&LOCK_pq_threads_running);
   if (parallel_threads_running >= dop)
     parallel_threads_running -= dop;
   else
     parallel_threads_running = 0;
+  mysql_cond_broadcast(&COND_pq_threads_running);
+  mysql_mutex_unlock(&LOCK_pq_threads_running);
 }

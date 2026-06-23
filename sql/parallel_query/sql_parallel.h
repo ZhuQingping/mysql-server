@@ -73,6 +73,7 @@
 #include <atomic>
 #include <cstdint>
 #include <set>
+#include <vector>
 
 #include "include/my_alloc.h"
 #include "my_thread.h"
@@ -84,11 +85,42 @@
 
 class THD;
 class Gather_operator;
+class Item;
 class Item_subselect;
 class JOIN;
 class QEP_TAB;
+class Query_expression;
 struct ORDER;
 struct TABLE;
+
+/** Saved optimizer state carrier used by commercial PQ plan rewrite. */
+struct PQ_optimized_var {
+  bool pq_grouped{false};
+  bool pq_implicit_grouping{false};
+  bool pq_simple_group{false};
+  bool pq_simple_order{false};
+  bool pq_streaming_aggregation{false};
+  bool pq_group_optimized_away{false};
+  bool pq_need_tmp_before_win{false};
+  bool pq_skip_sort_order{false};
+  int pq_m_ordered_index_usage{0};
+  std::vector<bool> optimized_group_flags;
+  std::vector<bool> optimized_order_flags;
+  bool pq_select_distinct{false};
+  Item *pq_saved_having_cond{nullptr};
+};
+
+enum PQ_exec_status { SEQ_EXEC = 0, PARL_EXEC, ABORT_EXEC };
+
+Gather_operator *make_pq_gather_operator(JOIN *join, uint dop);
+PQ_exec_status make_pq_leader_plan(JOIN *join, THD *thd);
+PQ_exec_status make_pq_unit_plan(Query_expression *unit, THD *thd);
+void *pq_worker_exec(void *arg);
+bool pq_make_join_readinfo(JOIN *join, Gather_operator *gather,
+                           QEP_TAB *div_tab);
+bool pq_check_stable_sort(JOIN *join);
+bool check_pq_running_threads(uint dop, ulong timeout_ms);
+void EstimatePQGatherOperatorCost(AccessPath *path, THD *thd);
 
 // ---------------------------------------------------------------------------
 // PQ_execution_state: per-statement execution state contract
