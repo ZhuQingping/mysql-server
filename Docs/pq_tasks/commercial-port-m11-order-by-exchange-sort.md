@@ -10276,8 +10276,7 @@ Review result:
 
 ### M11-E6g-4: Stable-ref Pair cmp_ref Tie-break Smoke
 
-Status: local implementation completed，first Code / Docs / Test review
-returned `REVISE` and fixes have been applied；waiting re-review before commit。
+Status: completed and committed as `3679a6d317c`。
 
 Goal:
 
@@ -10379,8 +10378,110 @@ Fresh validation after review fix:
   passed；
 - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query --parallel=1 --vardir=/tmp/pq_e6g4_fix_full_vardir --tmpdir=/tmp/pq_e6g4_fix_full_tmp`
   passed 89/89；
-- pending before commit:
-  - re-review by Code / Docs / Test reviewer。
+- Re-review Agent `019ef252-a55d-7281-bd13-4cdb72b4682b` returned `ACCEPT`；
+- commit allowed and applied as `3679a6d317c`；
+- residual risks carried forward:
+  - E6g-4 remains DBUG-only smoke coverage；
+  - it does not enable or prove production ORDER BY PQ readiness；
+  - production heap reader / default comparator integration is still blocked。
+
+### M11-E6g-5: Fail-closed Comparator Adapter Decision
+
+Status: design-only task drafted，waiting Design / Source review before any
+source change。
+
+Purpose:
+
+- decide the minimum safe boundary for moving from isolated handler-ref smokes
+  toward a future default ORDER BY comparator adapter；
+- preserve the current fail-closed ORDER BY visible gate；
+- explicitly prevent E6g-2/E6g-3/E6g-4 smoke evidence from being over-applied
+  to the production heap reader。
+
+Current source facts:
+
+- visible ORDER BY PQ is still rejected by `pq_check_query_block_eligible()` via
+  `PQUnsuiteReason::HAS_ORDER_BY`
+  (`sql/parallel_query/pq_optimizer.cc`)；
+- `pq_build_orderby_execution_preflight()` still returns execution-disabled
+  blockers and keeps all ORDER BY runtime readiness flags false
+  (`sql/parallel_query/pq_optimizer.cc`)；
+- `Exchange_sort` heap reader shapes remain private/smoke-only
+  (`sql/parallel_query/exchange_sort.*`)；
+- current cached comparator compares `sort_key` first, then row-id bytes, then
+  `worker_id` (`sql/parallel_query/exchange_sort.cc`)；
+- handler `cmp_ref()` proof exists only in DBUG/private paths:
+  - direct two-row smoke；
+  - handler-ref adapter smoke；
+  - stable-ref pair decode/deep-copy smoke。
+
+Explorer conclusion:
+
+- Design / Source Explorer `019ef254-a08e-7e70-a178-b88fb50f5d77` recommends
+  E6g-5 stay design-only, or at most prepare a later DBUG-only shape；
+- it is not safe to wire the adapter into the default comparator / heap reader
+  yet because Filesort runtime sort-key state, real worker ORDER frame producer,
+  kill/detach/error diagnostics, and default materialization lifecycle are not
+  all proven in production execution。
+
+Fail-closed comparator adapter contract:
+
+- Inputs:
+  - still-open leader handler owner；
+  - `expected_ref_length == handler->ref_length`；
+  - two non-empty owned row-id buffers；
+  - each row-id length equals `expected_ref_length`；
+  - row-id bytes came from stable-ref `PQWR` decode and immediate deep-copy；
+  - adapter is called only after sort-key equality has been established。
+- Outputs:
+  - supported comparator result for DBUG/private smoke only；or
+  - unsupported/fail-closed result with no visible query behavior change。
+- Required invariants:
+  - no borrowed handler/MQ decode pointer escapes；
+  - no lexical row-id byte order is treated as equivalent to handler
+    `cmp_ref()` for production；
+  - equal row-id buffers must fail closed for tie-break proof；
+  - forward/reverse handler comparison must be non-zero and antisymmetric；
+  - adapter must not mutate handler, TABLE, Filesort, Sort_param, JOIN, or
+    AccessPath state。
+
+Forbidden changes for E6g-5:
+
+- do not modify `pq_check_query_block_eligible()` ORDER BY rejection；
+- do not set ORDER BY preflight readiness flags true；
+- do not replace `pq_orderby_cached_compare_records()` or
+  `pq_orderby_cached_compare_batches()`；
+- do not modify default heap reader / materializer behavior；
+- do not wire this adapter into user-visible `ParallelScanIterator::Read()`；
+- do not change production `Query_result_mq::send_data()` /
+  `m_stable_output`；
+- do not add sysvar/hint/test path that lets ordinary ORDER BY queries enter
+  PQ。
+
+Recommended task split after E6g-5 design review:
+
+1. E6g-5b: DBUG-only comparator adapter shape.
+   - source scope should be limited to `exchange_sort.*`, status counters, and
+     one controlled MTR；
+   - no default comparator replacement；
+   - expose positive and fail-closed counters only under DBUG。
+2. E6g-5c: tie-break contract smoke extension.
+   - use equal sort-key synthetic cached records plus owned stable refs；
+   - prove non-zero / antisymmetric / direction match；
+   - cover null handler, ref-length mismatch, equal-ref rejection。
+3. E6g-5d: fail-closed audit.
+   - assert `HAS_ORDER_BY` still rejects visible ORDER BY；
+   - assert execution preflight remains disabled；
+   - assert default heap reader/materializer remains disabled；
+   - run full `parallel_query` suite。
+
+Acceptance criteria for E6g-5:
+
+- docs-only commit；
+- no `sql/**`, `storage/**`, or MTR source changes；
+- Design / Source review accepts that default comparator integration is not
+  opened；
+- next coding task has explicit allowed/forbidden files and review gates。
 
 ## Risk Areas
 

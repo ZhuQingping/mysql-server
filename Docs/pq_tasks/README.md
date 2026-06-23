@@ -5,7 +5,7 @@
 ## Current Summary
 
 - Last synced: 2026-06-22
-- Active update: M11-E6g-4 stable-ref pair cmp smoke implementation.
+- Active update: M11-E6g-5 fail-closed comparator adapter decision design.
   E6g-3 已提交为 `8051cb9dd13`，证明 worker `position(record)` ref 可经
   private `PQWR` stable-ref frame decode 后 deep-copy 为 owned row-id bytes，
   并用 leader handler exact `ref_length` 做严格长度校验。E6g-4 当前本地
@@ -15,13 +15,16 @@
   `pq_orderby_handler_ref_adapter_smoke()` 验证 equal sort-key 下 `cmp_ref()`
   forward/reverse 非零且反对称。仍不替换 default comparator / heap reader，
   不改 production `Query_result_mq::send_data()` / `m_stable_output`，不打开
-  readiness 或 visible ORDER BY gate。Code / Docs / Test Review Agent
+  readiness 或 visible ORDER BY gate。E6g-4 Code / Docs / Test Review Agent
   `019ef24a-b2ea-7392-99c5-2e9042f51f3f` 首轮要求修正：pair flag 不能依赖
   旧 two-row direct `cmp_ref()` smoke。当前已拆出独立
   `collect_two_worker_refs()` 收集路径，并新增 pair-only MTR 窗口验证旧
   two-row/direct adapter counters 不增长。fresh `mysqld` build passed，
   `pq_worker_attach_contract_smoke` + `pq_stats` targeted MTR passed，full
-  `parallel_query` suite passed 89/89；等待 re-review。
+  `parallel_query` suite passed 89/89；re-review accepted，已提交为
+  `3679a6d317c`。当前进入 E6g-5 design-only：定义 fail-closed default
+  comparator adapter 的输入/输出、不变量和拒绝原因；继续禁止接入默认
+  comparator / heap reader，禁止打开 ORDER BY visible PQ gate。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
   ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史
