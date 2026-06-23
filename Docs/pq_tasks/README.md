@@ -5,8 +5,9 @@
 ## Current Summary
 
 - Last synced: 2026-06-22
-- Active update: M11-E6f Query_result_mq Stable Handler-ref Wire Contract
-  已完成本地实现与验证，等待 Code / Docs / Test Review。M11-E6a
+- Active update: M11-E6g-1 Exchange_sort Handler/ref_length Ownership and
+  Comparator Preconditions Design
+  已启动 docs/design-only。M11-E6a
   已提交为 `70197ead960`，证明 private/debug-only
   `position(record)` + deep-copied handler ref + `cmp_ref(ref, ref)==0`
   contract；M11-E6b 已提交为 `03025f83ba6`，证明 private `PQOF` ORDER BY
@@ -32,7 +33,13 @@
   frame；仍不改变生产 `Query_result_mq::send_data()`、`m_stable_output`
   行为、默认 heap comparator、ORDER BY readiness 或 visible ORDER BY gate。
   验证：RED 已观察；`mysqld` build passed；`pq_worker_attach_contract_smoke`
-  passed；`pq_stats` passed；full `parallel_query` suite passed 89/89。
+  passed；`pq_stats` passed；full `parallel_query` suite passed 89/89；
+  Code / Docs / Test Review accepted，并已提交为 `e80bc2c1342`。E6g-1
+  当前只做 design/readiness contract：商用默认 heap comparator 依赖
+  leader-side `Exchange_sort` 持有正确 handler/ref_length/stable_output
+  ownership、decoded stable row-id 生命周期、Filesort/Sort_param runtime
+  state 和 worker producer；在这些 owner 未明确前，不编码默认 comparator、
+  heap reader、ORDER BY readiness 或 visible ORDER BY gate。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
   ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史

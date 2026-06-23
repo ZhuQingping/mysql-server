@@ -9867,8 +9867,8 @@ Next recommended sequence after E6f design review:
 
 Completion Report - M11-E6f Coding:
 
-- Status: implementation completed locally；waiting for Code / Docs / Test
-  Review。
+- Status: completed and committed as `e80bc2c1342`；Code / Docs / Test Review
+  accepted。
 - Design:
   - docs/design taskbook committed as `ed8afd02d58`；
   - Design Review Agent first returned `REVISE`，requiring stable-ref wire
@@ -9938,6 +9938,164 @@ Completion Report - M11-E6f Coding:
   - it does not make default `Exchange_sort` heap comparator or default ordered
     `Read()` commercial-ready；
   - it does not open visible ORDER BY PQ。
+- Code / Docs / Test Review:
+  - Review Agent verdict: `ACCEPT`；
+  - confirmed stable-ref is isolated by
+    `PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF` and ordinary
+    `pq_send_worker_result_frame()` still emits `flags == 0`；
+  - confirmed `pq_decode_worker_result_row()` rejects stable-ref frames and
+    `pq_decode_worker_result_stable_ref_row()` only accepts validated stable
+    ROW frames；
+  - confirmed unknown flags/version/length fail closed and
+    `PQ_worker_result_frame_header` stays wire-stable；
+  - confirmed production `Query_result_mq::send_data()` still does not use
+    `m_stable_output`；
+  - confirmed DBUG smoke is gated only by
+    `pq_query_result_mq_stable_ref_smoke` and runs after the E6d two-real-ref
+    path；
+  - confirmed no optimizer/readiness/default comparator/heap reader,
+    handler/InnoDB, AccessPath, or visible ORDER BY diff；
+  - confirmed targeted MTR, `pq_stats`, and full suite evidence is adequate。
+
+### M11-E6g-1: Exchange_sort Handler/ref_length Ownership and Comparator Preconditions
+
+Status: taskbook started；docs/design-only before source coding。
+
+Decision input:
+
+- Current Branch Explorer recommends a design-only default `Exchange_sort`
+  handler-ref comparator precondition task before any guarded smoke；
+- Commercial Reference Explorer confirms the mature implementation does not
+  let the comparator guess handler ownership. Commercial `MQ_record_gather`
+  passes the divided-table handler and `ref_length` into `Exchange_sort`, worker
+  code calls `position()` before `Query_result_mq::send_data()`, and
+  `Exchange_sort` calls `handler::cmp_ref()` only after row-id bytes and sort
+  keys are available；
+- Therefore E6g must first define leader-side handler/ref_length/stable_output
+  ownership and hard stops. It must not directly replace the default cached
+  comparator or open user-visible ORDER BY PQ。
+
+Commercial dependency chain to preserve:
+
+1. worker current-row handler ref:
+   `PQblockScanIterator::Read()` calls `table()->file->position(record)` for
+   the current row before sending；
+2. worker-result wire:
+   stable output makes `Query_result_mq::send_data()` deep-copy
+   `file->ref/ref_length` into MQ；
+3. leader exchange owner:
+   `MQ_record_gather::mq_scan_init()` gives `Exchange_sort` the divided-table
+   handler and exact `ref_length`；
+4. leader row cache:
+   each cached ordered record owns row bytes, row-id bytes, worker identity, and
+   optionally sort-key bytes；
+5. sort key:
+   `Filesort` / `Sort_param` state must be valid before comparing sort keys；
+6. stable tie-break:
+   only after equal sort keys and valid handler/ref_length/row-id bytes should
+   the comparator call `handler::cmp_ref(row_id_0, row_id_1)`。
+
+Current branch inventory after E6f:
+
+- private stable-ref `PQWR` wire contract exists and rejects normal decoder
+  mixing；
+- production `Query_result_mq::send_data()` still does not use
+  `m_stable_output`；
+- decoded stable-ref row-id bytes are not connected to default
+  `Exchange_sort` row loader / cached records；
+- default `pq_orderby_cached_compare_records()` still compares sort key, then
+  row-id byte vector, then worker id；
+- default ordered reader / materializer remains DBUG/private and
+  `DISABLED` / `UNSUPPORTED` guarded；
+- `PQOrderByExecutionPreflight` still keeps worker producer, heap read,
+  row-id tie-break, default ordered read, Filesort/Sort_param runtime, leader
+  materialization, and kill/error diagnostics not ready；
+- visible ORDER BY still stops at `HAS_ORDER_BY`。
+
+E6g-1 design goal:
+
+- define the minimum owner contract required before any default comparator or
+  heap reader can use `handler::cmp_ref()`；
+- make handler/ref_length ownership explicit: which opened handler is used, who
+  owns it, how its `ref_length` is validated, and how long it remains valid；
+- define how decoded stable-ref bytes become owned cached-record row-id bytes
+  without aliasing worker buffers or MQ receive buffers；
+- define the fail-closed conditions for mismatch / missing ref / missing
+  handler / missing Filesort state；
+- split the next coding tasks into guarded smokes that remain disconnected from
+  production `Read()` and visible ORDER BY。
+
+Proposed follow-up split after E6g-1 review:
+
+1. E6g-2: DBUG-only `Exchange_sort` tie-break handler owner smoke.
+   - bind a leader handler + expected `ref_length` to a private owner shape；
+   - reject null handler, `ref_length == 0`, and row-id length mismatch；
+   - do not compare default heap records yet。
+2. E6g-3: DBUG-only stable-ref production adapter smoke.
+   - use real worker handler `position()/ref` to send a stable-ref frame through
+     the E6f helper；
+   - decode and deep-copy row-id bytes into an owned record shape；
+   - do not wire production `Query_result_mq::send_data()`。
+3. E6g-4: DBUG-only equal-sort-key handler `cmp_ref()` tie-break smoke.
+   - use owned decoded row-id bytes and an explicit leader handler owner；
+   - verify forward/reverse non-zero and antisymmetric results；
+   - do not replace `pq_orderby_cached_compare_records()`。
+4. E6g-5: design/coding decision for a fail-closed default comparator adapter
+   only after E6g-2/E6g-3/E6g-4 pass and are reviewed。
+
+Allowed files for E6g-1:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+
+Forbidden files / behavior for E6g-1:
+
+- any `sql/**` source file；
+- any `storage/**` source file；
+- any MTR file；
+- production `Query_result_mq::send_data()` or `m_stable_output` behavior；
+- default `pq_orderby_cached_compare_records()` replacement；
+- default `Exchange_sort` heap reader or ordered materializer；
+- `pq_optimizer.*`, `HAS_ORDER_BY`, or preflight readiness changes；
+- handler/InnoDB or AccessPath changes；
+- visible ORDER BY PQ activation。
+
+Required design review:
+
+- confirm E6g-1 does not duplicate E6f inventory and adds the missing
+  leader-side handler/ref_length owner contract；
+- confirm comparator input must be decoded stable-ref row-id bytes plus exact
+  leader handler/ref_length, not synthetic row ids or raw byte lexical order；
+- confirm the next coding step is E6g-2 owner smoke, not visible ORDER BY gate；
+- confirm no readiness/status variable may be opened by E6g-1。
+
+Validation for E6g-1:
+
+- `git diff --check`；
+- no build or MTR required because E6g-1 is docs/design-only。
+
+Hard stops carried into E6g coding:
+
+- no explicit leader tie-break handler owner and expected `ref_length`；
+- worker did not prove `position()` on the current row before ref capture；
+- row-id bytes are borrowed from handler/MQ buffers instead of owned by the
+  cached record or smoke owner；
+- stable-ref frame cannot be distinguished from normal worker-result frames；
+- Filesort/Sort_param runtime state is absent for sort-key comparison；
+- kill/error/detach cleanup diagnostics are not reviewed；
+- any ordinary ORDER BY query starts a PQ iterator or changes visible result
+  path。
+
+Readiness that must remain false / unopened:
+
+- `worker_order_frame_producer_ready`；
+- `exchange_sort_heap_read_ready`；
+- `leader_materialization_ready`；
+- `rowid_tiebreak_ready`；
+- `default_ordered_read_ready`；
+- `kill_detach_error_diagnostics_ready`；
+- `Parallel_orderby_execution_preflight_ready`；
+- visible ORDER BY eligibility / `HAS_ORDER_BY` relaxation。
 
 ## Risk Areas
 
