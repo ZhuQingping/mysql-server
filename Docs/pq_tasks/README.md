@@ -4,8 +4,21 @@
 
 ## Current Summary
 
-- Last synced: 2026-06-22
-- Active update: M11-F6b worker constant-ref private row-token handoff design.
+- Last synced: 2026-06-23
+- Active update: 商用 Parallel Query 全量迁移冲刺已启动，权威任务板为
+  [commercial-full-port-sprint.md](commercial-full-port-sprint.md)。当前目标
+  已从 F6b 小步 contract/smoke 推进切换为：以
+  `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用实现为准，
+  尽量全量平移支持场景；只有依赖私有模块、8.0.41 到 8.0.46 API 短期
+  无法安全适配、会破坏 mysqld 基础行为或依赖本地不可构造环境的点，才允许
+  临时 skip，并必须记录原因。已并行启动 SQL/PQ 模块、SQL 主干 hook、
+  InnoDB/handler、MTR 测试套四个只读 Explorer；编码集成由主控串行合并，
+  每个批次完成后启动独立 review Agent 并运行 build/MTR 验证。
+- Superseded history below: 下方 F6b/M11 小步状态只保留为历史记录，不再作为
+  当前任务依据；任何“当前进入 F6b”“仍不打开 ORDER BY/ref/ICP”等旧表述均被
+  [commercial-full-port-sprint.md](commercial-full-port-sprint.md) 覆盖。新的
+  默认策略是商用全量迁移，只有大风险才允许临时 skip 并记录。
+- Previous active update before full-port switch: M11-F6b worker constant-ref private row-token handoff design.
   E6g-3 已提交为 `8051cb9dd13`，证明 worker `position(record)` ref 可经
   private `PQWR` stable-ref frame decode 后 deep-copy 为 owned row-id bytes，
   并用 leader handler exact `ref_length` 做严格长度校验。E6g-4 已提交为
