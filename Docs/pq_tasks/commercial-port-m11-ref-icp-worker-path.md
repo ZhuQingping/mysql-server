@@ -2459,6 +2459,115 @@ Completion Report - M11-F6a-1 Coding:
     constant-ref context；still no worker row production and no
     `pq_worker_scan_next()`。
 
+#### M11-F6a-2: Worker Constant-ref Ownership / Cleanup Smoke
+
+Status: taskbook created；pending design review；no source edits yet。
+
+Goal:
+
+- Extend the F6a-1 owned constant-ref context shape into a private
+  no-row/no-MQ ownership and cleanup smoke；
+- prove that a future worker-side constant-ref context can enter a worker-owned
+  lifetime boundary and be cleaned after no-row / unsupported / pre-row failure；
+- keep the current user-visible M9-C2 leader-local constant covering ref path
+  unchanged；
+- still do not read rows from worker, do not send MQ rows, and do not call
+  `pq_worker_scan_next()`。
+
+Allowed Files for F6a-2:
+
+- `sql/parallel_query/pq_iterators.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/mysqld.cc`；
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`；
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md`；
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`。
+
+Forbidden for F6a-2:
+
+- implementing `PQRefIterator::Read()` or `PQblockScanIterator::Read()`；
+- calling `ha_pq_next()` or `pq_worker_scan_next()`；
+- worker MQ row production or private row-token handoff；
+- any `sql/parallel_query/sql_parallel.cc` changes；
+- any storage / InnoDB source changes；if SQL-only cleanup cannot express the
+  contract, stop and request a separate design review / taskbook；
+- worker-side ICP clone/refix/pushdown；
+- native `Record_buffer` positive path；
+- changing current user-visible M9-C2 result rows, fallback behavior, or visible
+  eligibility。
+
+Design Requirements:
+
+- Reuse or narrowly extend the F6a-1 private context shape；do not export it to
+  headers unless review proves a cross-module contract is required；
+- model ownership as scoped lifetime state, not as a row-producing execution
+  path；
+- cleanup must run for success, unsupported, and injected pre-row failure；
+- cleanup must leave no borrowed pointer to leader `TABLE`, leader handler,
+  `Index_lookup::key_buff`, `record[0]`, or leader `row_prebuilt_t`；
+- diagnostic counters must distinguish attempts, successful cleanup, injected
+  failures, and unsupported/rejected shapes；
+- normal no-DBUG execution must not change new F6a-2 counters；
+- the DBUG smoke may run through existing leader-local constant-ref iterator
+  shape to obtain a stable exact ref key, but it must not claim worker-side row
+  execution；
+- F6a-2 must not reuse `Gather_operator` worker open/init/end smoke；preferred
+  implementation is SQL-only scoped ownership cleanup in `pq_iterators.cc`,
+  using the F6a-1 owned ref context and DBUG injection；
+- the smoke must not open a worker TABLE, call `pq_worker_scan_init()`, dispatch
+  ranges, read worker rows, or use MQ。
+
+Required MTR Windows:
+
+- no-DBUG zero-delta window for new F6a-2 counters；
+- DBUG success cleanup window for an exact constant ref key；
+- DBUG injected pre-row failure window proving cleanup still runs；
+- prove zero delta for worker/range/MQ diagnostics, including
+  `Parallel_workers_launched`, `Parallel_ranges_dispatched`,
+  `Parallel_worker_result_smoke_rows`, `Parallel_orderby_worker_adapter_rows`,
+  `Parallel_exchange_sort_worker_frame_smoke_rows`, and callback row counters if
+  touched；
+- if leader-local C2 diagnostics increment `Parallel_queries_executed` or
+  `Parallel_secondary_rows_produced`, label them as leader-local diagnostic noise
+  and separately prove workers/ranges/worker-row/MQ counters remain zero；
+- existing M9-C2 `c2_ref_rows_produced_delta` and final user-visible result
+  rows remain correct。
+
+Validation for F6a-2:
+
+- `git diff --check`；
+- `cmake --build build-ninja --target mysqld -j 16`；
+- targeted MTR:
+  `pq_commercial_ref_icp pq_stats`；
+- full `parallel_query` suite before commit if source or global status vars are
+  changed；
+- independent Code / Docs / Test / Reference Review Agent must return
+  `ACCEPT` before commit。
+
+Design Review Prompt - M11-F6a-2:
+
+请作为 M11-F6a-2 Design / Source / Test Review Agent，只读审查本任务书：
+
+1. F6a-2 是否是 F6a-1 后合理的最小后续步骤；
+2. no-row/no-MQ ownership + cleanup smoke 是否足够小，是否仍禁止
+   `PQRefIterator::Read()`、`ha_pq_next()`、`pq_worker_scan_next()` 和 worker
+   row production；
+3. allowed / forbidden files 是否准确；
+4. MTR 窗口是否能证明 no-DBUG zero、DBUG success cleanup、injected pre-row
+   failure cleanup，同时不误把 leader-local diagnostic 解释为 worker ref
+   execution；
+5. 是否应先做额外只读 source inventory，或可以直接进入编码。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Required taskbook fixes
+- Safe coding recommendation
+
 Design / Source / Test Review Prompt:
 
 请作为 M11-F6a Design / Source / Test Review Agent，只读审查本 F6a 任务书：
