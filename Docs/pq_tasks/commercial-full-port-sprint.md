@@ -482,7 +482,7 @@ Completion Report - Batch B1a:
 
 #### Batch B1b - worker iterator typed handler lifecycle
 
-Status: review accepted；ready to commit
+Status: completed and committed
 
 目标：
 
@@ -531,6 +531,40 @@ Completion Report - Batch B1b:
   - fixed `Init()` to publish `PQ_Worker_context` only after successful local
     init, and to reject replacing an existing worker context.
   - re-review accepted；no remaining required fixes.
+  - committed as `e2cd506b429`。
+
+#### Batch B1c - InnoDB typed pull-row path decision
+
+Status: deferred to D1
+
+结论：
+
+- 不在 B1 阶段把 `ha_innobase::pq_worker_scan_next()` 改成
+  callback-backed row cache；
+- 不接入当前 latent `InnoDB_pq_ctx::read_record()` /
+  worker-local `row_search_mvcc()` path；
+- 继续保持 `pq_worker_scan_next()` fail-closed unsupported，直到 D1
+  正式迁移商用 InnoDB `PQ_Ctx::read_record()` cursor path 或等价安全实现。
+
+依据：
+
+- 当前仓库 `row0pread_pq.h` 明确说明 worker-local `row_search_mvcc()` latent
+  path 不应接入真实 `PQTableScanIterator::Read()`；
+- 商用 `ha_pq_next()` 并不是预缓存全部 row image，而是通过
+  `dispatch_ctx()` / `PQ_Ctx::read_record()` 逐行拉取，range EOF 后继续派发；
+- callback producer 已是当前仓库验证过的 row flow，更适合后续先接
+  `sql_parallel.*` / MQ worker 主路径；
+- row-cache pull adapter 对大表/宽表/DOP 的内存、KILL、error propagation、
+  ref-key 变化语义风险较高。
+
+D1 必须处理：
+
+- 迁移或等价实现商用 `storage/innobase/row/row0pread_pq.cc::PQ_Ctx` cursor
+  path；
+- 将 B1a 的 `PQ_Worker_context::dispatch_ctx()` / ref-key queue 与 InnoDB
+  worker scan 真实接通；
+- 明确 fullscan/range/ref/dependent-ref/ICP/reverse 的 gate 和测试覆盖；
+- 保证 `pq_worker_scan_next()` unsupported/error 不伪装 EOF。
 
 ### Batch C1 - SQL main hook alignment
 
