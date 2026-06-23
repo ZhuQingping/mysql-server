@@ -1235,6 +1235,8 @@ bool Gather_operator::run_worker_attach_contract_smoke(
   std::vector<uchar> handler_ref_cmp_smoke_ref;
   bool handler_ref_two_row_smoke_pending = false;
   std::vector<std::vector<uchar>> handler_ref_two_row_smoke_refs;
+  bool stable_ref_pair_cmp_smoke_pending = false;
+  std::vector<std::vector<uchar>> stable_ref_pair_cmp_smoke_refs;
   Item *saved_leader_pushed_idx_cond = nullptr;
   uint saved_leader_pushed_idx_cond_keyno = MAX_KEY;
   auto install_leader_icp_sentinel = [&]() {
@@ -1310,6 +1312,43 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     return true;
   }
 
+  auto collect_two_worker_refs = [&worker](std::vector<std::vector<uchar>> *refs) {
+    if (refs == nullptr) return true;
+    refs->clear();
+    bool two_row_failed = worker->m_open_ctx.worker_table == nullptr ||
+                          worker->m_open_ctx.worker_handler == nullptr ||
+                          worker->m_open_ctx.worker_table->record[0] == nullptr ||
+                          worker->m_open_ctx.worker_handler->ha_rnd_init(true) != 0;
+    for (uint i = 0; !two_row_failed && i < 2; ++i) {
+      int error = worker->m_open_ctx.worker_handler->ha_rnd_next(
+          worker->m_open_ctx.worker_table->record[0]);
+      while (error == HA_ERR_RECORD_DELETED) {
+        error = worker->m_open_ctx.worker_handler->ha_rnd_next(
+            worker->m_open_ctx.worker_table->record[0]);
+      }
+      if (error != 0) {
+        two_row_failed = true;
+        break;
+      }
+
+      worker->m_open_ctx.worker_handler->position(
+          worker->m_open_ctx.worker_table->record[0]);
+      const uint ref_length = worker->m_open_ctx.worker_handler->ref_length;
+      if (ref_length == 0 || worker->m_open_ctx.worker_handler->ref == nullptr) {
+        two_row_failed = true;
+        break;
+      }
+      refs->emplace_back(worker->m_open_ctx.worker_handler->ref,
+                         worker->m_open_ctx.worker_handler->ref + ref_length);
+      two_row_failed = refs->back().size() != ref_length;
+    }
+    if (worker->m_open_ctx.worker_handler != nullptr &&
+        worker->m_open_ctx.worker_handler->inited) {
+      worker->m_open_ctx.worker_handler->ha_rnd_end();
+    }
+    return two_row_failed || refs->size() < 2 || (*refs)[0] == (*refs)[1];
+  };
+
   DBUG_EXECUTE_IF("pq_worker_record_buffer_probe_smoke", {
     if (worker->m_open_ctx.worker_handler != nullptr &&
         worker->m_open_ctx.worker_handler->ha_get_record_buffer() != nullptr) {
@@ -1359,47 +1398,25 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     pq_global_stats.orderby_handler_ref_two_row_attempts.fetch_add(
         1, std::memory_order_relaxed);
 
-    bool two_row_failed = worker->m_open_ctx.worker_table == nullptr ||
-                          worker->m_open_ctx.worker_handler == nullptr ||
-                          worker->m_open_ctx.worker_table->record[0] == nullptr ||
-                          worker->m_open_ctx.worker_handler->ha_rnd_init(true) != 0;
-    for (uint i = 0; !two_row_failed && i < 2; ++i) {
-      int error = worker->m_open_ctx.worker_handler->ha_rnd_next(
-          worker->m_open_ctx.worker_table->record[0]);
-      while (error == HA_ERR_RECORD_DELETED) {
-        error = worker->m_open_ctx.worker_handler->ha_rnd_next(
-            worker->m_open_ctx.worker_table->record[0]);
-      }
-      if (error != 0) {
-        two_row_failed = true;
-        break;
-      }
-
-      worker->m_open_ctx.worker_handler->position(
-          worker->m_open_ctx.worker_table->record[0]);
-      const uint ref_length = worker->m_open_ctx.worker_handler->ref_length;
-      if (ref_length == 0 || worker->m_open_ctx.worker_handler->ref == nullptr) {
-        two_row_failed = true;
-        break;
-      }
-      handler_ref_two_row_smoke_refs.emplace_back(
-          worker->m_open_ctx.worker_handler->ref,
-          worker->m_open_ctx.worker_handler->ref + ref_length);
-      two_row_failed =
-          handler_ref_two_row_smoke_refs.back().size() != ref_length;
-    }
-    if (worker->m_open_ctx.worker_handler != nullptr &&
-        worker->m_open_ctx.worker_handler->inited) {
-      worker->m_open_ctx.worker_handler->ha_rnd_end();
-    }
-
-    if (two_row_failed || handler_ref_two_row_smoke_refs.size() < 2) {
+    if (collect_two_worker_refs(&handler_ref_two_row_smoke_refs)) {
       pq_global_stats.orderby_handler_ref_two_row_unsupported.fetch_add(
           1, std::memory_order_relaxed);
       cleanup();
       return true;
     }
     handler_ref_two_row_smoke_pending = true;
+  });
+  DBUG_EXECUTE_IF("pq_worker_result_stable_ref_pair_cmp_smoke", {
+    pq_global_stats.stable_ref_pair_adapter_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+
+    if (collect_two_worker_refs(&stable_ref_pair_cmp_smoke_refs)) {
+      pq_global_stats.stable_ref_pair_adapter_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      cleanup();
+      return true;
+    }
+    stable_ref_pair_cmp_smoke_pending = true;
   });
 
   if (worker->m_open_ctx.worker_handler == nullptr ||
@@ -1655,6 +1672,69 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       pq_global_stats.stable_ref_adapter_ref_length_mismatch.fetch_add(
           stable_ref_adapter_length_mismatch, std::memory_order_relaxed);
     });
+  }
+  if (stable_ref_pair_cmp_smoke_pending) {
+    std::vector<uchar> left_owned_ref;
+    std::vector<uchar> right_owned_ref;
+    uint32 stable_ref_pair_bytes = 0;
+    uint32 stable_ref_pair_deep_copy = 0;
+    bool pair_failed =
+        leader_table == nullptr || leader_table->file == nullptr ||
+        leader_table->file->ref_length == 0 ||
+        stable_ref_pair_cmp_smoke_refs.size() < 2 ||
+        stable_ref_pair_cmp_smoke_refs[0].empty() ||
+        stable_ref_pair_cmp_smoke_refs[1].empty() ||
+        pq_run_query_result_mq_stable_ref_pair_smoke(
+            stable_ref_pair_cmp_smoke_refs[0].data(),
+            static_cast<uint32>(stable_ref_pair_cmp_smoke_refs[0].size()),
+            stable_ref_pair_cmp_smoke_refs[1].data(),
+            static_cast<uint32>(stable_ref_pair_cmp_smoke_refs[1].size()),
+            leader_table->file->ref_length, &left_owned_ref, &right_owned_ref,
+            &stable_ref_pair_bytes, &stable_ref_pair_deep_copy);
+    if (!pair_failed &&
+        (left_owned_ref.size() != leader_table->file->ref_length ||
+         right_owned_ref.size() != leader_table->file->ref_length)) {
+      pq_global_stats.stable_ref_pair_adapter_ref_length_mismatch.fetch_add(
+          1, std::memory_order_relaxed);
+      pair_failed = true;
+    }
+    if (!pair_failed && left_owned_ref == right_owned_ref) {
+      pair_failed = true;
+    }
+
+    int pair_forward = 0;
+    int pair_reverse = 0;
+    pair_failed =
+        pair_failed ||
+        pq_orderby_handler_ref_adapter_smoke(
+            leader_table->file, left_owned_ref.data(),
+            static_cast<uint32>(left_owned_ref.size()), right_owned_ref.data(),
+            static_cast<uint32>(right_owned_ref.size()), &pair_forward,
+            &pair_reverse);
+    const bool pair_antisymmetric =
+        (pair_forward < 0 && pair_reverse > 0) ||
+        (pair_forward > 0 && pair_reverse < 0);
+    if (pair_failed || pair_forward == 0 || pair_reverse == 0 ||
+        !pair_antisymmetric) {
+      pq_global_stats.stable_ref_pair_adapter_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+
+    pq_global_stats.stable_ref_pair_adapter_success.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.stable_ref_pair_adapter_refs.fetch_add(
+        2, std::memory_order_relaxed);
+    pq_global_stats.stable_ref_pair_adapter_bytes.fetch_add(
+        stable_ref_pair_bytes, std::memory_order_relaxed);
+    pq_global_stats.stable_ref_pair_adapter_deep_copy_success.fetch_add(
+        stable_ref_pair_deep_copy, std::memory_order_relaxed);
+    pq_global_stats.stable_ref_pair_adapter_cmp_nonzero.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.stable_ref_pair_adapter_antisymmetric_success.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.stable_ref_pair_adapter_tiebreak_success.fetch_add(
+        1, std::memory_order_relaxed);
   }
   pq_global_stats.worker_attach_smoke_success.fetch_add(
       1, std::memory_order_relaxed);

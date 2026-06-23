@@ -10274,6 +10274,114 @@ Review result:
 - residual risk carried forward: E6g-3 remains a DBUG-only adapter smoke and
   does not prove production ORDER BY PQ readiness。
 
+### M11-E6g-4: Stable-ref Pair cmp_ref Tie-break Smoke
+
+Status: local implementation completed，first Code / Docs / Test review
+returned `REVISE` and fixes have been applied；waiting re-review before commit。
+
+Goal:
+
+- prove the handler `cmp_ref()` tie-break path can consume row-id bytes that
+  came through stable-ref `PQWR` decode and were immediately deep-copied into
+  owned vectors；
+- keep this distinct from E6e, which compared worker-copied refs directly；
+- keep this distinct from E6g-3, which proved only one decoded stable-ref owner
+  and `ref_length` contract；
+- keep default ORDER BY comparator / heap reader / visible ORDER BY PQ closed。
+
+Design review feedback applied:
+
+- Design Review Agent `019ef243-a126-7271-ad23-8400adbc678b` returned
+  `ACCEPT` with small correction requirements；
+- applied the requested boundaries:
+  - pair helper in `query_result_mq.*` only decodes two stable-ref frames,
+    validates lengths, and returns two owned refs；
+  - pair helper does not call `handler::cmp_ref()`；
+  - `sql_parallel.cc` DBUG hook owns the explicit leader handler/ref_length and
+    calls existing `pq_orderby_handler_ref_adapter_smoke()`；
+  - DBUG flag is independent:
+    `pq_worker_result_stable_ref_pair_cmp_smoke`；
+  - public status names use pair-adapter naming and avoid overly long SHOW
+    variable names。
+
+Implemented:
+
+- added `pq_run_query_result_mq_stable_ref_pair_smoke()`；
+- the helper sends two stable-ref `PQWR` ROW frames through a local MQ, decodes
+  them, deep-copies the borrowed row-id pointers into two owned
+  `std::vector<uchar>` objects, then validates the owned bytes after MQ cleanup；
+- added DBUG-only hook in `Gather_operator::run_worker_attach_contract_smoke()`：
+  - requires still-open `leader_table->file` and non-zero
+    `leader_table->file->ref_length`；
+  - requires two owned refs with exact leader `ref_length` and different bytes；
+  - calls `pq_orderby_handler_ref_adapter_smoke()` on the leader handler；
+  - requires forward/reverse `cmp_ref()` results to be non-zero and
+    antisymmetric；
+- added status variables:
+  - `Parallel_worker_result_stable_ref_pair_adapter_attempts`；
+  - `Parallel_worker_result_stable_ref_pair_adapter_success`；
+  - `Parallel_worker_result_stable_ref_pair_adapter_unsupported`；
+  - `Parallel_worker_result_stable_ref_pair_adapter_refs`；
+  - `Parallel_worker_result_stable_ref_pair_adapter_bytes`；
+  - `Parallel_worker_result_stable_ref_pair_adapter_copy_success`；
+  - `Parallel_worker_result_stable_ref_pair_adapter_cmp_nonzero`；
+  - `Parallel_worker_result_stable_ref_pair_adapter_antisym_success`；
+  - `Parallel_worker_result_stable_ref_pair_adapter_tiebreak_success`；
+  - `Parallel_worker_result_stable_ref_pair_adapter_len_mismatch`；
+- extended `pq_worker_attach_contract_smoke` and `pq_stats`。
+
+Hard boundaries preserved:
+
+- no production `Query_result_mq::send_data()` or `m_stable_output` behavior
+  change；
+- no default comparator or heap reader replacement；
+- no readiness flag or visible ORDER BY gate opened；
+- no `pq_optimizer.*`, AccessPath, handler/InnoDB implementation change；
+- helper-returned refs are owned vectors, not borrowed MQ decode pointers。
+
+Validation evidence:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- first `pq_worker_attach_contract_smoke` run exposed two overlong SHOW status
+  names; renamed them to `..._copy_success` and `..._len_mismatch`；
+- targeted MTR passed:
+  `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_worker_attach_contract_smoke pq_stats --parallel=1 --vardir=/tmp/pq_e6g4_target_vardir --tmpdir=/tmp/pq_e6g4_target_tmp`；
+- fresh `git diff --check` passed；
+- full `parallel_query` suite passed 89/89:
+  `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query --parallel=1 --vardir=/tmp/pq_e6g4_full_vardir --tmpdir=/tmp/pq_e6g4_full_tmp`；
+- pending before commit:
+  - independent Code / Docs / Test review。
+
+Code / Docs / Test Review - M11-E6g-4:
+
+- Review Agent `019ef24a-b2ea-7392-99c5-2e9042f51f3f` returned `REVISE`；
+- finding:
+  - `pq_worker_result_stable_ref_pair_cmp_smoke` was reachable only through the
+    old `pq_orderby_handler_ref_two_row_cmp_smoke` collection path；
+  - that coupling meant the pair smoke was not independently executable and
+    the same debug run could call direct leader `cmp_ref()` before the stable-ref
+    pair adapter path；
+- applied fix:
+  - split real worker-ref collection into local `collect_two_worker_refs()`；
+  - kept the old two-row direct `cmp_ref()` smoke on its existing flag；
+  - added an independent pair-pending path for
+    `pq_worker_result_stable_ref_pair_cmp_smoke`；
+  - pair path now collects refs, runs stable-ref pair MQ decode/deep-copy, then
+    calls `pq_orderby_handler_ref_adapter_smoke()` with owned refs；
+  - `pq_worker_attach_contract_smoke` now has a pair-only DBUG window and checks
+    old two-row/direct adapter counters stay at delta 0 in that window。
+
+Fresh validation after review fix:
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_worker_attach_contract_smoke pq_stats --parallel=1 --vardir=/tmp/pq_e6g4_fix_target_vardir --tmpdir=/tmp/pq_e6g4_fix_target_tmp`
+  passed；
+- `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query --parallel=1 --vardir=/tmp/pq_e6g4_fix_full_vardir --tmpdir=/tmp/pq_e6g4_fix_full_tmp`
+  passed 89/89；
+- pending before commit:
+  - re-review by Code / Docs / Test reviewer。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

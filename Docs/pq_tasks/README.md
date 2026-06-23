@@ -5,20 +5,23 @@
 ## Current Summary
 
 - Last synced: 2026-06-22
-- Active update: M11-E6g-3 stable-ref adapter smoke implementation.
-  E6g-2 已提交为 `fe34564e5f0`，证明 `Exchange_sort` 可在 DBUG-only
-  smoke 中绑定 still-open leader handler 和精确 `ref_length`，并对 owned
-  row-id bytes 的 mismatch / null handler / null row-id fail-closed。E6g-3
-  当前本地实现新增 DBUG-only `pq_worker_result_stable_ref_adapter_smoke`：
-  复用 worker attach 真实 `position(record)` handler ref 和 E6f `PQWR`
-  stable-ref wire helper，decode 后立即 deep-copy 到 owned row-id bytes，
-  并用 leader handler exact `ref_length` 做严格长度校验。仍不改
-  production `Query_result_mq::send_data()` / `m_stable_output`，不调用
-  `handler::cmp_ref()`，不替换默认 comparator，不打开 readiness 或 visible
-  ORDER BY gate。已完成设计检视反馈修正、`mysqld` build passed、
-  `pq_worker_attach_contract_smoke` + `pq_stats` targeted MTR passed、
-  `git diff --check` passed、full `parallel_query` suite passed 89/89；
-  Code / Docs / Test Review accepted，当前准备提交。
+- Active update: M11-E6g-4 stable-ref pair cmp smoke implementation.
+  E6g-3 已提交为 `8051cb9dd13`，证明 worker `position(record)` ref 可经
+  private `PQWR` stable-ref frame decode 后 deep-copy 为 owned row-id bytes，
+  并用 leader handler exact `ref_length` 做严格长度校验。E6g-4 当前本地
+  实现新增 DBUG-only `pq_worker_result_stable_ref_pair_cmp_smoke`：两条真实
+  worker refs 先经 stable-ref pair helper decode/deep-copy 成 owned
+  vectors，再由 still-open leader handler 调用 existing
+  `pq_orderby_handler_ref_adapter_smoke()` 验证 equal sort-key 下 `cmp_ref()`
+  forward/reverse 非零且反对称。仍不替换 default comparator / heap reader，
+  不改 production `Query_result_mq::send_data()` / `m_stable_output`，不打开
+  readiness 或 visible ORDER BY gate。Code / Docs / Test Review Agent
+  `019ef24a-b2ea-7392-99c5-2e9042f51f3f` 首轮要求修正：pair flag 不能依赖
+  旧 two-row direct `cmp_ref()` smoke。当前已拆出独立
+  `collect_two_worker_refs()` 收集路径，并新增 pair-only MTR 窗口验证旧
+  two-row/direct adapter counters 不增长。fresh `mysqld` build passed，
+  `pq_worker_attach_contract_smoke` + `pq_stats` targeted MTR passed，full
+  `parallel_query` suite passed 89/89；等待 re-review。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
   ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史

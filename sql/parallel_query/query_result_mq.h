@@ -120,6 +120,12 @@ bool pq_run_query_result_mq_stable_ref_adapter_smoke(
     uint32 expected_ref_length, uint32 *ref_bytes, uint32 *owned_ref_success,
     uint32 *length_mismatch_rejects);
 
+bool pq_run_query_result_mq_stable_ref_pair_smoke(
+    const uchar *left_ref, uint32 left_ref_len, const uchar *right_ref,
+    uint32 right_ref_len, uint32 expected_ref_length,
+    std::vector<uchar> *left_owned_ref, std::vector<uchar> *right_owned_ref,
+    uint32 *ref_bytes, uint32 *deep_copy_success);
+
 /*
   This is used to get result from a query executed by PQ worker
 */

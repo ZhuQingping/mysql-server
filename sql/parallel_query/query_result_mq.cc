@@ -879,6 +879,84 @@ bool pq_run_query_result_mq_stable_ref_adapter_smoke(
          *owned_ref_success != 1 || *length_mismatch_rejects != 1;
 }
 
+bool pq_run_query_result_mq_stable_ref_pair_smoke(
+    const uchar *left_ref, uint32 left_ref_len, const uchar *right_ref,
+    uint32 right_ref_len, uint32 expected_ref_length,
+    std::vector<uchar> *left_owned_ref, std::vector<uchar> *right_owned_ref,
+    uint32 *ref_bytes, uint32 *deep_copy_success) {
+  if (left_ref == nullptr || right_ref == nullptr || left_ref_len == 0 ||
+      right_ref_len == 0 || expected_ref_length == 0 ||
+      left_ref_len != expected_ref_length ||
+      right_ref_len != expected_ref_length || left_owned_ref == nullptr ||
+      right_owned_ref == nullptr || ref_bytes == nullptr ||
+      deep_copy_success == nullptr) {
+    return true;
+  }
+
+  left_owned_ref->clear();
+  right_owned_ref->clear();
+  *ref_bytes = 0;
+  *deep_copy_success = 0;
+
+  PQ_mq_event sender_event;
+  PQ_mq_event receiver_event;
+  char ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue queue(&sender_event, &receiver_event, ring, sizeof(ring));
+  MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (handle.init()) return true;
+
+  const uchar null_bitmap[] = {0};
+  std::vector<uchar> field_payload;
+  pq_worker_result_append_uint32(&field_payload, 1);
+  field_payload.push_back('6');
+
+  bool failed =
+      pq_send_worker_result_stable_ref_frame(
+          &handle, 1, null_bitmap, sizeof(null_bitmap), field_payload.data(),
+          static_cast<uint32>(field_payload.size()), left_ref, left_ref_len) ||
+      pq_send_worker_result_stable_ref_frame(
+          &handle, 1, null_bitmap, sizeof(null_bitmap), field_payload.data(),
+          static_cast<uint32>(field_payload.size()), right_ref, right_ref_len);
+
+  for (uint i = 0; !failed && i < 2; ++i) {
+    void *raw_data = nullptr;
+    uint32 raw_len = 0;
+    if (handle.receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+      failed = true;
+      break;
+    }
+
+    PQ_worker_result_stable_ref stable_ref;
+    if (pq_decode_worker_result_stable_ref_row(raw_data, raw_len,
+                                               &stable_ref) ||
+        stable_ref.row_id == nullptr ||
+        stable_ref.row_id_len != expected_ref_length ||
+        stable_ref.field_count != 1 || stable_ref.null_bitmap_len != 1) {
+      failed = true;
+      break;
+    }
+
+    std::vector<uchar> *target = (i == 0) ? left_owned_ref : right_owned_ref;
+    target->assign(stable_ref.row_id, stable_ref.row_id + stable_ref.row_id_len);
+    *ref_bytes += stable_ref.row_id_len;
+    ++(*deep_copy_success);
+  }
+
+  handle.cleanup();
+
+  if (!failed) {
+    failed = left_owned_ref->size() != expected_ref_length ||
+             right_owned_ref->size() != expected_ref_length ||
+             memcmp(left_owned_ref->data(), left_ref, expected_ref_length) !=
+                 0 ||
+             memcmp(right_owned_ref->data(), right_ref,
+                    expected_ref_length) != 0;
+  }
+
+  return failed || *ref_bytes != expected_ref_length * 2 ||
+         *deep_copy_success != 2;
+}
+
 Query_result_mq::Query_result_mq(JOIN *join, MQueue_handle *msg_handler,
                                  bool stab_output)
     : Query_result(), m_join(join), m_handler(msg_handler),
