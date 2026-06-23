@@ -1,0 +1,151 @@
+--echo # PTRC error propagation and crash regression hardening
+
+--source include/elide_costs.inc
+
+let $elide_ptrc_analyze = /[(]cost=[0-9.e+-]+ rows=[0-9.e+-]+[)]/(...)/ /[(]actual time=[0-9.e+-]+ rows/(actual rows/ /Cache Hits: [0-9]+/Cache Hits: #/ /Cache Misses: [0-9]+/Cache Misses: #/ /Cache Evictions: [0-9]+/Cache Evictions: #/ /Cache Overflows: [0-9]+/Cache Overflows: #/ /Memory Usage: [0-9]+/Memory Usage: #/;
+
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET @saved_ptrc_cost_threshold=@@rds_partial_result_cache_cost_threshold;
+SET optimizer_switch='partial_result_cache=on,hash_join=off,block_nested_loop=off,batched_key_access=off,semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold=0;
+
+--echo # Expression errors inside cached subqueries should propagate.
+CREATE TABLE ptrc_err_t1 (
+  a DOUBLE,
+  b INT,
+  KEY(a),
+  KEY(b)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_err_t1 VALUES (-1.7976931348623157e308,2), (3,4);
+
+--error ER_DATA_OUT_OF_RANGE
+SELECT DEGREES(ref_1.a) AS c1 FROM ptrc_err_t1 AS ref_1;
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b IN (SELECT /*+ PRC_SUBQUERY() */ DEGREES(i.a)
+            FROM ptrc_err_t1 AS i);
+
+--error ER_DATA_OUT_OF_RANGE
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b IN (SELECT /*+ PRC_SUBQUERY() */ DEGREES(i.a)
+            FROM ptrc_err_t1 AS i);
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b = ANY (SELECT /*+ PRC_SUBQUERY() */ DEGREES(i.a)
+               FROM ptrc_err_t1 AS i
+               WHERE i.a = o.a);
+
+--error ER_DATA_OUT_OF_RANGE
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b = ANY (SELECT /*+ PRC_SUBQUERY() */ DEGREES(i.a)
+               FROM ptrc_err_t1 AS i
+               WHERE i.a = o.a);
+
+--echo # Non-error IN, NOT IN, ANY, and ALL cases should keep semantics.
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b IN (SELECT /*+ PRC_SUBQUERY() */ 4 FROM ptrc_err_t1 AS i)
+ORDER BY a, b;
+
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b NOT IN (SELECT /*+ PRC_SUBQUERY() */ 4 FROM ptrc_err_t1 AS i)
+ORDER BY a, b;
+
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b = ANY (SELECT /*+ PRC_SUBQUERY() */ i.b
+               FROM ptrc_err_t1 AS i
+               WHERE i.a = o.a)
+ORDER BY a, b;
+
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b > ALL (SELECT /*+ PRC_SUBQUERY() */ i.b
+               FROM ptrc_err_t1 AS i
+               WHERE i.a = o.a)
+ORDER BY a, b;
+
+DROP TABLE ptrc_err_t1;
+
+--echo # EXPLAIN ANALYZE on empty PTRC subquery inputs should not crash.
+CREATE TABLE ptrc_empty_t1 (a INT, b INT) ENGINE=InnoDB;
+CREATE TABLE ptrc_empty_t2 (b INT, c INT) ENGINE=InnoDB;
+CREATE TABLE ptrc_empty_t3 (c INT, d INT) ENGINE=InnoDB;
+
+--replace_regex $elide_ptrc_analyze
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT *
+FROM ptrc_empty_t1 AS o
+WHERE o.a IN (SELECT /*+ PRC_SUBQUERY() */ t2.b
+              FROM ptrc_empty_t2 AS t2, ptrc_empty_t3 AS t3
+              WHERE t2.b = o.b AND t2.c > t3.d);
+
+DROP TABLE ptrc_empty_t1, ptrc_empty_t2, ptrc_empty_t3;
+
+--echo # NULL-complemented outer-join rows should match no-PTRC results.
+CREATE TABLE ptrc_dept (
+  dept_id INT PRIMARY KEY,
+  dept_name VARCHAR(50) NOT NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_emp (
+  emp_id INT PRIMARY KEY,
+  emp_name VARCHAR(50) NOT NULL,
+  dept_id INT,
+  salary DECIMAL(10,2),
+  KEY(dept_id)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_dept VALUES
+  (1, 'Human Resources'),
+  (2, 'Information Technology'),
+  (3, 'Marketing');
+
+INSERT INTO ptrc_emp VALUES
+  (101, 'Charles', 1, 8000.00),
+  (102, 'David', 1, 7500.00),
+  (103, 'William', 2, 9000.00);
+
+--replace_regex $elide_ptrc_analyze
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT /*+ JOIN_ORDER(d, e) PRC_JOIN(e) */
+       d.dept_id, d.dept_name,
+       AVG(e.salary) AS avg_salary,
+       COUNT(e.emp_id) AS employee_count
+FROM ptrc_dept AS d
+LEFT JOIN ptrc_emp AS e ON d.dept_id = e.dept_id
+GROUP BY d.dept_id, d.dept_name
+ORDER BY d.dept_id;
+
+SELECT /*+ JOIN_ORDER(d, e) PRC_JOIN(e) */
+       d.dept_id, d.dept_name,
+       AVG(e.salary) AS avg_salary,
+       COUNT(e.emp_id) AS employee_count
+FROM ptrc_dept AS d
+LEFT JOIN ptrc_emp AS e ON d.dept_id = e.dept_id
+GROUP BY d.dept_id, d.dept_name
+ORDER BY d.dept_id;
+
+SELECT /*+ JOIN_ORDER(d, e) NO_PRC_JOIN(e) */
+       d.dept_id, d.dept_name,
+       AVG(e.salary) AS avg_salary,
+       COUNT(e.emp_id) AS employee_count
+FROM ptrc_dept AS d
+LEFT JOIN ptrc_emp AS e ON d.dept_id = e.dept_id
+GROUP BY d.dept_id, d.dept_name
+ORDER BY d.dept_id;
+
+DROP TABLE ptrc_emp, ptrc_dept;
+
+SET optimizer_switch=@saved_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold=@saved_ptrc_cost_threshold;

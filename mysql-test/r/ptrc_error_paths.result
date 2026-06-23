@@ -1,0 +1,178 @@
+# PTRC error propagation and crash regression hardening
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET @saved_ptrc_cost_threshold=@@rds_partial_result_cache_cost_threshold;
+SET optimizer_switch='partial_result_cache=on,hash_join=off,block_nested_loop=off,batched_key_access=off,semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold=0;
+# Expression errors inside cached subqueries should propagate.
+CREATE TABLE ptrc_err_t1 (
+a DOUBLE,
+b INT,
+KEY(a),
+KEY(b)
+) ENGINE=InnoDB;
+INSERT INTO ptrc_err_t1 VALUES (-1.7976931348623157e308,2), (3,4);
+SELECT DEGREES(ref_1.a) AS c1 FROM ptrc_err_t1 AS ref_1;
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`ref_1`.`a`)'
+EXPLAIN FORMAT=TREE
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b IN (SELECT /*+ PRC_SUBQUERY() */ DEGREES(i.a)
+FROM ptrc_err_t1 AS i);
+EXPLAIN
+-> Filter: <in_optimizer>(o.b,<exists>(select #2))  (...)
+    -> Table scan on o  (...)
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(o.b)
+            -> Limit: 1 row(s)  (...)
+                -> Filter: (<cache>(o.b) = degrees(i.a))  (...)
+                    -> Index scan on i using a  (...)
+
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b IN (SELECT /*+ PRC_SUBQUERY() */ DEGREES(i.a)
+FROM ptrc_err_t1 AS i);
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`i`.`a`)'
+EXPLAIN FORMAT=TREE
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b = ANY (SELECT /*+ PRC_SUBQUERY() */ DEGREES(i.a)
+FROM ptrc_err_t1 AS i
+WHERE i.a = o.a);
+EXPLAIN
+-> Filter: <in_optimizer>(o.b,<exists>(select #2))  (...)
+    -> Table scan on o  (...)
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(o.a, o.b)
+            -> Limit: 1 row(s)  (...)
+                -> Filter: (<cache>(o.b) = degrees(i.a))  (...)
+                    -> Covering index lookup on i using a (a=o.a)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.o.a' of SELECT #2 was resolved in SELECT #1
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b = ANY (SELECT /*+ PRC_SUBQUERY() */ DEGREES(i.a)
+FROM ptrc_err_t1 AS i
+WHERE i.a = o.a);
+ERROR 22003: DOUBLE value is out of range in 'degrees(`test`.`i`.`a`)'
+# Non-error IN, NOT IN, ANY, and ALL cases should keep semantics.
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b IN (SELECT /*+ PRC_SUBQUERY() */ 4 FROM ptrc_err_t1 AS i)
+ORDER BY a, b;
+a	b
+3	4
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b NOT IN (SELECT /*+ PRC_SUBQUERY() */ 4 FROM ptrc_err_t1 AS i)
+ORDER BY a, b;
+a	b
+-1.7976931348623157e308	2
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b = ANY (SELECT /*+ PRC_SUBQUERY() */ i.b
+FROM ptrc_err_t1 AS i
+WHERE i.a = o.a)
+ORDER BY a, b;
+a	b
+-1.7976931348623157e308	2
+3	4
+SELECT *
+FROM ptrc_err_t1 AS o
+WHERE b > ALL (SELECT /*+ PRC_SUBQUERY() */ i.b
+FROM ptrc_err_t1 AS i
+WHERE i.a = o.a)
+ORDER BY a, b;
+a	b
+DROP TABLE ptrc_err_t1;
+# EXPLAIN ANALYZE on empty PTRC subquery inputs should not crash.
+CREATE TABLE ptrc_empty_t1 (a INT, b INT) ENGINE=InnoDB;
+CREATE TABLE ptrc_empty_t2 (b INT, c INT) ENGINE=InnoDB;
+CREATE TABLE ptrc_empty_t3 (c INT, d INT) ENGINE=InnoDB;
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT *
+FROM ptrc_empty_t1 AS o
+WHERE o.a IN (SELECT /*+ PRC_SUBQUERY() */ t2.b
+FROM ptrc_empty_t2 AS t2, ptrc_empty_t3 AS t3
+WHERE t2.b = o.b AND t2.c > t3.d);
+EXPLAIN
+-> Filter: <in_optimizer>(o.a,<exists>(select #2))  (...) (actual rows=0 loops=1)
+    -> Table scan on o  (...) (actual rows=0 loops=1)
+    -> Select #2 (subquery in condition; dependent)
+        -> Result cache : cache keys(o.a, o.b) (Cache Hits: #, Cache Misses: #, Cache Evictions: #, Cache Overflows: #, Memory Usage: # )  (never executed)
+            -> Limit: 1 row(s)  (...) (never executed)
+                -> Nested loop inner join  (...) (never executed)
+                    -> Filter: ((t2.b = o.b) and (<cache>(o.a) = t2.b))  (...) (never executed)
+                        -> Table scan on t2  (...) (never executed)
+                    -> Result cache : cache keys(o.a, o.b, t2.b, t2.c) (Cache Hits: #, Cache Misses: #, Cache Evictions: #, Cache Overflows: #, Memory Usage: # )  (...) (never executed)
+                        -> Filter: (t2.c > t3.d)  (...) (never executed)
+                            -> Table scan on t3  (...) (never executed)
+
+Warnings:
+Note	1276	Field or reference 'test.o.b' of SELECT #2 was resolved in SELECT #1
+DROP TABLE ptrc_empty_t1, ptrc_empty_t2, ptrc_empty_t3;
+# NULL-complemented outer-join rows should match no-PTRC results.
+CREATE TABLE ptrc_dept (
+dept_id INT PRIMARY KEY,
+dept_name VARCHAR(50) NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_emp (
+emp_id INT PRIMARY KEY,
+emp_name VARCHAR(50) NOT NULL,
+dept_id INT,
+salary DECIMAL(10,2),
+KEY(dept_id)
+) ENGINE=InnoDB;
+INSERT INTO ptrc_dept VALUES
+(1, 'Human Resources'),
+(2, 'Information Technology'),
+(3, 'Marketing');
+INSERT INTO ptrc_emp VALUES
+(101, 'Charles', 1, 8000.00),
+(102, 'David', 1, 7500.00),
+(103, 'William', 2, 9000.00);
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT /*+ JOIN_ORDER(d, e) PRC_JOIN(e) */
+d.dept_id, d.dept_name,
+AVG(e.salary) AS avg_salary,
+COUNT(e.emp_id) AS employee_count
+FROM ptrc_dept AS d
+LEFT JOIN ptrc_emp AS e ON d.dept_id = e.dept_id
+GROUP BY d.dept_id, d.dept_name
+ORDER BY d.dept_id;
+EXPLAIN
+-> Sort: d.dept_id, d.dept_name  (actual rows=3 loops=1)
+    -> Table scan on <temporary>  (actual rows=3 loops=1)
+        -> Aggregate using temporary table  (actual rows=3 loops=1)
+            -> Nested loop left join  (...) (actual rows=4 loops=1)
+                -> Table scan on d  (...) (actual rows=3 loops=1)
+                -> Result cache : cache keys(d.dept_id, d.dept_name) (Cache Hits: #, Cache Misses: #, Cache Evictions: #, Cache Overflows: #, Memory Usage: # )  (...) (actual rows=1 loops=3)
+                    -> Index lookup on e using dept_id (dept_id=d.dept_id)  (...) (actual rows=1 loops=3)
+
+SELECT /*+ JOIN_ORDER(d, e) PRC_JOIN(e) */
+d.dept_id, d.dept_name,
+AVG(e.salary) AS avg_salary,
+COUNT(e.emp_id) AS employee_count
+FROM ptrc_dept AS d
+LEFT JOIN ptrc_emp AS e ON d.dept_id = e.dept_id
+GROUP BY d.dept_id, d.dept_name
+ORDER BY d.dept_id;
+dept_id	dept_name	avg_salary	employee_count
+1	Human Resources	7750.000000	2
+2	Information Technology	9000.000000	1
+3	Marketing	NULL	0
+SELECT /*+ JOIN_ORDER(d, e) NO_PRC_JOIN(e) */
+d.dept_id, d.dept_name,
+AVG(e.salary) AS avg_salary,
+COUNT(e.emp_id) AS employee_count
+FROM ptrc_dept AS d
+LEFT JOIN ptrc_emp AS e ON d.dept_id = e.dept_id
+GROUP BY d.dept_id, d.dept_name
+ORDER BY d.dept_id;
+dept_id	dept_name	avg_salary	employee_count
+1	Human Resources	7750.000000	2
+2	Information Technology	9000.000000	1
+3	Marketing	NULL	0
+DROP TABLE ptrc_emp, ptrc_dept;
+SET optimizer_switch=@saved_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold=@saved_ptrc_cost_threshold;

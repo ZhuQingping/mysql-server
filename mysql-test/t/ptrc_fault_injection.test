@@ -1,0 +1,127 @@
+--echo # PTRC debug fault-injection hardening
+
+--source include/have_debug.inc
+--source include/elide_costs.inc
+
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET @saved_ptrc_cost_threshold=@@rds_partial_result_cache_cost_threshold;
+SET @saved_ptrc_max_mem_size=@@rds_partial_result_cache_max_mem_size;
+SET optimizer_switch='partial_result_cache=on,hash_join=off,block_nested_loop=off,batched_key_access=off,semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold=0;
+
+--echo # InitRowBuffer and temporary result item failures should bypass PTRC.
+CREATE TABLE ptrc_fi_t1 (
+  id INT PRIMARY KEY,
+  b INT NOT NULL,
+  KEY(b)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_fi_t2 (
+  a INT NOT NULL,
+  KEY(a)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_fi_t1 VALUES
+  (1, 10), (2, 20), (3, 30), (4, 40), (5, 20),
+  (6, 30), (7, 50), (8, 60), (9, 20), (10, 70);
+INSERT INTO ptrc_fi_t2 VALUES (20), (30), (40), (80);
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT COUNT(*)
+FROM ptrc_fi_t1 AS o
+WHERE EXISTS (SELECT /*+ PRC_SUBQUERY() */ i.a
+              FROM ptrc_fi_t2 AS i
+              WHERE i.a = o.b
+              GROUP BY i.a);
+
+SET debug='+d,ptrc_init_row_buffer_fail';
+SELECT COUNT(*) AS matched_rows
+FROM ptrc_fi_t1 AS o
+WHERE EXISTS (SELECT /*+ PRC_SUBQUERY() */ i.a
+              FROM ptrc_fi_t2 AS i
+              WHERE i.a = o.b
+              GROUP BY i.a);
+SET debug='-d,ptrc_init_row_buffer_fail';
+
+SET debug='+d,ptrc_initrowbuffer_reserve_space_fail';
+SELECT COUNT(*) AS matched_rows
+FROM ptrc_fi_t1 AS o
+WHERE EXISTS (SELECT /*+ PRC_SUBQUERY() */ i.a
+              FROM ptrc_fi_t2 AS i
+              WHERE i.a = o.b
+              GROUP BY i.a);
+SET debug='-d,ptrc_initrowbuffer_reserve_space_fail';
+
+SET debug='+d,fail_alloc_saved_res_items';
+SELECT COUNT(*) AS matched_rows
+FROM ptrc_fi_t1 AS o
+WHERE EXISTS (SELECT /*+ PRC_SUBQUERY() */ i.a
+              FROM ptrc_fi_t2 AS i
+              WHERE i.a = o.b
+              GROUP BY i.a);
+SET debug='-d,fail_alloc_saved_res_items';
+
+SET debug='+d,fail_alloc_cached_res_fields';
+SELECT COUNT(*) AS matched_rows
+FROM ptrc_fi_t1 AS o
+WHERE EXISTS (SELECT /*+ PRC_SUBQUERY() */ i.a
+              FROM ptrc_fi_t2 AS i
+              WHERE i.a = o.b
+              GROUP BY i.a);
+SET debug='-d,fail_alloc_cached_res_fields';
+
+DROP TABLE ptrc_fi_t2, ptrc_fi_t1;
+
+--echo # StoreRow and LRU allocation failures should not corrupt cached keys.
+CREATE TABLE ptrc_fi_outer (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  KEY(k)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_fi_inner (
+  k INT NOT NULL,
+  pad VARCHAR(128) NOT NULL,
+  KEY(k)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_fi_outer
+WITH RECURSIVE qn(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM qn WHERE n < 30)
+SELECT n, n FROM qn;
+
+INSERT INTO ptrc_fi_inner
+WITH RECURSIVE qn(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM qn WHERE n < 30)
+SELECT n, RPAD(n, 128, 'x') FROM qn;
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ COUNT(i.pad)
+FROM ptrc_fi_outer AS o
+JOIN ptrc_fi_inner AS i ON i.k = o.k;
+
+SET debug='+d,allocate_failure_when_storerow';
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ COUNT(i.pad) AS joined_rows
+FROM ptrc_fi_outer AS o
+JOIN ptrc_fi_inner AS i ON i.k = o.k;
+SET debug='-d,allocate_failure_when_storerow';
+
+SET debug='+d,ptrc_sim_allocate_failure_during_cache';
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ COUNT(i.pad) AS joined_rows
+FROM ptrc_fi_outer AS o
+JOIN ptrc_fi_inner AS i ON i.k = o.k;
+SET debug='-d,ptrc_sim_allocate_failure_during_cache';
+
+SET debug='+d,allocate_failure_when_storerow';
+SET debug='+d,key_pair_key_null_pointer_injection';
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ COUNT(i.pad) AS joined_rows
+FROM ptrc_fi_outer AS o
+JOIN ptrc_fi_inner AS i ON i.k = o.k;
+SET debug='-d,key_pair_key_null_pointer_injection';
+SET debug='-d,allocate_failure_when_storerow';
+
+DROP TABLE ptrc_fi_inner, ptrc_fi_outer;
+
+SET optimizer_switch=@saved_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold=@saved_ptrc_cost_threshold;
+SET rds_partial_result_cache_max_mem_size=@saved_ptrc_max_mem_size;
