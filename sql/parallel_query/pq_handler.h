@@ -49,11 +49,14 @@
 */
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -75,6 +78,9 @@ constexpr int PQ_DB_ERROR = 11;
 constexpr int PQ_DB_END_OF_INDEX = 1502;
 constexpr int PQ_DB_END_OF_RANGE = 1504;
 constexpr int PQ_DB_NOT_FOUND = 1505;
+
+/** Tree depth at which worker-dispatched ranges should be block-split. */
+constexpr int PQ_SPLIT_THRESHOLD = 2;
 
 // Forward declarations for base classes
 class MQueue_handle;
@@ -136,6 +142,9 @@ struct PQ_Borders {
 struct PQ_Config {
   PQ_Borders m_scan_borders;  ///< Range boundaries
   bool m_pq_reverse_scan{false};  ///< True if reverse scan
+  uchar *m_ref_key{nullptr};       ///< Ref key owned by engine config, if any
+  uint m_ref_key_len{0};           ///< Length of m_ref_key
+  bool m_ref_depend{false};        ///< True for dependent-ref scans
 
   explicit PQ_Config(const PQ_Borders &borders) : m_scan_borders(borders) {}
   PQ_Config(const PQ_Config &) = default;
@@ -182,6 +191,16 @@ struct PQ_ref_key {
   }
 };
 
+struct PQ_ref_key_hash {
+  std::size_t operator()(const PQ_ref_key &key) const {
+    std::size_t h = 0;
+    for (uchar byte : key.m_data) {
+      h = 31 * h + (byte & 0xff);
+    }
+    return h;
+  }
+};
+
 /**
   A bundle of ref-access description for "ref field" scans.
 
@@ -212,6 +231,17 @@ class PQ_Slice {
 
   size_t id() const { return m_id; }
 
+#ifndef NDEBUG
+  void set_parent_id(size_t id) { m_parent_id = id; }
+
+  int compare_to(const PQ_Slice *const other) const {
+    if (m_parent_id != other->m_parent_id) {
+      return m_parent_id > other->m_parent_id ? 1 : -1;
+    }
+    return m_id == other->m_id ? 0 : m_id > other->m_id ? 1 : -1;
+  }
+#endif
+
   void set_split(bool split) { m_split = split; }
   bool need_split() const { return m_split; }
 
@@ -222,6 +252,9 @@ class PQ_Slice {
 
  protected:
   size_t m_id{std::numeric_limits<size_t>::max()};
+#ifndef NDEBUG
+  size_t m_parent_id{std::numeric_limits<size_t>::max()};
+#endif
   bool m_split{false};
   PQ_Scan_ctx *m_scan_ctx{};
 };
@@ -260,6 +293,201 @@ class PQ_Range : public PQ_Slice {
 
 using PQ_Ranges = std::vector<std::shared_ptr<PQ_Range>>;
 
+template <typename T>
+class PQ_queue {
+ public:
+  virtual std::shared_ptr<T> dequeue() = 0;
+  virtual void enqueue(std::shared_ptr<T>) = 0;
+  virtual void clear() = 0;
+  virtual ~PQ_queue() = default;
+};
+
+template <typename T>
+class PQ_dual_queue final : public PQ_queue<T> {
+ private:
+  using Elements = std::list<std::shared_ptr<T>>;
+
+  Elements m_array[2];
+  bool m_reverse{false};
+  uint m_current_idx{0};
+
+ public:
+  explicit PQ_dual_queue(bool reverse)
+      : m_array{Elements(), Elements()}, m_reverse(reverse) {}
+
+  std::shared_ptr<T> dequeue() override {
+    std::shared_ptr<T> element = nullptr;
+    if (!current()->empty()) {
+      element = current()->front();
+      current()->pop_front();
+    }
+    return element;
+  }
+
+  void enqueue(std::shared_ptr<T> element) override {
+    standby()->push_back(element);
+  }
+
+  void clear() override {
+    m_array[0].clear();
+    m_array[1].clear();
+  }
+
+  void rotate();
+
+ private:
+  Elements *standby() { return &m_array[rotate_index()]; }
+  uint rotate_index() const { return (m_current_idx + 1) % 2; }
+  Elements *current() { return &m_array[m_current_idx]; }
+};
+
+template <typename T>
+class PQ_single_queue : public PQ_queue<T> {
+  using Elements = std::list<std::shared_ptr<T>>;
+
+ public:
+  explicit PQ_single_queue(bool reverse) : m_reverse(reverse) {}
+
+  std::shared_ptr<T> dequeue() override;
+  void enqueue(std::shared_ptr<T> element) override {
+    m_elements.push_back(element);
+  }
+  void clear() override { m_elements.clear(); }
+  void push(std::vector<std::shared_ptr<T>> &elements, bool no_reverse);
+
+ protected:
+  Elements m_elements;
+  bool m_reverse{false};
+  mutable std::mutex m_mutex;
+};
+
+class PQ_ranges_queue final : public PQ_single_queue<PQ_Range> {
+ public:
+  explicit PQ_ranges_queue(bool reverse) : PQ_single_queue<PQ_Range>(reverse) {}
+
+  void mark_split(size_t n_slices, size_t n_threads, size_t &split_cur);
+};
+
+template <typename T, typename K>
+class PQ_slices_mngr final {
+ public:
+  K m_slices_queue;
+  std::atomic<bool> work_done{false};
+  size_t m_n_slices{0};
+  size_t m_n_threads{0};
+  size_t m_spliting_id{std::numeric_limits<size_t>::max()};
+  uint m_btree_depth{0};
+  std::atomic_size_t m_slice_id{};
+  std::mutex m_mutex;
+  std::condition_variable m_cond;
+
+  PQ_slices_mngr(size_t max_thread, bool reverse_scan)
+      : m_slices_queue(reverse_scan), m_n_threads(max_thread) {}
+
+  void prepare_split_slice(std::vector<std::shared_ptr<T>> &slices,
+                           bool reverse_scan) {
+    {
+      std::lock_guard<std::mutex> guard(m_mutex);
+      push(slices, false);
+      if (!reverse_scan) {
+        ++m_spliting_id;
+      } else {
+        --m_spliting_id;
+      }
+    }
+    m_cond.notify_all();
+  }
+
+  bool is_split_done() const { return m_spliting_id >= m_n_slices; }
+
+  bool is_worker_done() const {
+    return work_done.load(std::memory_order_relaxed);
+  }
+
+  std::shared_ptr<T> fetch_one() {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    auto task = m_slices_queue.dequeue();
+    while (task == nullptr && !is_split_done() && !is_worker_done()) {
+      m_cond.wait(lock);
+      task = m_slices_queue.dequeue();
+    }
+    return task;
+  }
+
+  void push(std::vector<std::shared_ptr<T>> &slices, bool first_split) {
+    m_slices_queue.push(slices, first_split);
+  }
+
+  void wakeup_workers() {
+    set_worker_done();
+    m_cond.notify_all();
+  }
+
+  void set_worker_done() { work_done.store(true, std::memory_order_relaxed); }
+
+  void mark_split() {
+    if ((m_btree_depth < PQ_SPLIT_THRESHOLD) && (m_n_slices < m_n_threads)) {
+      return;
+    }
+    m_slices_queue.mark_split(m_n_slices, m_n_threads, m_spliting_id);
+  }
+
+  void reset() { m_n_slices = 0; }
+};
+
+using PQ_slices_manager = PQ_slices_mngr<PQ_Range, PQ_ranges_queue>;
+
+template <typename T>
+class PQ_ref_key_map {
+ public:
+  static const int MAX_CELLS = 512;
+
+  bool insert(const PQ_ref_key *key, T value) {
+    if (key == nullptr) return false;
+    std::lock_guard<std::mutex> guard(m_mutex);
+    for (auto &entry : m_entries) {
+      if (entry.first == *key) return false;
+    }
+    m_entries.emplace_back(*key, value);
+    return true;
+  }
+
+  bool find(const PQ_ref_key &key, T *value = nullptr) const {
+    std::lock_guard<std::mutex> guard(m_mutex);
+    for (const auto &entry : m_entries) {
+      if (entry.first == key) {
+        if (value != nullptr) *value = entry.second;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  T operator[](const PQ_ref_key &key) const {
+    T value{};
+    (void)find(key, &value);
+    return value;
+  }
+
+ protected:
+  mutable std::mutex m_mutex;
+  std::list<std::pair<PQ_ref_key, T>> m_entries;
+};
+
+class PQ_slices_map : public PQ_ref_key_map<PQ_slices_manager *> {
+ public:
+  ~PQ_slices_map();
+};
+
+class PQ_ref_map : public PQ_ref_key_map<bool> {
+ public:
+  void enter() { m_map_mutex.lock(); }
+  void exit() { m_map_mutex.unlock(); }
+
+ private:
+  std::mutex m_map_mutex;
+};
+
 /**
   Scan context base: owns the partitioning algorithm and configuration.
 
@@ -288,8 +516,16 @@ class PQ_Scan_ctx {
   virtual std::shared_ptr<PQ_Ctx> make_ctx(
       std::shared_ptr<PQ_Range> &range) = 0;
 
+  std::shared_ptr<PQ_Ctx> create_context(std::shared_ptr<PQ_Range> &range);
+
+  uchar *get_ref_key(uint *key_len) {
+    *key_len = m_config.m_ref_key_len;
+    return m_config.m_ref_key;
+  }
+
   PQ_Leader_context *reader() const { return m_reader; }
   size_t id() const { return m_id; }
+  size_t depth() const { return m_depth; }
 
   /// Error state management.
   void set_error_state(int err) {
@@ -305,6 +541,9 @@ class PQ_Scan_ctx {
   size_t m_depth{};      ///< B+tree depth (set during partitioning)
   PQ_Leader_context *m_reader{};
   std::atomic<int> m_err{PQ_DB_SUCCESS};
+
+  friend class PQ_Ctx;
+  friend class PQ_Range;
 };
 
 /**
@@ -343,6 +582,12 @@ class PQ_Ctx : public PQ_Slice {
 
   /// Reset cursor state for a new read round (ref-scan multi-round).
   virtual void reset_for_next_read_round(bool reverse) = 0;
+
+  bool check_ref_key(const PQ_Ref_info &ref_info);
+
+  size_t m_thread_id{std::numeric_limits<size_t>::max()};
+  bool start_read{true};
+  PQ_Leader_context *reader{nullptr};
 
  protected:
   std::shared_ptr<PQ_Range> m_range{};
@@ -424,6 +669,10 @@ class PQ_Leader_context {
   virtual std::shared_ptr<PQ_Scan_ctx> make_scan_ctx(
       void *handler_specific, const PQ_Config &config) = 0;
 
+  uint key{0};
+  PQ_slices_map pq_slices_map;
+  PQ_ref_map pq_key_map;
+
  protected:
   size_t m_max_threads{};
   size_t m_scan_ctx_id{};
@@ -450,9 +699,9 @@ class PQ_Leader_context {
 class PQ_Worker_context {
  public:
   PQ_Worker_context(bool reverse, PQ_Leader_context &leader)
-      : m_reverse(reverse), m_leader(leader) {}
+      : m_reverse(reverse), m_leader(leader), m_local_ctxs(reverse) {}
 
-  virtual ~PQ_Worker_context() = default;
+  virtual ~PQ_Worker_context() { m_local_ctxs.clear(); }
 
   virtual PQ_Worker_context_kind kind() const {
     return PQ_Worker_context_kind::GENERIC;
@@ -473,10 +722,55 @@ class PQ_Worker_context {
   /// Get the next available PQ_Ctx.
   virtual std::shared_ptr<PQ_Ctx> get_ctx(const PQ_Ref_info &ref_info);
 
+  void clear_ctx() { m_local_ctxs.clear(); }
+
  protected:
   bool m_reverse{false};
   PQ_Leader_context &m_leader;
+  PQ_dual_queue<PQ_Ctx> m_local_ctxs;
+  std::shared_ptr<PQ_ref_key> p_ref_key{};
 };
+
+template <typename T>
+void PQ_single_queue<T>::push(std::vector<std::shared_ptr<T>> &elements,
+                              bool no_reverse) {
+  std::unique_lock<std::mutex> lock(m_mutex);
+  if (!no_reverse && m_reverse) {
+    m_elements.insert(m_elements.begin(), elements.begin(), elements.end());
+  } else {
+    m_elements.insert(m_elements.end(), elements.begin(), elements.end());
+  }
+}
+
+template <typename T>
+std::shared_ptr<T> PQ_single_queue<T>::dequeue() {
+  std::shared_ptr<T> ctx = nullptr;
+  std::unique_lock<std::mutex> lock(m_mutex);
+  if (!m_elements.empty()) {
+    if (!m_reverse) {
+      ctx = m_elements.front();
+      m_elements.pop_front();
+    } else {
+      ctx = m_elements.back();
+      m_elements.pop_back();
+    }
+  }
+  return ctx;
+}
+
+template <typename T>
+void PQ_dual_queue<T>::rotate() {
+  auto element = dequeue();
+  while (element != nullptr) {
+    enqueue(element);
+    element = dequeue();
+  }
+
+  for (auto &standby_element : *standby()) {
+    standby_element->reset_for_next_read_round(m_reverse);
+  }
+  m_current_idx = rotate_index();
+}
 
 /**
   Push sink for worker-produced row images.

@@ -22,100 +22,247 @@
 
 /**
   @file sql/parallel_query/pq_handler.cc
-  Parallel Query V1-MVP: Handler/InnoDB contract skeleton implementation.
+  Parallel Query handler/InnoDB contract implementation.
 
-  Phase 2 scope:
-  - Stub implementations for PQ_Range::split(), PQ_Leader_context
-    constructor/destructor/build_ranges(), PQ_Worker_context
-    dispatch_ctx/get_ctx(), and pq_worker_status_to_string().
-  - No handler/InnoDB calls, no thread creation, no scan start.
-  - All stubs return failure/empty to ensure they are never accidentally
-    used in an execution path before Phase 5/6 implements them properly.
+  This file keeps the 8.0.46-facing class names while restoring the commercial
+  queue/ref-key dispatch semantics used by worker-side PQ execution.
 */
 
 #include "sql/parallel_query/pq_handler.h"
 
-// ========================================================================
-// PQ_Range::split() -- stub
-// ========================================================================
-// Phase 6 InnoDB subclass (PQ_Range in row0pread_pq.h) will override
-// this to call PQ_Scan_ctx::partition() on the B+tree with S-lock.
-// This stub does nothing; it should never be called before Phase 6.
+#include <cassert>
+#include <chrono>
+#include <thread>
+
 void PQ_Range::split() {
-  // Phase 2 stub: no-op. Will be overridden by InnoDB subclass.
-  // If accidentally called, the split flag remains set but no sub-ranges
-  // are created, which will cause the worker to find no work and finish.
+  if (m_scan_ctx == nullptr || m_iters.first == nullptr ||
+      m_iters.second == nullptr || m_scan_ctx->reader() == nullptr) {
+    return;
+  }
+
+  PQ_Borders scan_borders = {m_iters.first->get_border(),
+                             m_iters.second->get_border()};
+
+  m_scan_ctx->index_s_lock();
+
+  PQ_Ranges ranges{};
+  m_scan_ctx->partition(scan_borders, 1, ranges);
+
+  m_scan_ctx->index_s_unlock();
+
+  if (!ranges.empty()) {
+    ranges.back()->m_iters.second = m_iters.second;
+  }
+
+  auto &config = m_scan_ctx->m_config;
+  PQ_ref_key ref_key;
+  if (config.m_ref_depend) {
+    ref_key = PQ_ref_key(config.m_ref_key, config.m_ref_key_len);
+  }
+
+  auto *slices = m_scan_ctx->reader()->pq_slices_map[ref_key];
+  assert(slices != nullptr);
+  if (slices == nullptr) {
+    return;
+  }
+
+  while (m_id != slices->m_spliting_id) {
+    std::this_thread::sleep_for(std::chrono::microseconds(20));
+  }
+
+  slices->prepare_split_slice(ranges, config.m_pq_reverse_scan);
 }
 
-// ========================================================================
-// PQ_Leader_context
-// ========================================================================
+void PQ_ranges_queue::mark_split(size_t n_slices, size_t n_threads,
+                                 size_t &split_cur) {
+  if (n_threads == 0 || m_elements.empty()) {
+    return;
+  }
+
+  size_t n_split_slices = n_slices % n_threads;
+  if (n_split_slices == 0 || m_elements.size() < n_split_slices) {
+    return;
+  }
+
+  if (m_reverse) {
+    auto it = m_elements.begin();
+    while (n_split_slices > 0 && it != m_elements.end()) {
+      (*it)->set_split(true);
+      if (n_split_slices == 1) {
+        split_cur = (*it)->id();
+      }
+      --n_split_slices;
+      ++it;
+    }
+  } else {
+    auto it = m_elements.rbegin();
+    while (n_split_slices > 0 && it != m_elements.rend()) {
+      (*it)->set_split(true);
+      if (n_split_slices == 1) {
+        split_cur = (*it)->id();
+      }
+      --n_split_slices;
+      ++it;
+    }
+  }
+}
+
+PQ_slices_map::~PQ_slices_map() {
+  std::lock_guard<std::mutex> guard(m_mutex);
+  for (auto &entry : m_entries) {
+    delete entry.second;
+    entry.second = nullptr;
+  }
+  m_entries.clear();
+}
+
+std::shared_ptr<PQ_Ctx> PQ_Scan_ctx::create_context(
+    std::shared_ptr<PQ_Range> &range) {
+  auto ctx = make_ctx(range);
+  if (ctx == nullptr) {
+    return nullptr;
+  }
+
+#ifndef NDEBUG
+  ctx->set_parent_id(range->id());
+#endif
+  ctx->reader = m_reader;
+  return ctx;
+}
+
+bool PQ_Ctx::check_ref_key(const PQ_Ref_info &ref_info) {
+  auto &config = m_scan_ctx->m_config;
+  if (ref_info.pq_ref_key_len != config.m_ref_key_len) {
+    return false;
+  }
+  if (ref_info.pq_ref_key_len == 0) {
+    return true;
+  }
+  if (ref_info.pq_ref_key_ptr == nullptr || config.m_ref_key == nullptr) {
+    return false;
+  }
+  return std::memcmp(ref_info.pq_ref_key_ptr, config.m_ref_key,
+                     ref_info.pq_ref_key_len) == 0;
+}
 
 PQ_Leader_context::PQ_Leader_context(size_t max_threads, bool reverse_scan)
     : m_max_threads(max_threads), m_reverse(reverse_scan) {
-  // Phase 2: basic field initialization only.
-  // Phase 6 will add slices_map, key_map initialization here,
-  // mirroring Parallel_leader_Base::Parallel_leader_Base() from
-  // the reference implementation.
+  PQ_ref_key null_key;
+  auto *manager = new PQ_slices_manager(m_max_threads, m_reverse);
+  pq_slices_map.insert(&null_key, manager);
+  pq_key_map.insert(&null_key, true);
 }
 
 PQ_Leader_context::~PQ_Leader_context() {
-  // Phase 2: just clear the scan contexts list.
-  // Phase 6 will also clean up slices_map entries and their
-  // PQ_slices_mngr allocations.
   m_scan_ctxs.clear();
 }
 
-bool PQ_Leader_context::build_ranges(void *trx [[maybe_unused]],
-                                      const PQ_Config &config
-                                          [[maybe_unused]]) {
-  // Phase 2 stub: always returns false (no ranges built).
-  // Phase 6 InnoDB subclass will:
-  // 1. Call make_scan_ctx(trx, config) to create PQ_Scan_ctx.
-  // 2. S-lock the index.
-  // 3. Call PQ_Scan_ctx::partition() for B+tree partitioning.
-  // 4. Push ranges into the slices queue.
-  // 5. S-unlock the index.
-  // 6. Return true if ranges were successfully created.
-  //
-  // Design note: The recommended InnoDB route reuses
-  // Parallel_reader::add_scan() for the partitioning step,
-  // wrapping its Scan_ctx::partition() and Scan_ctx::create_contexts()
-  // into PQ_Scan_ctx::partition(). This avoids duplicating the
-  // B+tree traversal algorithm.
-  return false;
-}
+bool PQ_Leader_context::build_ranges(void *trx, const PQ_Config &config) {
+  auto scan_ctx = make_scan_ctx(trx, config);
+  if (scan_ctx == nullptr) {
+    return false;
+  }
 
-// ========================================================================
-// PQ_Worker_context
-// ========================================================================
+  m_scan_ctxs.push_back(scan_ctx);
+  scan_ctx->index_s_lock();
+  ++m_scan_ctx_id;
 
-bool PQ_Worker_context::dispatch_ctx(
-    const PQ_Ref_info &ref_info [[maybe_unused]],
-    std::shared_ptr<PQ_Ctx> *ctx) {
-  // Phase 2 stub: always returns true (all ranges exhausted).
-  // Phase 5/6 will implement:
-  // 1. Call get_ctx(ref_info) to fetch a PQ_Ctx from the slices queue.
-  // 2. If ctx is nullptr, return true (worker should finish).
-  // 3. If ctx is available, set *ctx and return false.
-  *ctx = nullptr;
+  PQ_ref_key ref_key;
+  if (config.m_ref_depend) {
+    ref_key = PQ_ref_key(config.m_ref_key, config.m_ref_key_len);
+    auto *manager = new PQ_slices_manager(m_max_threads, m_reverse);
+    if (!pq_slices_map.insert(&ref_key, manager)) {
+      delete manager;
+    }
+    pq_key_map.insert(&ref_key, true);
+  }
+
+  auto *slices = pq_slices_map[ref_key];
+  assert(slices != nullptr);
+  if (slices == nullptr) {
+    scan_ctx->index_s_unlock();
+    return false;
+  }
+
+  PQ_Ranges ranges{};
+  scan_ctx->partition(config.m_scan_borders, 0, ranges);
+
+  slices->push(ranges, true);
+  slices->m_n_slices += ranges.size();
+  slices->m_btree_depth = static_cast<uint>(scan_ctx->depth());
+
+  scan_ctx->index_s_unlock();
+
   return true;
 }
 
-std::shared_ptr<PQ_Ctx> PQ_Worker_context::get_ctx(
-    const PQ_Ref_info &ref_info [[maybe_unused]]) {
-  // Phase 2 stub: always returns nullptr (no contexts available).
-  // Phase 5/6 will implement:
-  // 1. Look up the slices queue for the given ref key.
-  // 2. Fetch a PQ_Range from the queue.
-  // 3. If the range needs splitting, call range->split() and retry.
-  // 4. Otherwise, create a PQ_Ctx from the range and return it.
-  return nullptr;
+bool PQ_Worker_context::dispatch_ctx(
+    const PQ_Ref_info &ref_info, std::shared_ptr<PQ_Ctx> *ctx) {
+  for (;;) {
+    auto next_ctx = get_ctx(ref_info);
+    if (next_ctx == nullptr) {
+      *ctx = nullptr;
+      return true;
+    }
+    *ctx = next_ctx;
+    return false;
+  }
 }
 
-// ========================================================================
-// pq_worker_status_to_string
-// ========================================================================
+std::shared_ptr<PQ_Ctx> PQ_Worker_context::get_ctx(
+    const PQ_Ref_info &ref_info) {
+  std::shared_ptr<PQ_Ctx> ctx = nullptr;
+
+  PQ_ref_key ref_key;
+  if (ref_info.pq_ref_depend) {
+    ref_key = PQ_ref_key(ref_info.pq_ref_key_ptr, ref_info.pq_ref_key_len);
+  }
+
+  if (!m_leader.pq_key_map[ref_key]) {
+    return ctx;
+  }
+
+  for (;;) {
+    auto *slices = m_leader.pq_slices_map[ref_key];
+    assert(slices != nullptr);
+    if (slices == nullptr) {
+      return nullptr;
+    }
+
+    auto range = slices->fetch_one();
+    if (range != nullptr && range->need_split()) {
+      range->split();
+      continue;
+    }
+
+    if (range != nullptr) {
+      ctx = range->scan_ctx()->create_context(range);
+      if (ctx != nullptr) {
+        m_local_ctxs.enqueue(ctx);
+      }
+      return ctx;
+    }
+
+    for (;;) {
+      ctx = m_local_ctxs.dequeue();
+      if (ctx != nullptr && ref_info.pq_ref_depend) {
+        if (!ctx->check_ref_key(ref_info)) {
+          m_local_ctxs.enqueue(ctx);
+          continue;
+        }
+        m_local_ctxs.enqueue(ctx);
+        return ctx;
+      }
+
+      if (ctx == nullptr) {
+        m_local_ctxs.rotate();
+      } else {
+        m_local_ctxs.enqueue(ctx);
+      }
+      return ctx;
+    }
+  }
+}
 
 const char *pq_worker_status_to_string(PQ_Worker_status status) {
   switch (status) {

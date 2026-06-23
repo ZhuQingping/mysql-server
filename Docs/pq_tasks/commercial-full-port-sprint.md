@@ -361,7 +361,7 @@ MTR 迁移矩阵：
 
 ### Batch B0 - Compile surface and commercial source inventory
 
-Status: implementation completed locally；pending Code / Docs / Test Review
+Status: completed and committed
 
 目标：
 
@@ -407,10 +407,12 @@ Completion Report - Batch B0:
   - `chunk_files_wrapper.h` still references commercial VFD/hash-spill headers
     and must not be included by production code until the hash join spill gate
     migrates its dependencies.
+- review:
+  - Code / Docs / Test review accepted before commit `0ccab8e5f54`。
 
 ### Batch B1 - Commercial SQL/PQ core replacement
 
-Status: pending
+Status: in progress
 
 目标：
 
@@ -425,6 +427,57 @@ Status: pending
 - 当前 fail-closed guard 不得阻塞商用主路径；
 - B1 不以打开 hash join / derived / insert-select 为验收条件，但不得把它们
   标记为 skip；必须进入后续 batch/gate 追踪。
+
+#### Batch B1a - pq_handler commercial dispatch substrate
+
+Status: review accepted；ready to commit
+
+目标：
+
+- 保留当前 8.0.46 typed API：`PQ_Leader_context`、
+  `PQ_Worker_context`、`PQ_Scan_ctx`、`PQ_Ctx`、`PQ_Range`；
+- 不回退到商用旧 handler API；
+- 迁入商用队列/切片管理/ref-key dispatch 语义，为后续
+  `PQblockScanIterator` / `PQRefIterator` / worker pull 路径提供基础设施。
+
+Completion Report - Batch B1a:
+
+- changed files:
+  - `sql/parallel_query/pq_handler.h`
+  - `sql/parallel_query/pq_handler.cc`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added commercial-equivalent `PQ_queue` / `PQ_dual_queue` /
+    `PQ_single_queue` / `PQ_ranges_queue` / `PQ_slices_mngr`；
+  - added vector-owned ref-key map classes：`PQ_slices_map` / `PQ_ref_map`；
+  - extended `PQ_Config` with commercial ref-key fields
+    `m_ref_key` / `m_ref_key_len` / `m_ref_depend`；
+  - restored `PQ_Range::split()` commercial flow：border extraction、
+    index S-lock partition、ordered split handoff；
+  - restored `PQ_Leader_context::build_ranges()` commercial flow：
+    create scan ctx、insert default/dependent-ref queue、partition and push ranges；
+  - restored `PQ_Worker_context::dispatch_ctx()` / `get_ctx()` commercial flow：
+    global slice fetch、split retry、local dual queue round rotation、ref-key check；
+  - kept current InnoDB `PQ_Worker_open_context` and wrapper kind checks
+    unchanged.
+- validation:
+  - `git diff --check -- sql/parallel_query/pq_handler.h
+    sql/parallel_query/pq_handler.cc Docs/pq_tasks/commercial-full-port-sprint.md`
+    passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`。
+- risks carried forward:
+  - current InnoDB wrapper still uses `InnoDB_pq_leader_ctx::dispatch_next_range()`
+    for existing callback producer path；后续 D1 必须把 worker pull/ref/range
+    execution 接到 B1a 的 queue/ref-key dispatch substrate；
+  - `PQ_Scan_ctx::make_ctx()` remains abstract；真实 worker pull context 仍需在
+    InnoDB migration 中补齐；
+  - reverse/range/ref/dependent-ref/ICP 真实场景仍未打开，本批只恢复基础设施。
+- review:
+  - Code / Docs / Test review accepted；no Critical / Important findings；
+  - review noted that split wait / dependent-ref key bookkeeping must be
+    revisited before exposing this substrate to user-visible ref/range paths.
 
 ### Batch C1 - SQL main hook alignment
 
