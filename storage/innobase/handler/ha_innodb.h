@@ -511,6 +511,14 @@ class ha_innobase : public handler {
   int pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
                           PQ_Worker_context **worker_ctx) override;
 
+  /** Commercial worker-side PQ init bridge.
+
+  This prepares row_prebuilt_t ownership carriers for the commercial pull-row
+  API shape. The actual pull-row path remains disabled until the matching
+  row-production contract is ported.
+  */
+  int pq_worker_scan_init(uint keyno, void *scan_ctx) override;
+
   /**
     Pull one row for a PQ worker.
 
@@ -522,6 +530,9 @@ class ha_innobase : public handler {
   */
   int pq_worker_scan_next(PQ_Worker_context *worker_ctx, uchar *record,
                           bool *eof) override;
+
+  /** Commercial pull-row bridge remains fail-closed in this batch. */
+  int pq_worker_scan_next(void *scan_ctx, uchar *buf) override;
 
   /**
     Run an internal callback conversion smoke for a worker context.
@@ -648,6 +659,9 @@ class ha_innobase : public handler {
     Idempotent: safe to call multiple times or with nullptr.
   */
   int pq_worker_scan_end(PQ_Worker_context *worker_ctx) override;
+
+  /** End commercial worker-side PQ scan context. Idempotent. */
+  int pq_worker_scan_end() override;
 
   /**
     End a PQ leader scan. Releases thread budget, ranges, and scan ctx.

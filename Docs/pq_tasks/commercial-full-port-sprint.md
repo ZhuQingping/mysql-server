@@ -933,6 +933,94 @@ Completion Report - Batch D1.2:
   - reviewer also noted `row0mysql.h` -> `pq_handler.h` is a heavier layering
     dependency but found no direct circular include or compile blocker。
 
+#### Batch D1.3 - row_prebuilt_t PQ shared ownership lifecycle
+
+Status: implementation complete, review pending
+
+目标：
+
+- 将 D1.2 中暂时使用的 `void *` PQ ownership carrier 恢复为商用形态
+  `std::shared_ptr<PQ_Ctx_Base>`、debug-only `std::shared_ptr<PQ_Ctx>`、
+  `std::shared_ptr<Parallel_worker>`；
+- 在 8.0.46 `row_prebuilt_t` 仍通过 `mem_heap_zalloc()` 分配的前提下，
+  为这些新增 shared ownership 成员补上显式 construction/destruction；
+- 只建立生命周期基础，不启用 `ha_innodb_pq.cc` 商用 pull-row 执行路径。
+
+Planned implementation:
+
+- `storage/innobase/include/row0mysql.h`
+  - add `pq_ctx` as `std::shared_ptr<PQ_Ctx_Base>`；
+  - change debug-only `pq_prev_ctx` to `std::shared_ptr<PQ_Ctx>`；
+  - change `pq_worker` to `std::shared_ptr<Parallel_worker>`。
+- `storage/innobase/row/row0mysql.cc`
+  - explicitly placement-new the three PQ shared_ptr members immediately after
+    `mem_heap_zalloc()` in `row_create_prebuilt()`；
+  - explicitly destroy those PQ shared_ptr members in `row_prebuilt_free()`
+    before `mem_heap_free(prebuilt->heap)`。
+- `storage/innobase/handler/ha_innodb.h`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+  - override commercial `pq_worker_scan_init(uint, void*)` and
+    no-arg `pq_worker_scan_end()`；
+  - keep commercial `pq_worker_scan_next(void*, uchar*)` fail-closed with
+    `HA_ERR_UNSUPPORTED`。
+
+Validation:
+
+- `git diff --check -- storage/innobase/include/row0mysql.h storage/innobase/row/row0mysql.cc storage/innobase/handler/ha_innodb.h storage/innobase/handler/ha_innodb_pq.cc Docs/pq_tasks/commercial-full-port-sprint.md`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq-d13-mtr-vardir --tmpdir=/tmp/pq-d13-mtr-tmpdir`
+
+Risk constraints:
+
+- this batch must not call `ha_pq_next()` or wire commercial
+  `pq_worker_scan_next(void*, uchar*)`；
+- direct full-object placement construction/destruction for `row_prebuilt_t`
+  is intentionally not introduced in this batch because it would alter a broad
+  legacy allocation contract；only the new PQ shared_ptr fields are managed；
+- commercial worker init/end semantics remain a later batch after this storage
+  location is safe to own real objects。
+
+Completion Report - Batch D1.3:
+
+- changed files:
+  - `storage/innobase/include/row0mysql.h`
+  - `storage/innobase/row/row0mysql.cc`
+  - `storage/innobase/handler/ha_innodb.h`
+  - `storage/innobase/handler/ha_innodb_pq.cc`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - restored commercial shared ownership carriers in `row_prebuilt_t`:
+    `pq_ctx`、debug-only `pq_prev_ctx`、`pq_worker`；
+  - added `row_prebuilt_pq_construct()` / `row_prebuilt_pq_destroy()` so these
+    shared_ptr members have a valid C++ lifetime despite `mem_heap_zalloc()`；
+  - added InnoDB overrides for commercial worker init/end and kept
+    `pq_worker_scan_next(void*, uchar*)` unsupported；
+  - `pq_worker_scan_init(uint, void*)` prepares `Parallel_worker`,
+    `pq_ctx`、`pq_ref_info`、`is_attach_ctx` and active index state, but does
+    not introduce commercial `inited == PQ` state or produce rows。
+- validation:
+  - `git diff --check -- storage/innobase/include/row0mysql.h storage/innobase/row/row0mysql.cc storage/innobase/handler/ha_innodb.h storage/innobase/handler/ha_innodb_pq.cc Docs/pq_tasks/commercial-full-port-sprint.md` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`；
+  - `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq-d13-mtr-vardir --tmpdir=/tmp/pq-d13-mtr-tmpdir`
+    passed: all 89 tests successful。
+- risks carried forward:
+  - `pq_worker_scan_next(void*, uchar*)` still does not read rows；
+  - commercial `inited == PQ` state is not available in this branch and remains
+    deferred to the real pull-row execution batch；
+  - commercial leader `pq_leader_scan_init(uint, void*&, uint)` still remains
+    separate from the typed leader path and is not opened here；
+  - direct full-object construction/destruction of `row_prebuilt_t` remains out
+    of scope。
+- review:
+  - independent Review Agent accepted the batch with no Critical or Important
+    issues；
+  - reviewer confirmed the commercial worker next path remains fail-closed and
+    no-arg worker cleanup releases `pq_ctx`、debug `pq_prev_ctx`、`pq_worker`、
+    ref info、attach state、and fetch counters。
+
 ### Batch E1 - Commercial MTR migration
 
 Status: pending

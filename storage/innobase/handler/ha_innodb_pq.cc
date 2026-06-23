@@ -452,6 +452,36 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
   return 0;
 }
 
+int ha_innobase::pq_worker_scan_init(uint keyno, void *scan_ctx) {
+  if (scan_ctx == nullptr || m_prebuilt == nullptr || m_prebuilt->trx == nullptr) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  auto *pq_leader = static_cast<PQ_Leader_context *>(scan_ctx);
+  active_index = keyno;
+  const int result = change_active_index(active_index);
+  if (result != 0) {
+    return result;
+  }
+
+  auto *trx = m_prebuilt->trx;
+  innobase_register_trx(ht, ha_thd(), trx);
+  trx_start_if_not_started_xa(trx, false, UT_LOCATION_HERE);
+
+  m_prebuilt->pq_worker = std::shared_ptr<Parallel_worker>(
+      ut::new_withkey<Parallel_worker>(
+          UT_NEW_THIS_FILE_PSI_KEY, pq_leader->is_reverse(),
+          pq_leader->pq_slices_map, pq_leader->pq_key_map),
+      [](Parallel_worker *worker) { ut::delete_(worker); });
+  m_prebuilt->pq_ctx = nullptr;
+  m_prebuilt->pq_ref_info = {};
+  m_prebuilt->is_attach_ctx = false;
+
+  update_thd();
+  mrr_have_range = false;
+  return 0;
+}
+
 /**
   Pull one row for a PQ worker via the InnoDB pull-row adapter.
 
@@ -474,6 +504,11 @@ int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
     *eof = true;
   }
   return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, eof);
+}
+
+int ha_innobase::pq_worker_scan_next(void *scan_ctx [[maybe_unused]],
+                                     uchar *buf [[maybe_unused]]) {
+  return HA_ERR_UNSUPPORTED;
 }
 
 int ha_innobase::pq_worker_scan_callback_smoke(PQ_Worker_context *worker_ctx,
@@ -2024,6 +2059,27 @@ int ha_innobase::pq_worker_scan_end(PQ_Worker_context *worker_ctx) {
   }
 
   ut::delete_(sql_worker);
+  return 0;
+}
+
+int ha_innobase::pq_worker_scan_end() {
+  pq_ref_depend = false;
+
+  if (m_prebuilt == nullptr) {
+    return 0;
+  }
+
+  m_prebuilt->pq_ctx = nullptr;
+#ifdef UNIV_DEBUG
+  m_prebuilt->pq_prev_ctx = nullptr;
+#endif
+  m_prebuilt->pq_worker = nullptr;
+  m_prebuilt->pq_ref_info = {};
+  m_prebuilt->is_attach_ctx = false;
+
+  m_prebuilt->n_fetch_cached = 0;
+  m_prebuilt->fetch_cache_first = 0;
+  m_prebuilt->n_rows_fetched = 0;
   return 0;
 }
 

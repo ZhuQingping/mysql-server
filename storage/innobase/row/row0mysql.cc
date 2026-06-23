@@ -93,6 +93,32 @@ static const char *MODIFICATIONS_NOT_ALLOWED_MSG_FORCE_RECOVERY =
 /** Provide optional 4.x backwards compatibility for 5.0 and above */
 bool row_rollback_on_timeout = false;
 
+namespace {
+
+using Row_prebuilt_pq_ctx_ptr = std::shared_ptr<PQ_Ctx_Base>;
+#ifdef UNIV_DEBUG
+using Row_prebuilt_pq_debug_ctx_ptr = std::shared_ptr<PQ_Ctx>;
+#endif
+using Row_prebuilt_pq_worker_ptr = std::shared_ptr<Parallel_worker>;
+
+void row_prebuilt_pq_construct(row_prebuilt_t *prebuilt) {
+  new (&prebuilt->pq_ctx) Row_prebuilt_pq_ctx_ptr();
+#ifdef UNIV_DEBUG
+  new (&prebuilt->pq_prev_ctx) Row_prebuilt_pq_debug_ctx_ptr();
+#endif
+  new (&prebuilt->pq_worker) Row_prebuilt_pq_worker_ptr();
+}
+
+void row_prebuilt_pq_destroy(row_prebuilt_t *prebuilt) {
+  prebuilt->pq_ctx.~Row_prebuilt_pq_ctx_ptr();
+#ifdef UNIV_DEBUG
+  prebuilt->pq_prev_ctx.~Row_prebuilt_pq_debug_ctx_ptr();
+#endif
+  prebuilt->pq_worker.~Row_prebuilt_pq_worker_ptr();
+}
+
+}  // namespace
+
 /** Chain node of the list of tables to drop in the background. */
 struct row_mysql_drop_t {
   char *table_name; /*!< table name */
@@ -857,6 +883,7 @@ row_prebuilt_t *row_create_prebuilt(
 
   prebuilt =
       static_cast<row_prebuilt_t *>(mem_heap_zalloc(heap, sizeof(*prebuilt)));
+  row_prebuilt_pq_construct(prebuilt);
 
   prebuilt->magic_n = ROW_PREBUILT_ALLOCATED;
   prebuilt->magic_n2 = ROW_PREBUILT_ALLOCATED;
@@ -999,6 +1026,7 @@ void row_prebuilt_free(row_prebuilt_t *prebuilt, bool dict_locked) {
   }
 
   prebuilt->m_lob_undo.destroy();
+  row_prebuilt_pq_destroy(prebuilt);
 
   mem_heap_free(prebuilt->heap);
 }

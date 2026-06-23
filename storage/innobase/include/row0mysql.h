@@ -856,9 +856,10 @@ struct row_prebuilt_t {
   /** Commercial Parallel Query pull-row carriers.
 
   These fields are inert until the commercial InnoDB PQ handler path is wired.
-  Keep this batch to POD/raw-pointer carriers: row_prebuilt_t is allocated by
-  mem_heap_zalloc(), so C++ members requiring construction/destruction must be
-  added only together with an explicit construction policy. */
+  row_prebuilt_t is allocated by mem_heap_zalloc(), so the std::shared_ptr
+  members are explicitly constructed in row_create_prebuilt() and destroyed in
+  row_prebuilt_free(). */
+  std::shared_ptr<PQ_Ctx_Base> pq_ctx{};
   bool is_attach_ctx{false};
   mem_heap_t *pq_heap{nullptr};
   dtuple_t *pq_tuple{nullptr};
@@ -872,9 +873,9 @@ struct row_prebuilt_t {
   dict_index_t *old_index{nullptr};
 
 #ifdef UNIV_DEBUG
-  void *pq_prev_ctx{nullptr};
+  std::shared_ptr<PQ_Ctx> pq_prev_ctx;
 #endif
-  void *pq_worker{nullptr};
+  std::shared_ptr<Parallel_worker> pq_worker;
 
   /** Can a record buffer or a prefetch cache be utilized for prefetching
   records in this scan?
