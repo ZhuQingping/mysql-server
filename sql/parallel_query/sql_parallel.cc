@@ -1564,6 +1564,35 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       pq_global_stats.orderby_handler_ref_adapter_smoke_tiebreak_success
           .fetch_add(1, std::memory_order_relaxed);
     });
+    DBUG_EXECUTE_IF("pq_query_result_mq_stable_ref_smoke", {
+      pq_global_stats.worker_result_stable_ref_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+
+      uint32 stable_ref_bytes = 0;
+      uint32 stable_ref_deep_copy = 0;
+      uint32 stable_ref_normal_rejects = 0;
+      uint32 stable_ref_invalid_rejects = 0;
+      if (pq_run_query_result_mq_stable_ref_smoke(
+              handler_ref_two_row_smoke_refs[0].data(),
+              static_cast<uint32>(handler_ref_two_row_smoke_refs[0].size()),
+              &stable_ref_bytes, &stable_ref_deep_copy,
+              &stable_ref_normal_rejects, &stable_ref_invalid_rejects)) {
+        pq_global_stats.worker_result_stable_ref_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+        return true;
+      }
+
+      pq_global_stats.worker_result_stable_ref_success.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats.worker_result_stable_ref_bytes.fetch_add(
+          stable_ref_bytes, std::memory_order_relaxed);
+      pq_global_stats.worker_result_stable_ref_deep_copy_success.fetch_add(
+          stable_ref_deep_copy, std::memory_order_relaxed);
+      pq_global_stats.worker_result_stable_ref_normal_rejects.fetch_add(
+          stable_ref_normal_rejects, std::memory_order_relaxed);
+      pq_global_stats.worker_result_stable_ref_invalid_rejects.fetch_add(
+          stable_ref_invalid_rejects, std::memory_order_relaxed);
+    });
   }
   pq_global_stats.worker_attach_smoke_success.fetch_add(
       1, std::memory_order_relaxed);

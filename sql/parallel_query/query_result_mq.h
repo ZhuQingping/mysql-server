@@ -65,6 +65,17 @@ struct PQ_worker_result_decoded_field {
 
 constexpr uint32 PQ_WORKER_RESULT_FRAME_MAGIC = 0x50515752;  // "PQWR"
 constexpr uint16 PQ_WORKER_RESULT_FRAME_VERSION = 1;
+constexpr uint32 PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF = 1U << 0;
+
+struct PQ_worker_result_stable_ref {
+  const uchar *row_id{nullptr};
+  uint32 row_id_len{0};
+  const uchar *null_bitmap{nullptr};
+  uint32 null_bitmap_len{0};
+  const uchar *field_payload{nullptr};
+  uint32 field_payload_len{0};
+  uint32 field_count{0};
+};
 
 struct TABLE;
 class Temp_table_param;
@@ -80,6 +91,10 @@ bool pq_decode_worker_result_row(
     const void *raw_data, uint32 raw_len,
     std::vector<PQ_worker_result_decoded_field> *fields);
 
+bool pq_decode_worker_result_stable_ref_row(
+    const void *raw_data, uint32 raw_len,
+    PQ_worker_result_stable_ref *stable_ref);
+
 bool pq_run_query_result_mq_contract_smoke(uint32 *rows_read,
                                            uint32 *finishes_read);
 
@@ -92,6 +107,13 @@ bool pq_run_query_result_mq_adapter_smoke(THD *thd, uint32 *rows_read,
 
 bool pq_run_query_result_mq_wiring_smoke(THD *thd, uint32 *rows_read,
                                          uint32 *finishes_read);
+
+bool pq_run_query_result_mq_stable_ref_smoke(const uchar *handler_ref,
+                                             uint32 handler_ref_len,
+                                             uint32 *ref_bytes,
+                                             uint32 *deep_copy_success,
+                                             uint32 *normal_decode_rejects,
+                                             uint32 *invalid_rejects);
 
 /*
   This is used to get result from a query executed by PQ worker

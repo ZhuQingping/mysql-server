@@ -9865,6 +9865,80 @@ Next recommended sequence after E6f design review:
    comparator, default reader, kill/cleanup, Filesort state, and preflight
    readiness are all reviewed。
 
+Completion Report - M11-E6f Coding:
+
+- Status: implementation completed locally；waiting for Code / Docs / Test
+  Review。
+- Design:
+  - docs/design taskbook committed as `ed8afd02d58`；
+  - Design Review Agent first returned `REVISE`，requiring stable-ref wire
+    isolation through reserved flags, normal decoder rejection, no production
+    `send_data()` behavior change, and no header size/order/magic/type
+    renumbering；
+  - taskbook was tightened and re-review returned `ACCEPT`。
+- Changed files:
+  - `sql/parallel_query/query_result_mq.{h,cc}`；
+  - `sql/parallel_query/sql_parallel.{h,cc}`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_worker_attach_contract_smoke.test`；
+  - `mysql-test/suite/parallel_query/r/pq_worker_attach_contract_smoke.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-order-by-exchange-sort.md`。
+- Implementation:
+  - added reserved `PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF`；
+  - added a private worker-result frame construction path that can send a ROW
+    frame with stable-ref flag and deep-copied handler-ref bytes in payload；
+  - added `pq_decode_worker_result_stable_ref_row()` for stable frames；
+  - made ordinary `pq_decode_worker_result_row()` reject stable-ref frames so
+    stable frames cannot silently decode as normal field-value rows；
+  - kept ordinary non-stable `PQWR` frames as `flags == 0` and preserved
+    existing non-stable payload layout；
+  - kept `PQ_worker_result_frame_header` size/order/magic/type stable；
+  - added unknown flag rejection in frame validation；
+  - added `pq_run_query_result_mq_stable_ref_smoke()` covering deep-copy,
+    normal-decoder rejection, invalid flag rejection, invalid version rejection,
+    and invalid length rejection；
+  - wired the smoke only under DBUG flag
+    `pq_query_result_mq_stable_ref_smoke` after the E6d two-real-ref contract
+    has collected real handler refs；
+  - added smoke/contract counters under
+    `Parallel_worker_result_stable_ref_*`。
+- Scope notes:
+  - no production `Query_result_mq::send_data()` behavior change；
+  - no production `m_stable_output` behavior change；
+  - no `pq_make_join_readinfo()` / `pq_check_stable_sort()` production wiring；
+  - no default `Exchange_sort` comparator or heap reader change；
+  - no `PQOrderByExecutionPreflight` readiness change；
+  - no optimizer, handler, InnoDB, AccessPath, or visible ORDER BY eligibility
+    change。
+- RED evidence:
+  - after adding E6f MTR assertions but before implementation,
+    `pq_worker_attach_contract_smoke` failed because the new
+    `Parallel_worker_result_stable_ref_*` status variables were absent and
+    deltas were `NULL`。
+- GREEN / validation:
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query pq_worker_attach_contract_smoke --parallel=1
+    --vardir=/tmp/pq_e6f_green_vardir --tmpdir=/tmp/pq_e6f_green_tmp`
+    passed；
+  - `pq_stats --record` completed SQL and hit the known final copy errno `1`;
+    generated log was copied manually to `pq_stats.result`；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query pq_stats --parallel=1
+    --vardir=/tmp/pq_e6f_stats_green_vardir
+    --tmpdir=/tmp/pq_e6f_stats_green_tmp` passed；
+  - `git diff --check` passed；
+  - `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl
+    --suite=parallel_query --parallel=1 --vardir=/tmp/pq_e6f_full_vardir
+    --tmpdir=/tmp/pq_e6f_full_tmp` passed 89/89。
+- Remaining boundary:
+  - E6f proves only a private stable handler-ref `PQWR` wire contract；
+  - it does not make default `Exchange_sort` heap comparator or default ordered
+    `Read()` commercial-ready；
+  - it does not open visible ORDER BY PQ。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

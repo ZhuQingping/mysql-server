@@ -45,16 +45,22 @@ bool pq_is_valid_worker_result_type(uint16 type) {
   return false;
 }
 
-bool pq_send_worker_result_frame(MQueue_handle *handle,
-                                 PQ_worker_result_message_type type,
-                                 uint32 field_count,
-                                 const uchar *null_bitmap,
-                                 uint32 null_bitmap_len,
-                                 const uchar *payload,
-                                 uint32 payload_len) {
+bool pq_worker_result_has_unknown_flags(uint32 flags) {
+  return (flags & ~PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0;
+}
+
+bool pq_send_worker_result_frame_with_flags(
+    MQueue_handle *handle, PQ_worker_result_message_type type,
+    uint32 field_count, const uchar *null_bitmap, uint32 null_bitmap_len,
+    const uchar *payload, uint32 payload_len, uint32 flags) {
   if (handle == nullptr) return true;
   if (null_bitmap_len > 0 && null_bitmap == nullptr) return true;
   if (payload_len > 0 && payload == nullptr) return true;
+  if (pq_worker_result_has_unknown_flags(flags)) return true;
+  if ((flags & PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0 &&
+      type != PQ_worker_result_message_type::ROW) {
+    return true;
+  }
   if (type != PQ_worker_result_message_type::ROW &&
       (field_count != 0 || null_bitmap_len != 0)) {
     return true;
@@ -75,7 +81,7 @@ bool pq_send_worker_result_frame(MQueue_handle *handle,
   header->field_count = field_count;
   header->null_bitmap_len = null_bitmap_len;
   header->payload_len = payload_len;
-  header->flags = 0;
+  header->flags = flags;
 
   uchar *cursor = message + sizeof(PQ_worker_result_frame_header);
   if (null_bitmap_len > 0) {
@@ -89,6 +95,18 @@ bool pq_send_worker_result_frame(MQueue_handle *handle,
   const MQ_RESULT result = handle->send(message, total_len);
   delete[] message;
   return result != MQ_SUCCESS;
+}
+
+bool pq_send_worker_result_frame(MQueue_handle *handle,
+                                 PQ_worker_result_message_type type,
+                                 uint32 field_count,
+                                 const uchar *null_bitmap,
+                                 uint32 null_bitmap_len,
+                                 const uchar *payload,
+                                 uint32 payload_len) {
+  return pq_send_worker_result_frame_with_flags(
+      handle, type, field_count, null_bitmap, null_bitmap_len, payload,
+      payload_len, 0);
 }
 
 uint32 pq_worker_result_null_bitmap_len(uint32 field_count) {
@@ -112,6 +130,39 @@ void pq_worker_result_append_uint32(std::vector<uchar> *payload, uint32 value) {
   uchar encoded[4];
   int4store(encoded, value);
   payload->insert(payload->end(), encoded, encoded + sizeof(encoded));
+}
+
+bool pq_send_worker_result_stable_ref_frame(MQueue_handle *handle,
+                                            uint32 field_count,
+                                            const uchar *null_bitmap,
+                                            uint32 null_bitmap_len,
+                                            const uchar *field_payload,
+                                            uint32 field_payload_len,
+                                            const uchar *handler_ref,
+                                            uint32 handler_ref_len) {
+  if (handler_ref == nullptr || handler_ref_len == 0) return true;
+  if (field_payload_len > 0 && field_payload == nullptr) return true;
+
+  const uint64 stable_payload_len64 =
+      sizeof(uint32) + static_cast<uint64>(handler_ref_len) +
+      field_payload_len;
+  if (stable_payload_len64 > UINT32_MAX) return true;
+
+  std::vector<uchar> stable_payload;
+  stable_payload.reserve(static_cast<size_t>(stable_payload_len64));
+  pq_worker_result_append_uint32(&stable_payload, handler_ref_len);
+  stable_payload.insert(stable_payload.end(), handler_ref,
+                        handler_ref + handler_ref_len);
+  if (field_payload_len > 0) {
+    stable_payload.insert(stable_payload.end(), field_payload,
+                          field_payload + field_payload_len);
+  }
+
+  return pq_send_worker_result_frame_with_flags(
+      handle, PQ_worker_result_message_type::ROW, field_count, null_bitmap,
+      null_bitmap_len, stable_payload.data(),
+      static_cast<uint32>(stable_payload.size()),
+      PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF);
 }
 
 bool pq_worker_result_decode_field(const uchar **cursor,
@@ -185,7 +236,8 @@ bool pq_validate_worker_result_frame(
       static_cast<const PQ_worker_result_frame_header *>(raw_data);
   if (decoded->magic != PQ_WORKER_RESULT_FRAME_MAGIC ||
       decoded->version != PQ_WORKER_RESULT_FRAME_VERSION ||
-      !pq_is_valid_worker_result_type(decoded->type)) {
+      !pq_is_valid_worker_result_type(decoded->type) ||
+      pq_worker_result_has_unknown_flags(decoded->flags)) {
     return true;
   }
 
@@ -232,6 +284,7 @@ bool pq_decode_worker_result_row(
       header == nullptr ||
       header->type !=
           static_cast<uint16>(PQ_worker_result_message_type::ROW) ||
+      (header->flags & PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0 ||
       null_bitmap == nullptr || payload == nullptr) {
     return true;
   }
@@ -262,6 +315,44 @@ bool pq_decode_worker_result_row(
     fields->clear();
     return true;
   }
+  return false;
+}
+
+bool pq_decode_worker_result_stable_ref_row(
+    const void *raw_data, uint32 raw_len,
+    PQ_worker_result_stable_ref *stable_ref) {
+  if (stable_ref == nullptr) return true;
+  *stable_ref = {};
+
+  const PQ_worker_result_frame_header *header = nullptr;
+  const uchar *null_bitmap = nullptr;
+  const uchar *payload = nullptr;
+  if (pq_validate_worker_result_frame(raw_data, raw_len, &header, &null_bitmap,
+                                      &payload) ||
+      header == nullptr ||
+      header->type !=
+          static_cast<uint16>(PQ_worker_result_message_type::ROW) ||
+      header->flags != PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF ||
+      null_bitmap == nullptr || payload == nullptr ||
+      header->payload_len < sizeof(uint32)) {
+    return true;
+  }
+
+  const uint32 row_id_len = uint4korr(payload);
+  const uchar *row_id = payload + sizeof(uint32);
+  if (row_id_len == 0 ||
+      header->payload_len < sizeof(uint32) + row_id_len) {
+    return true;
+  }
+
+  stable_ref->row_id = row_id;
+  stable_ref->row_id_len = row_id_len;
+  stable_ref->null_bitmap = null_bitmap;
+  stable_ref->null_bitmap_len = header->null_bitmap_len;
+  stable_ref->field_payload = row_id + row_id_len;
+  stable_ref->field_payload_len =
+      header->payload_len - sizeof(uint32) - row_id_len;
+  stable_ref->field_count = header->field_count;
   return false;
 }
 
@@ -578,6 +669,126 @@ bool pq_run_query_result_mq_wiring_smoke(THD *thd, uint32 *rows_read,
 
   handle.cleanup();
   return failed || *rows_read != 2 || *finishes_read != 1;
+}
+
+bool pq_run_query_result_mq_stable_ref_smoke(const uchar *handler_ref,
+                                             uint32 handler_ref_len,
+                                             uint32 *ref_bytes,
+                                             uint32 *deep_copy_success,
+                                             uint32 *normal_decode_rejects,
+                                             uint32 *invalid_rejects) {
+  if (handler_ref == nullptr || handler_ref_len == 0 || ref_bytes == nullptr ||
+      deep_copy_success == nullptr || normal_decode_rejects == nullptr ||
+      invalid_rejects == nullptr) {
+    return true;
+  }
+  *ref_bytes = 0;
+  *deep_copy_success = 0;
+  *normal_decode_rejects = 0;
+  *invalid_rejects = 0;
+
+  PQ_mq_event sender_event;
+  PQ_mq_event receiver_event;
+  char ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue queue(&sender_event, &receiver_event, ring, sizeof(ring));
+  MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (handle.init()) return true;
+
+  std::vector<uchar> mutable_ref(handler_ref, handler_ref + handler_ref_len);
+  const std::vector<uchar> expected_ref = mutable_ref;
+  const uchar null_bitmap[] = {0};
+  std::vector<uchar> field_payload;
+  pq_worker_result_append_uint32(&field_payload, 1);
+  field_payload.push_back('9');
+
+  bool failed = pq_send_worker_result_stable_ref_frame(
+      &handle, 1, null_bitmap, sizeof(null_bitmap), field_payload.data(),
+      static_cast<uint32>(field_payload.size()), mutable_ref.data(),
+      static_cast<uint32>(mutable_ref.size()));
+
+  if (!mutable_ref.empty()) mutable_ref[0] ^= 0xff;
+
+  void *raw_data = nullptr;
+  uint32 raw_len = 0;
+  if (!failed && handle.receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+    failed = true;
+  }
+
+  PQ_worker_result_stable_ref stable_ref;
+  if (!failed &&
+      pq_decode_worker_result_stable_ref_row(raw_data, raw_len, &stable_ref)) {
+    failed = true;
+  }
+  if (!failed) {
+    failed = stable_ref.row_id == nullptr ||
+             stable_ref.row_id_len != expected_ref.size() ||
+             memcmp(stable_ref.row_id, expected_ref.data(),
+                    expected_ref.size()) != 0 ||
+             stable_ref.field_count != 1 || stable_ref.null_bitmap_len != 1 ||
+             stable_ref.field_payload_len != field_payload.size() ||
+             memcmp(stable_ref.field_payload, field_payload.data(),
+                    field_payload.size()) != 0;
+  }
+  if (!failed) {
+    ++(*deep_copy_success);
+    *ref_bytes = stable_ref.row_id_len;
+  }
+
+  std::vector<PQ_worker_result_decoded_field> decoded_fields;
+  if (!failed && pq_decode_worker_result_row(raw_data, raw_len,
+                                             &decoded_fields)) {
+    ++(*normal_decode_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  PQ_worker_result_frame_header invalid_flags{};
+  invalid_flags.magic = PQ_WORKER_RESULT_FRAME_MAGIC;
+  invalid_flags.version = PQ_WORKER_RESULT_FRAME_VERSION;
+  invalid_flags.type = static_cast<uint16>(PQ_worker_result_message_type::ROW);
+  invalid_flags.field_count = 1;
+  invalid_flags.null_bitmap_len = 1;
+  invalid_flags.payload_len = sizeof(uint32) + handler_ref_len;
+  invalid_flags.flags = PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF | (1U << 4);
+  const PQ_worker_result_frame_header *bad_header = nullptr;
+  const uchar *bad_null_bitmap = nullptr;
+  const uchar *bad_payload = nullptr;
+  if (pq_validate_worker_result_frame(&invalid_flags, sizeof(invalid_flags),
+                                      &bad_header, &bad_null_bitmap,
+                                      &bad_payload)) {
+    ++(*invalid_rejects);
+  } else {
+    failed = true;
+  }
+
+  PQ_worker_result_frame_header invalid_version = invalid_flags;
+  invalid_version.flags = PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF;
+  invalid_version.version = PQ_WORKER_RESULT_FRAME_VERSION + 1;
+  if (!failed &&
+      pq_validate_worker_result_frame(&invalid_version, sizeof(invalid_version),
+                                      &bad_header, &bad_null_bitmap,
+                                      &bad_payload)) {
+    ++(*invalid_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  PQ_worker_result_frame_header invalid_length = invalid_flags;
+  invalid_length.flags = PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF;
+  invalid_length.version = PQ_WORKER_RESULT_FRAME_VERSION;
+  invalid_length.payload_len = UINT32_MAX;
+  if (!failed &&
+      pq_validate_worker_result_frame(&invalid_length, sizeof(invalid_length),
+                                      &bad_header, &bad_null_bitmap,
+                                      &bad_payload)) {
+    ++(*invalid_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  handle.cleanup();
+  return failed || *ref_bytes != handler_ref_len || *deep_copy_success != 1 ||
+         *normal_decode_rejects != 1 || *invalid_rejects != 3;
 }
 
 Query_result_mq::Query_result_mq(JOIN *join, MQueue_handle *msg_handler,
