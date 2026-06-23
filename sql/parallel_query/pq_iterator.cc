@@ -486,12 +486,16 @@ bool PQTableScanIterator::should_enter_read_shadow_path(
 
 bool PQTableScanIterator::should_enter_threaded_read_shadow_path(
     uint requested_dop) const {
+  const bool dop2_fullscan_enabled =
+      thd() != nullptr && m_join != nullptr && m_join->pq_eligible &&
+      thd()->variables.parallel_query && requested_dop == 2;
   bool dop1_enabled =
       thd() != nullptr &&
       thd()->variables.parallel_query_experimental_threaded_dop1;
   bool dop2_enabled =
-      thd() != nullptr &&
-      thd()->variables.parallel_query_experimental_threaded_dop;
+      dop2_fullscan_enabled ||
+      (thd() != nullptr &&
+       thd()->variables.parallel_query_experimental_threaded_dop);
   bool dop4_enabled =
       thd() != nullptr &&
       thd()->variables.parallel_query_experimental_threaded_dop4;
