@@ -497,6 +497,14 @@ class ha_innobase : public handler {
                           PQ_leader_scan_mode mode, uint requested_dop,
                           uint *actual_dop, bool reverse) override;
 
+  /** Commercial leader-side PQ init bridge.
+
+  This delegates the commercial void* API to the typed InnoDB leader lifecycle
+  for the currently supported clustered full-scan shape.
+  */
+  int pq_leader_scan_init(uint keyno, void *&scan_ctx,
+                          uint n_threads) override;
+
   /**
     Initialize InnoDB-specific Parallel Query worker scan state.
 
@@ -668,6 +676,9 @@ class ha_innobase : public handler {
     Idempotent: safe to call multiple times or with nullptr.
   */
   int pq_leader_scan_end(PQ_Leader_context *leader_ctx) override;
+
+  /** End commercial leader-side PQ scan context. Idempotent. */
+  int pq_leader_scan_end(void *leader_ctx) override;
 
   bool check_if_incompatible_data(HA_CREATE_INFO *info,
                                   uint table_changes) override;

@@ -40,6 +40,7 @@ InnoDB Parallel Query handler adapter.
 #include "row0pread_pq.h"
 #include "row0sel.h"
 #include "sql/parallel_query/pq_handler.h"
+#include "sql/parallel_query/pq_resource_stat.h"
 #include "sql/parallel_query/sql_parallel.h"
 #include "sql/query_options.h"
 
@@ -198,7 +199,7 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
 
   if (m_pq_leader_ctx != nullptr || m_pq_sql_leader_ctx != nullptr ||
       !m_pq_worker_ctxs.empty()) {
-    pq_leader_scan_end(nullptr);
+    pq_leader_scan_end(static_cast<PQ_Leader_context *>(nullptr));
   }
 
   /* V1-MVP: reverse scan is not supported. */
@@ -352,6 +353,39 @@ int ha_innobase::pq_leader_scan_init(THD *leader_thd,
     *actual_dop = static_cast<uint>(available);
   }
 
+  return 0;
+}
+
+int ha_innobase::pq_leader_scan_init(uint keyno, void *&scan_ctx,
+                                     uint n_threads) {
+  scan_ctx = nullptr;
+
+  if (n_threads == 0 || m_prebuilt == nullptr || m_prebuilt->trx == nullptr ||
+      m_prebuilt->table == nullptr) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  if (ha_reverse_scan() || pq_ref || pq_range_type != PQ_QUICK_SELECT_NONE) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
+  active_index = keyno;
+  const int index_result = change_active_index(active_index);
+  if (index_result != 0) {
+    return index_result;
+  }
+
+  PQ_Leader_context *typed_ctx = nullptr;
+  uint actual_dop = 0;
+  const int result = pq_leader_scan_init(
+      ha_thd(), &typed_ctx, PQ_leader_scan_mode::EXECUTE, n_threads,
+      &actual_dop, ha_reverse_scan());
+  if (result != 0) {
+    scan_ctx = nullptr;
+    return result;
+  }
+
+  scan_ctx = typed_ctx;
   return 0;
 }
 
@@ -2134,4 +2168,8 @@ int ha_innobase::pq_leader_scan_end(PQ_Leader_context *leader_ctx) {
   }
 
   return 0;
+}
+
+int ha_innobase::pq_leader_scan_end(void *leader_ctx) {
+  return pq_leader_scan_end(static_cast<PQ_Leader_context *>(leader_ctx));
 }

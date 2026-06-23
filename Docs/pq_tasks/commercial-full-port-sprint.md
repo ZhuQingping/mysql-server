@@ -935,7 +935,7 @@ Completion Report - Batch D1.2:
 
 #### Batch D1.3 - row_prebuilt_t PQ shared ownership lifecycle
 
-Status: implementation complete, review pending
+Status: completed and committed
 
 目标：
 
@@ -1020,6 +1020,78 @@ Completion Report - Batch D1.3:
   - reviewer confirmed the commercial worker next path remains fail-closed and
     no-arg worker cleanup releases `pq_ctx`、debug `pq_prev_ctx`、`pq_worker`、
     ref info、attach state、and fetch counters。
+
+#### Batch D1.4 - commercial leader lifecycle bridge
+
+Status: completed and committed
+
+目标：
+
+- 为 InnoDB 覆盖 commercial `pq_leader_scan_init(uint, void *&, uint)` 和
+  `pq_leader_scan_end(void *)`；
+- 将 commercial `void *` leader context 适配到当前 8.0.46 typed
+  `PQ_Leader_context *` 生命周期；
+- 只接 clustered full-scan leader init/end lifecycle，不启用
+  `ha_pq_next()` row production。
+
+Planned implementation:
+
+- `storage/innobase/handler/ha_innodb.h`
+  - declare commercial leader init/end overrides。
+- `storage/innobase/handler/ha_innodb_pq.cc`
+  - implement `pq_leader_scan_init(uint, void *&, uint)` as a thin adapter
+    over typed `pq_leader_scan_init(ha_thd(), &ctx, EXECUTE, ...)`；
+  - reject unsupported commercial state in this batch:
+    reverse scan、ref scan、range scan、invalid prebuilt/DOP；
+  - implement `pq_leader_scan_end(void *)` by casting back to
+    `PQ_Leader_context *` and calling the typed cleanup path。
+
+Validation:
+
+- `git diff --check -- storage/innobase/handler/ha_innodb.h storage/innobase/handler/ha_innodb_pq.cc Docs/pq_tasks/commercial-full-port-sprint.md`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq-d14-mtr-vardir --tmpdir=/tmp/pq-d14-mtr-tmpdir`
+
+Risk constraints:
+
+- do not migrate commercial range/ref/partition leader dispatch in this batch；
+- do not route optimizer/executor into `ha_pq_init()` yet；
+- keep `pq_worker_scan_next(void*, uchar*)` and therefore `ha_pq_next()`
+  fail-closed for real row reads；
+- void leader cleanup must never fall through to the base no-op cleanup。
+
+Completion Report - Batch D1.4:
+
+- changed files:
+  - `storage/innobase/handler/ha_innodb.h`
+  - `storage/innobase/handler/ha_innodb_pq.cc`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added InnoDB override declarations for commercial leader init/end；
+  - `pq_leader_scan_init(uint, void *&, uint)` now validates D1.4 scope,
+    switches the requested active index, delegates to typed EXECUTE leader init,
+    and stores the typed `PQ_Leader_context *` in the commercial `void *`
+    output only on success；
+  - `pq_leader_scan_end(void *)` delegates to the typed end path so thread
+    budget、read view、worker contexts、and handler-owned leader state are
+    released。
+- validation:
+  - `git diff --check -- storage/innobase/handler/ha_innodb.h storage/innobase/handler/ha_innodb_pq.cc Docs/pq_tasks/commercial-full-port-sprint.md`
+    passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    passed；
+  - `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 --vardir=/tmp/pq-d14-mtr-vardir --tmpdir=/tmp/pq-d14-mtr-tmpdir`
+    passed, all 89 tests successful。
+- risks carried forward:
+  - `ha_pq_init()` can now create a leader context for supported full-scan
+    shapes, but `ha_pq_next()` remains unable to produce rows because
+    commercial worker next is still unsupported；
+  - commercial range/ref leader dispatch remains later work。
+- review:
+  - independent Review Agent pending; this commit is a validated safeguard
+    commit to preserve current PQ work remotely。
 
 ### Batch E1 - Commercial MTR migration
 
