@@ -141,9 +141,9 @@ reviewed phase。
 ## 当前推荐下一步
 
 1. 不再继续 M11-E source coding，ORDER BY 真实执行保持 blocked；
-2. 完成 M11-F6 Ref / ICP positive-path phase selection design review；
-3. F6 review accept 后，再进入 F6a worker-side constant covering ref
-   contract；F6a 仍不得打开 `PQRefIterator::Read()`、
+2. M11-F6 positive-path phase selection 已提交为 `31bdc66fb36`；
+3. 当前进入 F6a worker-side constant covering ref contract design；
+   F6a 仍不得打开 `PQRefIterator::Read()`、
    `PQblockScanIterator::Read()`、`pq_worker_scan_next()` 或 worker MQ row
    production。
 

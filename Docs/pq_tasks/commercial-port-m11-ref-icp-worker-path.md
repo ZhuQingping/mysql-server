@@ -10,8 +10,10 @@ partition worker ownership design completed and committed；F5-C1 partition
 reject diagnostic completed and committed；F5-B MVI inventory / design accepted；
 F5-B1 debug-only MVI reject diagnostic completed and committed；F5-E ICP +
 native `Record_buffer` combined path design accepted；F5-E1/E2 completed；
-M11-F5 closure accepted；M11-F6 positive-path phase selection design is the
-current next step。Real worker-side ICP positive row production remains blocked。
+M11-F5 closure accepted；M11-F6 positive-path phase selection design committed
+as `31bdc66fb36`；M11-F6a worker-side constant covering ref contract design is
+the current next step。Real worker-side ICP positive row production remains
+blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -2204,6 +2206,168 @@ Design / Source / Test Review Prompt:
 4. F6a 的前置合同是否覆盖 ownership、cleanup、read-view、
    fallback-before-row、ERROR/KILL 和 MTR 护栏；
 5. 是否还有必须写入 F6 的 hard stop 或测试要求。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Required fixes before commit
+- Safe next task recommendation
+
+### M11-F6a: Worker-side Constant Covering Ref Contract
+
+Status: design-only taskbook created；no source or MTR edits in F6a。
+
+Goal:
+
+- 将 F6 选定的 worker-side constant covering ref 候选拆成可编码合同；
+- 设计 worker-owned ref context、handler ownership、read-view、
+  fallback-before-row、ERROR/KILL、cleanup 和 MTR 护栏；
+- 保持现有 M9-C2 leader-local constant covering ref 用户可见能力不回退；
+- 不在 F6a 打开真实 `PQRefIterator::Read()`、`ha_pq_next()`、
+  `pq_worker_scan_next()` 或 worker MQ row production。
+
+Current Branch Chain:
+
+- `TryCreatePQSecondaryCoveringRefIterator()` 只在 root/single-table/simple/
+  non-reverse/covering/safe secondary constant ref 形态下返回
+  `PQSecondaryCoveringRefIterator`；
+- `PQSecondaryCoveringRefIterator::Init()` 构造 lookup 后复制
+  `m_ref->key_buff`，用 `table()->file->pq_secondary_covering_ref_produce()`
+  通过 SQL-owned `PQ_row_sink` 收集 row images；
+- InnoDB `pq_secondary_covering_ref_produce()` 建立 leader handler 上的
+  read view、模板和 secondary ref tuple，再调用
+  `InnoDB_pq_scan_ctx::produce_secondary_ref_for_user_gate()`；
+- 该路径 bounded、fast-path-only、SQL-owned sink deep-copy row image，
+  不启动 worker thread，不发送 MQ row，不调用
+  `PQRefIterator::Read()` / `PQblockScanIterator::Read()` /
+  `pq_worker_scan_next()`；
+- no-row / unsupported 形态仍可在 worker commit point 之前 fallback 或
+  fail closed。
+
+Commercial Reference Chain:
+
+- `PQRefIterator::Init()` 调用 `table()->file->pq_worker_scan_init()`；
+- `PQRefIterator::Read()` 第一次读取时：
+  - 处理 `impossible_null_ref()`；
+  - `construct_lookup()` 生成当前 ref key；
+  - `FindKeyBufferAndMap()` / `calculate_key_len()` 得到 key bytes；
+  - 设置 `table()->file->pq_ref_key` 和 `pq_ref_depend`；
+  - 调用 `pq_ref_build_ranges()` 在 leader scan context 中构造 ref ranges；
+  - 调用 `ha_pq_next()` 拉取 worker row；
+- InnoDB `pq_ref_build_ranges()` 使用 `index_read()` 定位 exact ref 边界，
+  将 ref key 深拷贝进 `PQ_Config`，再 build ranges；
+- `pq_worker_scan_next()` 通过 worker context dispatch/read_record 拉取 row，
+  并在 `DB_END_OF_RANGE` / `DB_END_OF_INDEX` 时继续领取下一 slice；
+- `pq_worker_scan_end()` 清理 `pq_ref_depend`、`pq_ctx`、`pq_worker`、
+  `pq_ref_info` 和 native record buffer counters。
+
+F6a Contract Decisions:
+
+- F6a 不复制商用 `PQRefIterator::Read()`；
+- F6a 不调用 `ha_pq_next()`；
+- F6a 不启用 `pq_worker_scan_next()`；
+- F6a 只设计 future worker-side constant-ref contract，后续编码必须先从
+  private/debug-only helper 或 no-row/no-MQ probe 开始；
+- worker-owned ref key 必须是 owned bytes，不能指向 `Index_lookup` 或
+  `key_buff` 的 transient storage；
+- worker context 必须记录 keyno、keypart map、key length、exact-read flag、
+  reverse=false、constant-ref=true；
+- leader/worker handler ownership 必须分离，worker handler 不得复用
+  leader-local `PQSecondaryCoveringRefIterator` 的 handler mutable state；
+- worker 不得保存 leader `TABLE`、leader handler、leader `row_prebuilt_t`、
+  leader `record[0]` 或 leader `Index_lookup::key_buff` 指针；
+- worker-local `m_prebuilt->index`、template、`pcur` / `clust_pcur`、
+  `blob_heap`、`pq_ctx` 和 `pq_worker` 必须由 worker handler 独立拥有；
+- read view 必须在 worker handler open/init 前建立，并与 leader-visible
+  statement snapshot 一致；
+- ref range build 阶段不得用 ICP 判断 ref key 是否存在；ICP 仍属后续
+  worker-side ICP 独立阶段；
+- before worker start / commit point：
+  - `impossible_null_ref()`、unsupported key shape、empty ref、no worker
+    context 可 fallback 或 fail closed；
+  - 不允许增加 `Parallel_queries_executed` 或 worker/range/secondary-row
+    positive counters；
+- after worker start / commit point：
+  - 不允许 silent serial fallback；
+  - ERROR/KILL/DETACH/EOF 必须通过 worker path 传播和 cleanup；
+  - `DB_END_OF_RANGE` / `DB_END_OF_INDEX` 是 ctx/range EOF，不是 statement
+    fatal error；
+  - `DB_NOT_FOUND` 可以作为当前 ctx retry/continue 语义，不能直接伪装为
+    statement EOF；
+  - 若已发出任何 worker row token，则必须通过 MQ/Exchange cleanup 完成，
+    不能切回 leader-local row buffer。
+
+Allowed Files for F6a:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`；
+- `Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md`。
+
+Forbidden for F6a:
+
+- any `sql/**` or `storage/**` source changes；
+- any MTR test/result changes；
+- `PQRefIterator::Read()` / `PQblockScanIterator::Read()` implementation；
+- `ha_pq_next()` / `pq_worker_scan_next()` call sites；
+- worker MQ row production；
+- native `Record_buffer` positive path；
+- worker-side ICP clone/refix/pushdown；
+- MVI unique filter, partition, reverse, secondary MIN positive path；
+- ORDER BY / `Exchange_sort` / `HAS_ORDER_BY` / visible ORDER BY gate changes；
+- changing current M9-C2 leader-local constant covering ref behavior。
+
+Proposed Coding Split After F6a Review:
+
+1. M11-F6a-1 Worker Constant-ref Context Shape:
+   - add private compile-only / DBUG-only owned ref-key context shape；
+   - validate deep-copy key bytes, keyno/keypart map, exact flag, reverse=false；
+   - no worker row, no MQ, no `pq_worker_scan_next()`。
+
+2. M11-F6a-2 Worker Constant-ref Ownership / Cleanup Smoke:
+   - create a private no-row or no-MQ smoke proving context cleanup after
+     unsupported/no-row/error-before-row；
+   - counters must be diagnostic only；
+   - existing M9-C2 user-visible result/counters must remain stable。
+
+3. M11-F6b Worker Constant-ref Private Row-token Handoff:
+   - only after F6a-1/F6a-2 review；
+   - may define a private worker-row token/MQ handoff for constant covering ref；
+   - still no generic `pq_worker_scan_next()` or native `Record_buffer`。
+
+4. M11-F6c User-visible Migration Decision:
+   - decide whether to move current M9-C2 user-visible constant covering ref
+     from leader-local row buffer to worker-side path；
+   - requires build/MTR/full-suite and explicit rollback/fallback contract。
+
+Required Future MTR Windows:
+
+- no-row ref probe before worker start；
+- one-row exact ref probe；
+- duplicate-key exact ref probe；
+- unsupported unsafe keypart probe；
+- worker ERROR before first row；
+- KILL / detach cleanup before and after worker commit point；
+- existing M9-C2 `c2_ref_rows_produced_delta` and workers/ranges windows remain
+  unchanged until F6c explicitly changes them。
+
+Validation for F6a:
+
+- docs-only：`git diff --check`；
+- no build/MTR required unless source or test files change。
+
+Design / Source / Test Review Prompt:
+
+请作为 M11-F6a Design / Source / Test Review Agent，只读审查本 F6a 任务书：
+
+1. F6a 是否准确区分当前 leader-local constant ref 与商用 worker-side ref；
+2. F6a 是否保持 design-only，没有打开 `PQRefIterator::Read()`、
+   `ha_pq_next()`、`pq_worker_scan_next()` 或 worker MQ row；
+3. worker-owned ref key/context、handler ownership、read-view、cleanup、
+   fallback-before-row、ERROR/KILL 合同是否完整；
+4. F6a-1/F6a-2/F6b/F6c 拆分是否足够小，是否避免直接复制商用大路径；
+5. 是否还有必须写入 F6a 的 hard stop、MTR 窗口或风险。
 
 输出：
 
