@@ -10641,11 +10641,70 @@ Validation evidence:
 - Code / Docs / Test Review Agent `019ef266-0971-7890-9722-df61a7fa2385`
   returned `ACCEPT`；
 - commit allowed；
+- committed as `22cc7777c88`；
 - residual risks carried forward:
   - E6g-5c remains DBUG-only smoke evidence；
   - do not use this as justification to wire default comparator or heap reader；
   - keep visible ORDER BY PQ closed until production lifetime, comparator,
     reader, cleanup, and preflight contracts are proven together。
+
+### M11-E6g-5d: Fail-closed ORDER BY Audit
+
+Status: docs/status audit completed，target validation passed，waiting Docs /
+Source review before commit。
+
+Goal:
+
+- close E6g-5 by proving the new ref adapter smokes have not weakened visible
+  ORDER BY fail-closed behavior；
+- reuse existing MTR guardrails instead of adding redundant source or MTR code；
+- record the exact remaining blocker before any future default comparator /
+  heap reader integration task。
+
+Audit scope:
+
+- `pq_commercial_order_by` already asserts:
+  - visible ORDER BY remains `Not parallel HAS_ORDER_BY`；
+  - ORDER BY execution preflight attempts and blocked counters grow only under
+    DBUG preflight smoke；
+  - `Parallel_orderby_execution_preflight_ready` delta remains 0；
+  - missing saved ORDER / Filesort / Sort_param / worker frame / Exchange heap /
+    leader materialization / row-id / ordered read / error diagnostics counters
+    remain observable；
+  - visible ORDER BY `SELECT ... ORDER BY ... LIMIT ...` returns serial results；
+  - visible ORDER BY does not grow `Parallel_queries_executed`；
+  - visible ORDER BY does not grow `Parallel_workers_launched` or
+    `Parallel_ranges_dispatched`。
+- `pq_commercial_order_by_frames` remains the DBUG-only Exchange_sort frame /
+  heap-reader/materializer smoke suite and does not open default visible ORDER
+  BY execution。
+
+Audit decision:
+
+- no source changes are needed for E6g-5d；
+- no MTR changes are needed unless validation shows an existing guard missing；
+- E6g-5d should be a docs-only commit after targeted validation and review。
+
+Required validation:
+
+- `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_commercial_order_by pq_commercial_order_by_frames pq_worker_attach_contract_smoke pq_stats --parallel=1 --vardir=/tmp/pq_e6g5d_target_vardir --tmpdir=/tmp/pq_e6g5d_target_tmp`
+  passed；
+- `git diff --check` passed；
+- full `parallel_query` suite is optional for docs-only E6g-5d because E6g-5c
+  already passed full suite immediately before this audit, but may be rerun if
+  any MTR/source file changes。
+
+Next-step constraint:
+
+- any future production ORDER BY comparator task must still prove all of these
+  together before changing visible behavior:
+  - stable row-id lifetime；
+  - production sort-key equality proof；
+  - handler `cmp_ref()` comparator ownership；
+  - heap reader ordering；
+  - materialization ownership；
+  - kill/detach/error cleanup；
+  - central preflight readiness。
 
 ## Risk Areas
 
