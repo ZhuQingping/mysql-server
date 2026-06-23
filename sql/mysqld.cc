@@ -10191,6 +10191,24 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
     orderby_ref_adapter_shape_antisymmetric_success)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_shape_tiebreak_success,
                                   orderby_ref_adapter_shape_tiebreak_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_contract_attempts,
+                                  orderby_ref_adapter_contract_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_contract_success,
+                                  orderby_ref_adapter_contract_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_ref_adapter_contract_unsupported,
+                                  orderby_ref_adapter_contract_unsupported)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_ref_adapter_contract_null_handler_rejects,
+    orderby_ref_adapter_contract_null_handler_rejects)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_ref_adapter_contract_len_mismatch_rejects,
+    orderby_ref_adapter_contract_len_mismatch_rejects)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_ref_adapter_contract_equal_ref_rejects,
+    orderby_ref_adapter_contract_equal_ref_rejects)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(
+    orderby_ref_adapter_contract_direction_success,
+    orderby_ref_adapter_contract_direction_success)
 
 #undef DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC
 
@@ -12330,6 +12348,27 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_ref_adapter_shape_unsupported",
      (char *)&show_pq_orderby_ref_adapter_shape_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_contract_attempts",
+     (char *)&show_pq_orderby_ref_adapter_contract_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_contract_direction_success",
+     (char *)&show_pq_orderby_ref_adapter_contract_direction_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_contract_equal_ref_rejects",
+     (char *)&show_pq_orderby_ref_adapter_contract_equal_ref_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_contract_len_mismatch_rejects",
+     (char *)&show_pq_orderby_ref_adapter_contract_len_mismatch_rejects,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_contract_null_handler_rejects",
+     (char *)&show_pq_orderby_ref_adapter_contract_null_handler_rejects,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_contract_success",
+     (char *)&show_pq_orderby_ref_adapter_contract_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_ref_adapter_contract_unsupported",
+     (char *)&show_pq_orderby_ref_adapter_contract_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_handler_ref_two_row_antisymmetric_success",
      (char *)&show_pq_orderby_handler_ref_two_row_antisymmetric_success,

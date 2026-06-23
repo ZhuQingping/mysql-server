@@ -10568,6 +10568,85 @@ Validation evidence:
   - keep comparator use private until a production caller can prove sort-key
     equality and owned stable row-id lifetime by contract。
 
+Code / Docs / Test Review - M11-E6g-5b:
+
+- Review Agent `019ef25e-faf4-7f03-92e6-e1600a836889` returned `ACCEPT`；
+- no blocking findings；
+- non-blocking stale validation wording was fixed before commit；
+- committed as `0de54003003`；
+- residual constraints:
+  - keep comparator use DBUG/private；
+  - do not replace cached/batch comparator, heap reader, materializer, or
+    `ParallelScanIterator::Read()`；
+  - do not change `pq_optimizer.*`, preflight readiness, sysvars/hints, or
+    visible ORDER BY PQ gates。
+
+### M11-E6g-5c: Tie-break Contract Smoke Extension
+
+Status: local implementation completed，full validation passed，Code / Docs /
+Test review accepted，ready to commit。
+
+Goal:
+
+- extend E6g-5b with a narrower contract smoke that validates both positive
+  direction match and explicit fail-closed rejection cases；
+- prove the fail-closed adapter output direction matches the existing
+  `pq_orderby_handler_ref_adapter_smoke()` result on the same owned refs；
+- cover null handler, ref-length mismatch, and equal-ref rejection；
+- keep the default comparator / heap reader / visible ORDER BY PQ closed。
+
+Implemented:
+
+- added DBUG flag `pq_orderby_ref_adapter_contract_smoke`；
+- added independent real worker-ref collection for this flag；
+- sends the two collected worker refs through stable-ref pair MQ
+  decode/deep-copy before calling the fail-closed adapter shape；
+- positive path:
+  - calls `pq_orderby_fail_closed_ref_adapter_shape()`；
+  - calls existing `pq_orderby_handler_ref_adapter_smoke()` on the same owned
+    refs；
+  - requires forward and reverse comparison directions to match；
+- negative path:
+  - null handler must reject；
+  - ref-length mismatch must reject；
+  - equal row-id buffers must reject；
+- added status variables:
+  - `Parallel_orderby_ref_adapter_contract_attempts`；
+  - `Parallel_orderby_ref_adapter_contract_success`；
+  - `Parallel_orderby_ref_adapter_contract_unsupported`；
+  - `Parallel_orderby_ref_adapter_contract_null_handler_rejects`；
+  - `Parallel_orderby_ref_adapter_contract_len_mismatch_rejects`；
+  - `Parallel_orderby_ref_adapter_contract_equal_ref_rejects`；
+  - `Parallel_orderby_ref_adapter_contract_direction_success`；
+- extended `pq_worker_attach_contract_smoke` and `pq_stats`。
+
+Hard boundaries preserved:
+
+- no default cached comparator / batch comparator replacement；
+- no default heap reader or materializer behavior change；
+- no `ParallelScanIterator::Read()` integration；
+- no `pq_optimizer.*`, ORDER BY eligibility, preflight readiness, sysvar/hint,
+  AccessPath, handler/InnoDB, or visible ORDER BY gate change；
+- no production `Query_result_mq::send_data()` / `m_stable_output` behavior
+  change。
+
+Validation evidence:
+
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- first target MTR failed only because `.result` files were stale；
+- targeted MTR passed:
+  `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query pq_worker_attach_contract_smoke pq_stats --parallel=1 --vardir=/tmp/pq_e6g5c_target3_vardir --tmpdir=/tmp/pq_e6g5c_target3_tmp`；
+- full `parallel_query` suite passed 89/89:
+  `TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_query --parallel=1 --vardir=/tmp/pq_e6g5c_full_vardir --tmpdir=/tmp/pq_e6g5c_full_tmp`；
+- Code / Docs / Test Review Agent `019ef266-0971-7890-9722-df61a7fa2385`
+  returned `ACCEPT`；
+- commit allowed；
+- residual risks carried forward:
+  - E6g-5c remains DBUG-only smoke evidence；
+  - do not use this as justification to wire default comparator or heap reader；
+  - keep visible ORDER BY PQ closed until production lifetime, comparator,
+    reader, cleanup, and preflight contracts are proven together。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；

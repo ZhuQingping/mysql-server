@@ -1239,6 +1239,8 @@ bool Gather_operator::run_worker_attach_contract_smoke(
   std::vector<std::vector<uchar>> stable_ref_pair_cmp_smoke_refs;
   bool ref_adapter_shape_smoke_pending = false;
   std::vector<std::vector<uchar>> ref_adapter_shape_smoke_refs;
+  bool ref_adapter_contract_smoke_pending = false;
+  std::vector<std::vector<uchar>> ref_adapter_contract_smoke_refs;
   Item *saved_leader_pushed_idx_cond = nullptr;
   uint saved_leader_pushed_idx_cond_keyno = MAX_KEY;
   auto install_leader_icp_sentinel = [&]() {
@@ -1431,6 +1433,18 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       return true;
     }
     ref_adapter_shape_smoke_pending = true;
+  });
+  DBUG_EXECUTE_IF("pq_orderby_ref_adapter_contract_smoke", {
+    pq_global_stats.orderby_ref_adapter_contract_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+
+    if (collect_two_worker_refs(&ref_adapter_contract_smoke_refs)) {
+      pq_global_stats.orderby_ref_adapter_contract_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      cleanup();
+      return true;
+    }
+    ref_adapter_contract_smoke_pending = true;
   });
 
   if (worker->m_open_ctx.worker_handler == nullptr ||
@@ -1819,6 +1833,109 @@ bool Gather_operator::run_worker_attach_contract_smoke(
     pq_global_stats.orderby_ref_adapter_shape_antisymmetric_success.fetch_add(
         1, std::memory_order_relaxed);
     pq_global_stats.orderby_ref_adapter_shape_tiebreak_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  if (ref_adapter_contract_smoke_pending) {
+    std::vector<uchar> left_owned_ref;
+    std::vector<uchar> right_owned_ref;
+    uint32 ref_contract_bytes = 0;
+    uint32 ref_contract_deep_copy = 0;
+    bool contract_failed =
+        leader_table == nullptr || leader_table->file == nullptr ||
+        leader_table->file->ref_length == 0 ||
+        ref_adapter_contract_smoke_refs.size() < 2 ||
+        ref_adapter_contract_smoke_refs[0].empty() ||
+        ref_adapter_contract_smoke_refs[1].empty() ||
+        pq_run_query_result_mq_stable_ref_pair_smoke(
+            ref_adapter_contract_smoke_refs[0].data(),
+            static_cast<uint32>(ref_adapter_contract_smoke_refs[0].size()),
+            ref_adapter_contract_smoke_refs[1].data(),
+            static_cast<uint32>(ref_adapter_contract_smoke_refs[1].size()),
+            leader_table->file->ref_length, &left_owned_ref, &right_owned_ref,
+            &ref_contract_bytes, &ref_contract_deep_copy);
+    if (!contract_failed &&
+        (ref_contract_bytes != leader_table->file->ref_length * 2 ||
+         ref_contract_deep_copy != 2)) {
+      contract_failed = true;
+    }
+
+    int contract_forward = 0;
+    int contract_reverse = 0;
+    uint32 contract_rejects = 0;
+    if (!contract_failed) {
+      contract_failed = pq_orderby_fail_closed_ref_adapter_shape(
+          leader_table->file, left_owned_ref.data(),
+          static_cast<uint32>(left_owned_ref.size()), right_owned_ref.data(),
+          static_cast<uint32>(right_owned_ref.size()), true,
+          &contract_forward, &contract_reverse, &contract_rejects);
+    }
+
+    int base_forward = 0;
+    int base_reverse = 0;
+    if (!contract_failed) {
+      contract_failed = pq_orderby_handler_ref_adapter_smoke(
+          leader_table->file, left_owned_ref.data(),
+          static_cast<uint32>(left_owned_ref.size()), right_owned_ref.data(),
+          static_cast<uint32>(right_owned_ref.size()), &base_forward,
+          &base_reverse);
+    }
+
+    uint32 null_handler_rejects = 0;
+    uint32 len_mismatch_rejects = 0;
+    uint32 equal_ref_rejects = 0;
+    int negative_forward = 0;
+    int negative_reverse = 0;
+    const bool null_handler_rejected =
+        !contract_failed &&
+        pq_orderby_fail_closed_ref_adapter_shape(
+            nullptr, left_owned_ref.data(),
+            static_cast<uint32>(left_owned_ref.size()), right_owned_ref.data(),
+            static_cast<uint32>(right_owned_ref.size()), true,
+            &negative_forward, &negative_reverse, &null_handler_rejects) &&
+        null_handler_rejects == 1;
+    const bool len_mismatch_rejected =
+        !contract_failed && left_owned_ref.size() > 1 &&
+        pq_orderby_fail_closed_ref_adapter_shape(
+            leader_table->file, left_owned_ref.data(),
+            static_cast<uint32>(left_owned_ref.size() - 1),
+            right_owned_ref.data(), static_cast<uint32>(right_owned_ref.size()),
+            true, &negative_forward, &negative_reverse,
+            &len_mismatch_rejects) &&
+        len_mismatch_rejects == 1;
+    const bool equal_ref_rejected =
+        !contract_failed &&
+        pq_orderby_fail_closed_ref_adapter_shape(
+            leader_table->file, left_owned_ref.data(),
+            static_cast<uint32>(left_owned_ref.size()), left_owned_ref.data(),
+            static_cast<uint32>(left_owned_ref.size()), true,
+            &negative_forward, &negative_reverse, &equal_ref_rejects) &&
+        equal_ref_rejects == 1;
+
+    const bool same_forward_direction =
+        (contract_forward < 0) == (base_forward < 0) &&
+        (contract_forward > 0) == (base_forward > 0);
+    const bool same_reverse_direction =
+        (contract_reverse < 0) == (base_reverse < 0) &&
+        (contract_reverse > 0) == (base_reverse > 0);
+    if (contract_failed || contract_rejects != 0 ||
+        contract_forward == 0 || contract_reverse == 0 ||
+        !same_forward_direction || !same_reverse_direction ||
+        !null_handler_rejected || !len_mismatch_rejected ||
+        !equal_ref_rejected) {
+      pq_global_stats.orderby_ref_adapter_contract_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+
+    pq_global_stats.orderby_ref_adapter_contract_success.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.orderby_ref_adapter_contract_null_handler_rejects.fetch_add(
+        null_handler_rejects, std::memory_order_relaxed);
+    pq_global_stats.orderby_ref_adapter_contract_len_mismatch_rejects.fetch_add(
+        len_mismatch_rejects, std::memory_order_relaxed);
+    pq_global_stats.orderby_ref_adapter_contract_equal_ref_rejects.fetch_add(
+        equal_ref_rejects, std::memory_order_relaxed);
+    pq_global_stats.orderby_ref_adapter_contract_direction_success.fetch_add(
         1, std::memory_order_relaxed);
   }
   pq_global_stats.worker_attach_smoke_success.fetch_add(

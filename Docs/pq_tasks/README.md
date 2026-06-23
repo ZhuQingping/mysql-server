@@ -24,12 +24,14 @@
   `parallel_query` suite passed 89/89；re-review accepted，已提交为
   `3679a6d317c`。E6g-5 design-only 已提交为 `2b9a2a23d30`，定义
   fail-closed default comparator adapter 的输入/输出、不变量和拒绝原因。
-  当前进入 E6g-5b DBUG-only adapter shape：新增 private helper 和
-  `pq_orderby_fail_closed_ref_adapter_shape_smoke`，只在 stable-ref owned refs
-  和 sort-key-equal 前提下调用 handler `cmp_ref()` adapter；继续禁止接入
-  默认 comparator / heap reader，禁止打开 ORDER BY visible PQ gate。targeted
-  `pq_worker_attach_contract_smoke` + `pq_stats` passed，full `parallel_query`
-  suite passed 89/89，Code / Docs / Test review accepted；准备提交。
+  E6g-5b DBUG-only adapter shape 已提交为 `0de54003003`。当前进入 E6g-5c
+  tie-break contract smoke extension：新增独立
+  `pq_orderby_ref_adapter_contract_smoke`，验证 stable-ref owned refs 的方向
+  与既有 adapter 一致，并覆盖 null handler、ref length mismatch、equal ref
+  三类 fail-closed reject；继续禁止接入默认 comparator / heap reader，禁止
+  打开 ORDER BY visible PQ gate。targeted `pq_worker_attach_contract_smoke` +
+  `pq_stats` passed，full `parallel_query` suite passed 89/89，Code / Docs /
+  Test review accepted；准备提交。
 - Current phase correction: M11-E5d-5e-1 已提交为 `f54474bda65`；M11-E5d-5e-2 在 5e-1 candidate-disabled contract 后新增 central preflight blocker，仍保持现有 `HAS_ORDER_BY` serial boundary。下方超长历史摘要中的 5c 旧尾句不作为当前状态来源。
 - Current M11-E correction: M11-E5r closure 和 Post-E5r handoff 是当前
   ORDER BY 权威状态；真实执行仍 blocked，source work stopped。下方超长历史
