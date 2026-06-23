@@ -32,6 +32,7 @@ class Gather_operator;
 class JOIN;
 class MQueue_handle;
 class PQ_Leader_context;
+class PQ_Worker_context;
 class QEP_TAB;
 class THD;
 struct MEM_ROOT;
@@ -100,9 +101,11 @@ class PQblockScanIterator final : public TableRowIterator {
                       Gather_operator *gather, QEP_TAB *tab,
                       bool need_rowid = false,
                       MQueue_handle *handler = nullptr);
+  ~PQblockScanIterator() override;
 
   bool Init() override;
   int Read() override;
+  int End();
 
  private:
   const double m_expected_rows;
@@ -112,6 +115,9 @@ class PQblockScanIterator final : public TableRowIterator {
   QEP_TAB *m_tab;
   const bool m_need_rowid;
   MQueue_handle *m_handler;
+  PQ_Worker_context *m_worker_ctx{nullptr};
+  bool m_seen_eof{false};
+  bool m_inited{false};
 };
 
 /**
@@ -122,9 +128,11 @@ class PQRefIterator final : public TableRowIterator {
   PQRefIterator(THD *thd, TABLE *table, Index_lookup *ref, bool use_order,
                 PQTabType tab_type, double expected_rows,
                 ha_rows *examined_rows, Gather_operator *gather, QEP_TAB *tab);
+  ~PQRefIterator() override;
 
   bool Init() override;
   int Read() override;
+  int End();
 
  private:
   Index_lookup *const m_ref;
@@ -134,6 +142,10 @@ class PQRefIterator final : public TableRowIterator {
   ha_rows *const m_examined_rows;
   Gather_operator *m_gather;
   QEP_TAB *m_tab;
+  PQ_Worker_context *m_worker_ctx{nullptr};
+  bool m_seen_eof{false};
+  bool m_first_record_since_init{true};
+  bool m_inited{false};
 };
 
 unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRangeIterator(

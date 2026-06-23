@@ -1358,9 +1358,111 @@ PQblockScanIterator::PQblockScanIterator(
       m_need_rowid(need_rowid),
       m_handler(handler) {}
 
-bool PQblockScanIterator::Init() { return true; }
+PQblockScanIterator::~PQblockScanIterator() { End(); }
 
-int PQblockScanIterator::Read() { return 1; }
+bool PQblockScanIterator::Init() {
+  m_seen_eof = false;
+
+  if (m_inited) {
+    return false;
+  }
+
+  if (thd() == nullptr || table() == nullptr || table()->file == nullptr ||
+      !thd()->pq_is_worker || thd()->pq_worker_info == nullptr) {
+    return true;
+  }
+
+  auto *worker = static_cast<PQ_worker_info *>(thd()->pq_worker_info);
+  if (worker->m_open_ctx.worker_thd == nullptr) {
+    worker->m_open_ctx.worker_thd = thd();
+  }
+  if (worker->m_open_ctx.worker_table == nullptr) {
+    worker->m_open_ctx.worker_table = table();
+  }
+  if (worker->m_open_ctx.worker_handler == nullptr) {
+    worker->m_open_ctx.worker_handler = table()->file;
+  }
+  if (worker->m_open_ctx.worker_handler != table()->file ||
+      worker->m_open_ctx.worker_table != table()) {
+    return true;
+  }
+
+  if (m_handler != nullptr && worker->m_open_ctx.mq_handle == nullptr) {
+    worker->m_open_ctx.mq_handle = m_handler;
+  }
+
+  if (worker->m_worker_ctx != nullptr) {
+    return true;
+  }
+
+  PQ_Worker_context *new_ctx = nullptr;
+  const int error =
+      table()->file->pq_worker_scan_init(&worker->m_open_ctx, &new_ctx);
+  if (error != 0 || new_ctx == nullptr) {
+    if (error != HA_ERR_UNSUPPORTED) {
+      PrintError(error);
+    }
+    return true;
+  }
+
+  worker->m_worker_ctx = new_ctx;
+  m_worker_ctx = new_ctx;
+  m_inited = true;
+  return false;
+}
+
+int PQblockScanIterator::End() {
+  if (m_worker_ctx != nullptr && table() != nullptr && table()->file != nullptr) {
+    (void)table()->file->pq_worker_scan_end(m_worker_ctx);
+    if (thd() != nullptr && thd()->pq_worker_info != nullptr) {
+      auto *worker = static_cast<PQ_worker_info *>(thd()->pq_worker_info);
+      if (worker->m_worker_ctx == m_worker_ctx) {
+        worker->m_worker_ctx = nullptr;
+      }
+    }
+    m_worker_ctx = nullptr;
+  }
+  m_inited = false;
+  return -1;
+}
+
+int PQblockScanIterator::Read() {
+  if (m_seen_eof) {
+    return -1;
+  }
+
+  if (m_worker_ctx == nullptr || table() == nullptr || table()->file == nullptr) {
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return 1;
+  }
+
+  bool eof = false;
+  for (;;) {
+    const int error =
+        table()->file->pq_worker_scan_next(m_worker_ctx, table()->record[0],
+                                           &eof);
+    if (error == 0) {
+      if (eof) {
+        m_seen_eof = true;
+        table()->set_no_row();
+        return -1;
+      }
+      break;
+    }
+    if (error == HA_ERR_RECORD_DELETED && !thd()->killed) {
+      continue;
+    }
+    return HandleError(error);
+  }
+
+  if (m_examined_rows != nullptr) {
+    ++*m_examined_rows;
+  }
+  if (m_need_rowid) {
+    table()->file->position(table()->record[0]);
+  }
+  return 0;
+}
 
 PQRefIterator::PQRefIterator(THD *thd, TABLE *table, Index_lookup *ref,
                              bool use_order, PQTabType tab_type,
@@ -1375,9 +1477,120 @@ PQRefIterator::PQRefIterator(THD *thd, TABLE *table, Index_lookup *ref,
       m_gather(gather),
       m_tab(tab) {}
 
-bool PQRefIterator::Init() { return true; }
+PQRefIterator::~PQRefIterator() { End(); }
 
-int PQRefIterator::Read() { return 1; }
+bool PQRefIterator::Init() {
+  m_seen_eof = false;
+  m_first_record_since_init = true;
+
+  if (m_inited) {
+    return false;
+  }
+
+  if (thd() == nullptr || table() == nullptr || table()->file == nullptr ||
+      !thd()->pq_is_worker || thd()->pq_worker_info == nullptr ||
+      m_ref == nullptr) {
+    return true;
+  }
+
+  auto *worker = static_cast<PQ_worker_info *>(thd()->pq_worker_info);
+  if (worker->m_open_ctx.worker_thd == nullptr) {
+    worker->m_open_ctx.worker_thd = thd();
+  }
+  if (worker->m_open_ctx.worker_table == nullptr) {
+    worker->m_open_ctx.worker_table = table();
+  }
+  if (worker->m_open_ctx.worker_handler == nullptr) {
+    worker->m_open_ctx.worker_handler = table()->file;
+  }
+  if (worker->m_open_ctx.worker_handler != table()->file ||
+      worker->m_open_ctx.worker_table != table()) {
+    return true;
+  }
+
+  if (worker->m_worker_ctx != nullptr) {
+    return true;
+  }
+
+  PQ_Worker_context *new_ctx = nullptr;
+  const int error =
+      table()->file->pq_worker_scan_init(&worker->m_open_ctx, &new_ctx);
+  if (error != 0 || new_ctx == nullptr) {
+    if (error != HA_ERR_UNSUPPORTED) {
+      PrintError(error);
+    }
+    return true;
+  }
+
+  worker->m_worker_ctx = new_ctx;
+  m_worker_ctx = new_ctx;
+  m_inited = true;
+  return false;
+}
+
+int PQRefIterator::End() {
+  if (m_worker_ctx != nullptr && table() != nullptr && table()->file != nullptr) {
+    (void)table()->file->pq_worker_scan_end(m_worker_ctx);
+    if (thd() != nullptr && thd()->pq_worker_info != nullptr) {
+      auto *worker = static_cast<PQ_worker_info *>(thd()->pq_worker_info);
+      if (worker->m_worker_ctx == m_worker_ctx) {
+        worker->m_worker_ctx = nullptr;
+      }
+    }
+    m_worker_ctx = nullptr;
+  }
+  m_inited = false;
+  return -1;
+}
+
+int PQRefIterator::Read() {
+  if (m_seen_eof) {
+    return -1;
+  }
+
+  if (m_worker_ctx == nullptr || table() == nullptr || table()->file == nullptr) {
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return 1;
+  }
+
+  if (m_first_record_since_init) {
+    m_first_record_since_init = false;
+    if (m_ref->impossible_null_ref()) {
+      table()->set_no_row();
+      m_seen_eof = true;
+      return -1;
+    }
+    if (construct_lookup(thd(), table(), m_ref)) {
+      table()->set_no_row();
+      m_seen_eof = true;
+      return -1;
+    }
+  }
+
+  bool eof = false;
+  for (;;) {
+    const int error =
+        table()->file->pq_worker_scan_next(m_worker_ctx, table()->record[0],
+                                           &eof);
+    if (error == 0) {
+      if (eof) {
+        m_seen_eof = true;
+        table()->set_no_row();
+        return -1;
+      }
+      break;
+    }
+    if (error == HA_ERR_RECORD_DELETED && !thd()->killed) {
+      continue;
+    }
+    return HandleError(error);
+  }
+
+  if (m_examined_rows != nullptr) {
+    ++*m_examined_rows;
+  }
+  return 0;
+}
 
 unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRangeIterator(
     THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *path,

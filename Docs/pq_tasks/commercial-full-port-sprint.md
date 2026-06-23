@@ -430,7 +430,7 @@ Status: in progress
 
 #### Batch B1a - pq_handler commercial dispatch substrate
 
-Status: review accepted；ready to commit
+Status: completed and committed
 
 目标：
 
@@ -478,6 +478,59 @@ Completion Report - Batch B1a:
   - Code / Docs / Test review accepted；no Critical / Important findings；
   - review noted that split wait / dependent-ref key bookkeeping must be
     revisited before exposing this substrate to user-visible ref/range paths.
+  - committed as `6a2f2ad99e3`。
+
+#### Batch B1b - worker iterator typed handler lifecycle
+
+Status: review accepted；ready to commit
+
+目标：
+
+- 将当前 `PQblockScanIterator` / `PQRefIterator` 从裸 fail-closed stub 推进到
+  当前 8.0.46 typed handler API 的生命周期骨架；
+- 保持商用 worker iterator 的 init/read/end 语义方向，但不恢复旧
+  `ha_pq_next(void*)` API；
+- 不打开用户可见场景：当前 InnoDB `pq_worker_scan_next()` 仍返回
+  `HA_ERR_UNSUPPORTED`，所以本批只建立调用面。
+
+Completion Report - Batch B1b:
+
+- changed files:
+  - `sql/parallel_query/pq_iterators.h`
+  - `sql/parallel_query/pq_iterators.cc`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added `PQ_Worker_context *` ownership fields and EOF/init state to
+    `PQblockScanIterator` and `PQRefIterator`；
+  - `Init()` now obtains `PQ_worker_info` from worker THD, binds/validates
+    `PQ_Worker_open_context` against the current worker TABLE/handler, and
+    calls `handler::pq_worker_scan_init()`；
+  - `Read()` now calls `handler::pq_worker_scan_next()` with the typed worker
+    context, handles EOF, deleted rows, examined row accounting, and optional
+    rowid positioning；
+  - `End()` / destructor now call `handler::pq_worker_scan_end()` idempotently
+    and clear `PQ_worker_info::m_worker_ctx` when it owns the same context；
+  - `PQRefIterator` keeps first-row lookup construction before pulling rows.
+- validation:
+  - `git diff --check -- sql/parallel_query/pq_iterators.h
+    sql/parallel_query/pq_iterators.cc` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed。
+  - `./build-ninja/runtime_output_directory/mysqld --no-defaults --verbose --help`
+    returned `rc=0`。
+- risks carried forward:
+  - InnoDB pull row path is still disabled, so this lifecycle will currently
+    fail closed with `HA_ERR_UNSUPPORTED`；
+  - DOP>1 worker-id binding depends on the worker execution thread wiring in
+    `sql_parallel.*`；本批只使用 worker THD 上的 `PQ_worker_info`；
+  - ref-key dependent range build is not restored yet；后续 D1/C1 需要把
+    `PQRefIterator` 的 ref lookup 与 B1a 的 ref-key slice map 接通。
+- review:
+  - initial review required preserving fail-closed semantics when
+    `pq_worker_scan_next()` returns `HA_ERR_UNSUPPORTED` with `eof=true`；
+  - fixed `Read()` to treat EOF only when `error == 0 && eof`；
+  - fixed `Init()` to publish `PQ_Worker_context` only after successful local
+    init, and to reject replacing an existing worker context.
+  - re-review accepted；no remaining required fixes.
 
 ### Batch C1 - SQL main hook alignment
 
