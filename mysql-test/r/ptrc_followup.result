@@ -1,0 +1,187 @@
+# PTRC commercial follow-up crash regressions
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET @saved_ptrc_cost_threshold=@@rds_partial_result_cache_cost_threshold;
+SET optimizer_switch='partial_result_cache=on,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold=0;
+# BUGFIX: TABLE::in_use may be null while building PTRC key tables.
+CREATE TABLE ptrc_fu_t1 (a SMALLINT) ENGINE=InnoDB;
+CREATE TABLE ptrc_fu_t2 (a SMALLINT) ENGINE=InnoDB;
+SELECT col2
+FROM (SELECT a AS col2 FROM ptrc_fu_t2 GROUP BY a) AS b
+WHERE b.col2 = ALL (SELECT a FROM ptrc_fu_t1);
+col2
+PREPARE stmt0 FROM
+'SELECT col2 FROM (SELECT a AS col2 FROM ptrc_fu_t2 GROUP BY a) AS b WHERE b.col2 = ALL (SELECT a FROM ptrc_fu_t1)';
+EXECUTE stmt0;
+col2
+DEALLOCATE PREPARE stmt0;
+DROP TABLE ptrc_fu_t1, ptrc_fu_t2;
+# BUGFIX: eliminated LEFT JOIN table must not be used as a PTRC cache key.
+CREATE TABLE ptrc_fu_lj_t1 (medal_now INT) ENGINE=InnoDB;
+CREATE TABLE ptrc_fu_lj_t2 (id INT) ENGINE=InnoDB;
+CREATE TABLE ptrc_fu_lj_t3 (medal_now INT) ENGINE=InnoDB;
+INSERT INTO ptrc_fu_lj_t1 VALUES (1);
+INSERT INTO ptrc_fu_lj_t2 VALUES (1), (2), (3);
+INSERT INTO ptrc_fu_lj_t3 VALUES (1), (2), (NULL);
+EXPLAIN FORMAT=TREE
+SELECT DISTINCT
+(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM ptrc_fu_lj_t1)
+THEN 1 ELSE 0 END) IS NULL
+FROM ptrc_fu_lj_t2
+LEFT JOIN ptrc_fu_lj_t3 AS ref_49 ON TRUE;
+EXPLAIN
+-> Limit: 1 row(s)  (...)
+    -> Table scan on <temporary>  (...)
+        -> Temporary table  (...)
+            -> Left hash join (no condition)  (...)
+                -> Table scan on ptrc_fu_lj_t2  (...)
+                -> Hash
+                    -> Table scan on ref_49  (...)
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(ref_49.medal_now)
+        -> Limit: 1 row(s)  (...)
+            -> Table scan on ptrc_fu_lj_t1  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.ref_49.medal_now' of SELECT #2 was resolved in SELECT #1
+SELECT DISTINCT
+(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM ptrc_fu_lj_t1)
+THEN 1 ELSE 0 END) IS NULL
+FROM ptrc_fu_lj_t2
+LEFT JOIN ptrc_fu_lj_t3 AS ref_49 ON TRUE;
+(CASE WHEN EXISTS (SELECT ref_49.medal_now FROM ptrc_fu_lj_t1)
+THEN 1 ELSE 0 END) IS NULL
+0
+DROP TABLE ptrc_fu_lj_t1, ptrc_fu_lj_t2, ptrc_fu_lj_t3;
+# BUGFIX: const-table PTRC keys must use initialized NULL flags.
+CREATE TABLE ptrc_fu_ct_t1 (
+id INT PRIMARY KEY AUTO_INCREMENT,
+taskid INT NOT NULL,
+dbid INT NOT NULL,
+create_date DATETIME NOT NULL,
+KEY(taskid, dbid)
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_fu_ct_t2 (
+db_id INT PRIMARY KEY,
+name VARCHAR(40) NOT NULL,
+primary_uid INT NOT NULL,
+KEY(primary_uid)
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_fu_ct_t3 (
+taskgenid INT PRIMARY KEY AUTO_INCREMENT,
+dbid INT NOT NULL,
+taskid INT NOT NULL,
+how_often INT NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_fu_ct_t4 (
+task_id INT NOT NULL,
+description VARCHAR(40) NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO ptrc_fu_ct_t1 (id, taskid, dbid, create_date) VALUES
+(1, 1, 15, '2003-09-29 10:31:36'),
+(2, 1, 21, '2003-09-29 10:31:36');
+INSERT INTO ptrc_fu_ct_t2 VALUES
+(18, 'Not Set 1', 0), (19, 'Valid', 1), (20, 'Valid 2', 1),
+(21, 'Should Not Return', 1), (26, 'Not Set 2', 0), (-1, 'All DB', 0);
+INSERT INTO ptrc_fu_ct_t3 (taskgenid, dbid, taskid, how_often) VALUES
+(1, -1, 1, 1);
+INSERT INTO ptrc_fu_ct_t4 VALUES (1, 'Daily Check List'), (2, 'Weekly Status');
+EXPLAIN FORMAT=TREE
+SELECT a.dbid, b.name,
+CAST('2003-09-28' AS DATE) >=
+IFNULL((SELECT /*+ PRC_SUBQUERY() */ DATE(MAX(c.create_date))
+FROM ptrc_fu_ct_t1 AS c
+WHERE c.dbid = b.db_id AND c.taskid = a.taskgenid),
+CAST('1950-01-01' AS DATE)) AS due
+FROM ptrc_fu_ct_t3 AS a
+JOIN ptrc_fu_ct_t2 AS b
+JOIN ptrc_fu_ct_t4 AS d
+WHERE a.dbid = -1 AND b.primary_uid = 1 AND d.task_id = a.taskid
+AND a.taskgenid = 1
+ORDER BY b.name;
+EXPLAIN
+-> Sort: b.`name`
+    -> Stream results  (...)
+        -> Inner hash join (no condition)  (...)
+            -> Filter: (d.task_id = '1')  (...)
+                -> Table scan on d  (...)
+            -> Hash
+                -> Index lookup on b using primary_uid (primary_uid=1)  (...)
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(a.taskgenid, b.db_id)
+        -> Aggregate: max(c.create_date)  (...)
+            -> Index lookup on c using taskid (taskid='1', dbid=b.db_id)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.b.db_id' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.a.taskgenid' of SELECT #2 was resolved in SELECT #1
+SELECT a.dbid, b.name,
+CAST('2003-09-28' AS DATE) >=
+IFNULL((SELECT /*+ PRC_SUBQUERY() */ DATE(MAX(c.create_date))
+FROM ptrc_fu_ct_t1 AS c
+WHERE c.dbid = b.db_id AND c.taskid = a.taskgenid),
+CAST('1950-01-01' AS DATE)) AS due
+FROM ptrc_fu_ct_t3 AS a
+JOIN ptrc_fu_ct_t2 AS b
+JOIN ptrc_fu_ct_t4 AS d
+WHERE a.dbid = -1 AND b.primary_uid = 1 AND d.task_id = a.taskid
+AND a.taskgenid = 1
+ORDER BY b.name;
+dbid	name	due
+-1	Should Not Return	0
+-1	Valid	1
+-1	Valid 2	1
+DROP TABLE ptrc_fu_ct_t1, ptrc_fu_ct_t2, ptrc_fu_ct_t3, ptrc_fu_ct_t4;
+# BUGFIX: QEP_shared::m_position may be unavailable during PTRC costing.
+CREATE TABLE ptrc_fu_pos_t0 (
+c1 BIT(1) NOT NULL,
+PRIMARY KEY (c1)
+) ENGINE=InnoDB;
+SET rds_partial_result_cache_cost_threshold=0.01;
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT c1 AS c10
+FROM ptrc_fu_pos_t0 t1
+WHERE c1 NOT IN (((SELECT c1 AS c11
+FROM ptrc_fu_pos_t0 t2) IN (t1.c1 IS NULL))
+IN (SELECT c1 AS c12
+FROM ptrc_fu_pos_t0 t3));
+EXPLAIN
+-> Filter: (t1.c1 <> <cache>(<in_optimizer>(((select #2) = (t1.c1 is null)),<exists>(select #3))))  (...) (actual rows=0 loops=1)
+    -> Covering index scan on t1 using PRIMARY  (...) (actual rows=0 loops=1)
+    -> Select #2 (subquery in condition; run only once)
+        -> Covering index scan on t2 using PRIMARY  (...) (actual rows=0 loops=1)
+    -> Select #3 (subquery in condition; dependent)
+        -> Limit: 1 row(s)  (actual rows=0 loops=1)
+            -> Filter: <if>(outer_field_is_not_null, (<cache>(((select #2) = (t1.c1 is null))) = t3.c1), true)  (actual rows=0 loops=1)
+                -> Alternative plans for IN subquery: Index lookup unless c1 IS NULL  (...) (actual rows=0 loops=1)
+                    -> Single-row covering index lookup on t3 using PRIMARY (c1=<cache>(((select #2) = (t1.c1 is null))))  (...) (never executed)
+                    -> Table scan on t3  (...) (actual rows=0 loops=1)
+                -> Select #2 (subquery in condition; run only once)
+                    -> Covering index scan on t2 using PRIMARY  (...) (actual rows=0 loops=1)
+
+SET rds_partial_result_cache_cost_threshold=0;
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT c1 AS c10
+FROM ptrc_fu_pos_t0 t1
+WHERE c1 NOT IN (((SELECT c1 AS c11
+FROM ptrc_fu_pos_t0 t2) IN (t1.c1 IS NULL))
+IN (SELECT c1 AS c12
+FROM ptrc_fu_pos_t0 t3));
+EXPLAIN
+-> Filter: (t1.c1 <> <cache>(<in_optimizer>(((select #2) = (t1.c1 is null)),<exists>(select #3))))  (...) (actual rows=0 loops=1)
+    -> Covering index scan on t1 using PRIMARY  (...) (actual rows=0 loops=1)
+    -> Select #2 (subquery in condition; run only once)
+        -> Covering index scan on t2 using PRIMARY  (...) (actual rows=0 loops=1)
+    -> Select #3 (subquery in condition; dependent)
+        -> Result cache : cache keys(t1.c1) (Cache Hits: #, Cache Misses: #, Cache Evictions: #, Cache Overflows: #, Memory Usage: # )  (actual rows=0 loops=1)
+            -> Limit: 1 row(s)  (actual rows=0 loops=1)
+                -> Filter: <if>(outer_field_is_not_null, (<cache>(((select #2) = (t1.c1 is null))) = t3.c1), true)  (actual rows=0 loops=1)
+                    -> Alternative plans for IN subquery: Index lookup unless c1 IS NULL  (...) (actual rows=0 loops=1)
+                        -> Single-row covering index lookup on t3 using PRIMARY (c1=<cache>(((select #2) = (t1.c1 is null))))  (...) (never executed)
+                        -> Table scan on t3  (...) (actual rows=0 loops=1)
+                    -> Select #2 (subquery in condition; run only once)
+                        -> Covering index scan on t2 using PRIMARY  (...) (actual rows=0 loops=1)
+
+DROP TABLE ptrc_fu_pos_t0;
+SET optimizer_switch=@saved_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold=@saved_ptrc_cost_threshold;

@@ -1,0 +1,349 @@
+# PTRC TaurusDB semantic portability regressions
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET @saved_ptrc_cost_threshold=@@rds_partial_result_cache_cost_threshold;
+SET optimizer_switch='partial_result_cache=on,hash_join=off,block_nested_loop=off,batched_key_access=off,semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold=0;
+# Empty inner results should be cached and preserve join results.
+CREATE TABLE ptrc_sem_j_t1 (
+a INT,
+b INT,
+KEY(a)
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_sem_j_t2 (
+a INT,
+b INT,
+KEY(a)
+) ENGINE=InnoDB;
+INSERT INTO ptrc_sem_j_t1 VALUES (1,2),(2,3),(2,3),(2,3);
+INSERT INTO ptrc_sem_j_t2 VALUES (1,3),(3,4);
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT /*+ JOIN_ORDER(t1, t2) PRC_JOIN(t2) */
+t1.a, t1.b, t2.b
+FROM ptrc_sem_j_t1 AS t1
+STRAIGHT_JOIN ptrc_sem_j_t2 AS t2
+WHERE t1.a = t2.a
+ORDER BY t1.a;
+EXPLAIN
+-> Nested loop inner join  (...) (actual rows=1 loops=1)
+    -> Sort: t1.a  (...) (actual rows=4 loops=1)
+        -> Filter: (t1.a is not null)  (...) (actual rows=4 loops=1)
+            -> Table scan on t1  (...) (actual rows=4 loops=1)
+    -> Result cache : cache keys(t1.a, t1.b) (Cache Hits: #nonzero, Cache Misses: #, Cache Evictions: #, Cache Overflows: #, Memory Usage: # )  (...) (actual rows=0.25 loops=4)
+        -> Index lookup on t2 using a (a=t1.a)  (...) (actual rows=0.25 loops=4)
+
+SELECT /*+ JOIN_ORDER(t1, t2) PRC_JOIN(t2) */
+t1.a, t1.b, t2.b
+FROM ptrc_sem_j_t1 AS t1
+STRAIGHT_JOIN ptrc_sem_j_t2 AS t2
+WHERE t1.a = t2.a
+ORDER BY t1.a, t1.b, t2.b;
+a	b	b
+1	2	3
+SELECT /*+ JOIN_ORDER(t1, t2) NO_PRC_JOIN(t2) */
+t1.a, t1.b, t2.b
+FROM ptrc_sem_j_t1 AS t1
+STRAIGHT_JOIN ptrc_sem_j_t2 AS t2
+WHERE t1.a = t2.a
+ORDER BY t1.a, t1.b, t2.b;
+a	b	b
+1	2	3
+DROP TABLE ptrc_sem_j_t2, ptrc_sem_j_t1;
+# Repeated-key join rows should preserve reverse-index scan order.
+CREATE TABLE ptrc_sem_order_t1 (
+a INT,
+b INT,
+c INT,
+KEY(a DESC, b ASC, c DESC)
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_sem_order_t2 (
+d INT,
+KEY(d ASC)
+) ENGINE=InnoDB;
+ANALYZE TABLE ptrc_sem_order_t1, ptrc_sem_order_t2;
+Table	Op	Msg_type	Msg_text
+test.ptrc_sem_order_t1	analyze	status	OK
+test.ptrc_sem_order_t2	analyze	status	OK
+EXPLAIN FORMAT=TREE
+SELECT *
+FROM ptrc_sem_order_t2, ptrc_sem_order_t1 FORCE INDEX(`a`)
+HAVING c < 3
+ORDER BY a, b
+LIMIT 10;
+EXPLAIN
+-> Limit: 10 row(s)  (...)
+    -> Nested loop inner join  (...)
+        -> Sort: ptrc_sem_order_t1.a, ptrc_sem_order_t1.b  (...)
+            -> Filter: (ptrc_sem_order_t1.c < 3)  (...)
+                -> Index scan on ptrc_sem_order_t1 using a  (...)
+        -> Result cache : cache keys(ptrc_sem_order_t1.a, ptrc_sem_order_t1.b, ptrc_sem_order_t1.c)  (...)
+            -> Index scan on ptrc_sem_order_t2 using d  (...)
+
+SELECT *
+FROM ptrc_sem_order_t2, ptrc_sem_order_t1 FORCE INDEX(`a`)
+HAVING c < 3
+ORDER BY a, b
+LIMIT 10;
+d	a	b	c
+1	1	1	2
+2	1	1	2
+3	1	1	2
+4	1	1	2
+5	1	1	2
+1	1	1	2
+2	1	1	2
+3	1	1	2
+4	1	1	2
+5	1	1	2
+DROP TABLE ptrc_sem_order_t1, ptrc_sem_order_t2;
+# Tuple NOT IN and ANY subqueries should preserve NULL state.
+CREATE TABLE ptrc_sem_c (
+col_int_nokey INTEGER NOT NULL,
+col_int_key INTEGER GENERATED ALWAYS AS
+(col_int_nokey + col_int_nokey) VIRTUAL,
+col_varchar_nokey VARCHAR(1) NOT NULL,
+col_varchar_key VARCHAR(2) GENERATED ALWAYS AS
+(CONCAT(col_varchar_nokey, col_varchar_nokey)),
+KEY (col_int_key),
+KEY (col_int_key, col_varchar_key)
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_sem_cc (
+col_int_nokey INTEGER,
+col_int_key INTEGER GENERATED ALWAYS AS
+(col_int_nokey + col_int_nokey) VIRTUAL,
+col_varchar_nokey VARCHAR(1),
+col_varchar_key VARCHAR(2) GENERATED ALWAYS AS
+(CONCAT(col_varchar_nokey, col_varchar_nokey)),
+KEY (col_int_key),
+KEY (col_varchar_key),
+KEY (col_int_key, col_varchar_key),
+KEY (col_int_key, col_int_nokey),
+KEY (col_varchar_key, col_varchar_nokey)
+) ENGINE=InnoDB;
+INSERT INTO ptrc_sem_c (col_int_nokey, col_varchar_nokey)
+VALUES (8,'m');
+INSERT INTO ptrc_sem_cc (col_int_nokey, col_varchar_nokey)
+VALUES (8,'e'),(NULL,NULL),(8,'p');
+EXPLAIN FORMAT=TREE
+SELECT alias2.col_int_key, alias1.col_int_nokey, alias2.col_varchar_key
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE (alias2.col_int_key, alias1.col_int_nokey) NOT IN
+(SELECT /*+ PRC_SUBQUERY() */ sq2.col_int_nokey, sq1.col_int_key
+FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+GROUP BY 1, 2);
+EXPLAIN
+-> Nested loop inner join  (...)
+    -> Index scan on alias1 using col_int_key_3  (...)
+    -> Result cache : cache keys(alias1.col_int_nokey)  (...)
+        -> Filter: <in_optimizer>((alias2.col_int_key,alias1.col_int_nokey),<exists>(select #2) is false)  (...)
+            -> Index scan on alias2 using col_int_key_2  (...)
+            -> Select #2 (subquery in condition; dependent)
+                -> Result cache : cache keys(alias1.col_int_nokey, alias2.col_int_key)
+                    -> Limit: 1 row(s)  (...)
+                        -> Filter: (<if>(outer_field_is_not_null, <is_not_null_test>(sq2.col_int_nokey), true) and <if>(outer_field_is_not_null, <is_not_null_test>(sq1.col_int_key), true))  (...)
+                            -> Nested loop inner join  (...)
+                                -> Filter: <if>(outer_field_is_not_null, ((<cache>(alias2.col_int_key) = sq2.col_int_nokey) or <cache>((sq2.col_int_nokey is null))), true)  (...)
+                                    -> Table scan on sq2  (...)
+                                -> Result cache : cache keys(alias1.col_int_nokey, alias2.col_int_key, sq2.col_int_nokey)  (...)
+                                    -> Filter: <if>(outer_field_is_not_null, ((<cache>(alias1.col_int_nokey) = sq1.col_int_key) or (sq1.col_int_key is null)), true)  (...)
+                                        -> Alternative plans for IN subquery: Index lookup unless col_int_key IS NULL  (...)
+                                            -> Covering index lookup on sq1 using col_int_key (col_int_key=<cache>(alias1.col_int_nokey) or NULL)  (...)
+                                            -> Table scan on sq1  (...)
+
+SELECT alias2.col_int_key, alias1.col_int_nokey,
+alias2.col_varchar_key AS field1
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE (alias2.col_int_key, alias1.col_int_nokey) NOT IN
+(SELECT /*+ PRC_SUBQUERY() */
+sq2.col_int_nokey, sq1.col_int_key
+FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+GROUP BY 1, 2)
+ORDER BY 1, 2, 3;
+col_int_key	col_int_nokey	field1
+16	NULL	ee
+16	NULL	pp
+16	8	ee
+16	8	ee
+16	8	pp
+16	8	pp
+SELECT alias2.col_int_key, alias1.col_int_nokey,
+alias2.col_varchar_key AS field1
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE (alias2.col_int_key, alias1.col_int_nokey) NOT IN
+(SELECT sq2.col_int_nokey, sq1.col_int_key
+FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+GROUP BY 1, 2)
+ORDER BY 1, 2, 3;
+col_int_key	col_int_nokey	field1
+16	NULL	ee
+16	NULL	pp
+16	8	ee
+16	8	ee
+16	8	pp
+16	8	pp
+EXPLAIN FORMAT=TREE
+SELECT alias2.col_int_key, alias1.col_int_nokey, alias2.col_varchar_key
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE NOT(alias2.col_int_key >= ANY
+(SELECT /*+ PRC_SUBQUERY() */ sq2.col_int_nokey
+FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+WHERE sq1.col_int_key = alias1.col_int_key
+GROUP BY 1));
+EXPLAIN
+-> Nested loop inner join  (...)
+    -> Index scan on alias1 using col_int_key_3  (...)
+    -> Result cache : cache keys(alias1.col_int_key, alias1.col_int_nokey)  (...)
+        -> Filter: <not>(<in_optimizer>(alias2.col_int_key,<exists>(select #2)))  (...)
+            -> Index scan on alias2 using col_int_key_2  (...)
+            -> Select #2 (subquery in condition; dependent)
+                -> Result cache : cache keys(alias1.col_int_key, alias2.col_int_key)
+                    -> Limit: 1 row(s)  (...)
+                        -> Nested loop inner join  (...)
+                            -> Filter: <if>(outer_field_is_not_null, (<cache>(alias2.col_int_key) >= sq2.col_int_nokey), true)  (...)
+                                -> Table scan on sq2  (...)
+                            -> Result cache : cache keys(alias1.col_int_key, alias2.col_int_key, sq2.col_int_nokey)  (...)
+                                -> Covering index lookup on sq1 using col_int_key (col_int_key=alias1.col_int_key)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.alias1.col_int_key' of SELECT #2 was resolved in SELECT #1
+SELECT alias2.col_int_key, alias1.col_int_nokey,
+alias2.col_varchar_key AS field1
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE NOT(alias2.col_int_key >= ANY
+(SELECT /*+ PRC_SUBQUERY() */ sq2.col_int_nokey
+FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+WHERE sq1.col_int_key = alias1.col_int_key
+GROUP BY 1))
+ORDER BY 1, 2, 3;
+col_int_key	col_int_nokey	field1
+NULL	NULL	NULL
+16	NULL	ee
+16	NULL	pp
+SELECT alias2.col_int_key, alias1.col_int_nokey,
+alias2.col_varchar_key AS field1
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE NOT(alias2.col_int_key >= ANY
+(SELECT sq2.col_int_nokey
+FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+WHERE sq1.col_int_key = alias1.col_int_key
+GROUP BY 1))
+ORDER BY 1, 2, 3;
+col_int_key	col_int_nokey	field1
+NULL	NULL	NULL
+16	NULL	ee
+16	NULL	pp
+DROP TABLE ptrc_sem_c, ptrc_sem_cc;
+# View-derived cache keys should be found correctly.
+CREATE TABLE ptrc_sem_view_t1 (
+pk INT NOT NULL AUTO_INCREMENT,
+col_int_key INT NOT NULL,
+col_varchar_key VARCHAR(1) NOT NULL,
+col_varchar_nokey VARCHAR(1) NOT NULL,
+PRIMARY KEY (pk),
+KEY col_int_key (col_int_key),
+KEY col_varchar_key (col_varchar_key, col_int_key)
+) ENGINE=InnoDB;
+INSERT INTO ptrc_sem_view_t1 VALUES
+(1,0,'j','j'),(2,8,'v','v'),(3,1,'c','c'),
+(4,8,'m','m'),(5,9,'d','d');
+CREATE VIEW ptrc_sem_v1 AS SELECT * FROM ptrc_sem_view_t1;
+EXPLAIN FORMAT=TREE SELECT alias2.col_varchar_nokey
+FROM ptrc_sem_v1 AS alias1
+RIGHT JOIN ptrc_sem_view_t1 AS alias2 ON TRUE
+WHERE alias2.col_varchar_key IN
+(SELECT /*+ PRC_SUBQUERY() */ sq1.col_varchar_nokey
+FROM ptrc_sem_v1 AS sq1
+WHERE sq1.pk != alias1.col_int_key
+AND sq1.col_varchar_key > alias1.col_varchar_key)
+ORDER BY alias2.pk, alias1.pk;
+EXPLAIN
+-> Sort: alias2.pk, pk
+    -> Stream results  (...)
+        -> Filter: <in_optimizer>(alias2.col_varchar_key,<exists>(select #2))  (...)
+            -> Nested loop left join  (...)
+                -> Table scan on alias2  (...)
+                -> Result cache : cache keys(alias2.col_varchar_key, alias2.col_varchar_nokey, alias2.pk)  (...)
+                    -> Index scan on ptrc_sem_view_t1 using col_varchar_key  (...)
+            -> Select #2 (subquery in condition; dependent)
+                -> Result cache : cache keys(alias2.col_varchar_key, ptrc_sem_view_t1.col_int_key, ptrc_sem_view_t1.col_varchar_key)
+                    -> Limit: 1 row(s)  (...)
+                        -> Filter: ((ptrc_sem_view_t1.pk <> ptrc_sem_view_t1.col_int_key) and (ptrc_sem_view_t1.col_varchar_key > ptrc_sem_view_t1.col_varchar_key) and (<cache>(alias2.col_varchar_key) = ptrc_sem_view_t1.col_varchar_nokey))  (...)
+                            -> Table scan on ptrc_sem_view_t1  (...)
+
+Warnings:
+Note	1276	Field or reference 'alias1.col_int_key' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'alias1.col_varchar_key' of SELECT #2 was resolved in SELECT #1
+SELECT alias2.col_varchar_nokey
+FROM ptrc_sem_v1 AS alias1
+RIGHT JOIN ptrc_sem_view_t1 AS alias2 ON TRUE
+WHERE alias2.col_varchar_key IN
+(SELECT /*+ PRC_SUBQUERY() */ sq1.col_varchar_nokey
+FROM ptrc_sem_v1 AS sq1
+WHERE sq1.pk != alias1.col_int_key
+AND sq1.col_varchar_key > alias1.col_varchar_key)
+ORDER BY alias2.pk, alias1.pk;
+col_varchar_nokey
+j
+v
+v
+v
+v
+m
+m
+m
+d
+DROP VIEW ptrc_sem_v1;
+CREATE VIEW ptrc_sem_v1 AS
+SELECT (pk + 0) AS pk,
+(col_int_key + 0) AS col_int_key,
+CONCAT(col_varchar_key, '') AS col_varchar_key,
+CONCAT(col_varchar_nokey, '') AS col_varchar_nokey
+FROM ptrc_sem_view_t1;
+EXPLAIN FORMAT=TREE SELECT alias2.col_varchar_nokey
+FROM ptrc_sem_v1 AS alias1
+RIGHT JOIN ptrc_sem_view_t1 AS alias2 ON TRUE
+WHERE alias2.col_varchar_key IN
+(SELECT /*+ PRC_SUBQUERY() */ sq1.col_varchar_nokey
+FROM ptrc_sem_v1 AS sq1
+WHERE sq1.pk != alias1.col_int_key
+AND sq1.col_varchar_key > alias1.col_varchar_key)
+ORDER BY alias2.pk, alias1.pk;
+EXPLAIN
+-> Sort: alias2.pk, pk
+    -> Stream results  (...)
+        -> Filter: <in_optimizer>(alias2.col_varchar_key,<exists>(select #2))  (...)
+            -> Nested loop left join  (...)
+                -> Table scan on alias2  (...)
+                -> Result cache : cache keys(alias2.col_varchar_key, alias2.col_varchar_nokey, alias2.pk)  (...)
+                    -> Index scan on ptrc_sem_view_t1 using col_varchar_key  (...)
+            -> Select #2 (subquery in condition; dependent)
+                -> Result cache : cache keys(alias2.col_varchar_key, ptrc_sem_view_t1.col_int_key, ptrc_sem_view_t1.col_varchar_key)
+                    -> Limit: 1 row(s)  (...)
+                        -> Filter: (((ptrc_sem_view_t1.pk + 0) <> (ptrc_sem_view_t1.col_int_key + 0)) and (concat(ptrc_sem_view_t1.col_varchar_key,'') > concat(ptrc_sem_view_t1.col_varchar_key,'')) and (<cache>(alias2.col_varchar_key) = concat(ptrc_sem_view_t1.col_varchar_nokey,'')))  (...)
+                            -> Table scan on ptrc_sem_view_t1  (...)
+
+Warnings:
+Note	1276	Field or reference 'alias1.col_int_key' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'alias1.col_varchar_key' of SELECT #2 was resolved in SELECT #1
+SELECT alias2.col_varchar_nokey
+FROM ptrc_sem_v1 AS alias1
+RIGHT JOIN ptrc_sem_view_t1 AS alias2 ON TRUE
+WHERE alias2.col_varchar_key IN
+(SELECT /*+ PRC_SUBQUERY() */ sq1.col_varchar_nokey
+FROM ptrc_sem_v1 AS sq1
+WHERE sq1.pk != alias1.col_int_key
+AND sq1.col_varchar_key > alias1.col_varchar_key)
+ORDER BY alias2.pk, alias1.pk;
+col_varchar_nokey
+j
+v
+v
+v
+v
+m
+m
+m
+d
+DROP VIEW ptrc_sem_v1;
+DROP TABLE ptrc_sem_view_t1;
+SET optimizer_switch=@saved_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold=@saved_ptrc_cost_threshold;

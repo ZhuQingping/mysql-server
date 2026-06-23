@@ -1,0 +1,249 @@
+--echo # PTRC TaurusDB semantic portability regressions
+
+--source include/elide_costs.inc
+
+let $elide_ptrc_analyze_hits = /[(]cost=[0-9.e+-]+ rows=[0-9.e+-]+[)]/(...)/ /[(]actual time=[0-9.e+-]+ rows/(actual rows/ /Cache Hits: [1-9][0-9]*/Cache Hits: #nonzero/ /Cache Misses: [0-9]+/Cache Misses: #/ /Cache Evictions: [0-9]+/Cache Evictions: #/ /Cache Overflows: [0-9]+/Cache Overflows: #/ /Memory Usage: [0-9]+/Memory Usage: #/;
+
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET @saved_ptrc_cost_threshold=@@rds_partial_result_cache_cost_threshold;
+SET optimizer_switch='partial_result_cache=on,hash_join=off,block_nested_loop=off,batched_key_access=off,semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold=0;
+
+--echo # Empty inner results should be cached and preserve join results.
+CREATE TABLE ptrc_sem_j_t1 (
+  a INT,
+  b INT,
+  KEY(a)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_sem_j_t2 (
+  a INT,
+  b INT,
+  KEY(a)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_sem_j_t1 VALUES (1,2),(2,3),(2,3),(2,3);
+INSERT INTO ptrc_sem_j_t2 VALUES (1,3),(3,4);
+
+--replace_regex $elide_ptrc_analyze_hits
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT /*+ JOIN_ORDER(t1, t2) PRC_JOIN(t2) */
+       t1.a, t1.b, t2.b
+FROM ptrc_sem_j_t1 AS t1
+STRAIGHT_JOIN ptrc_sem_j_t2 AS t2
+WHERE t1.a = t2.a
+ORDER BY t1.a;
+
+SELECT /*+ JOIN_ORDER(t1, t2) PRC_JOIN(t2) */
+       t1.a, t1.b, t2.b
+FROM ptrc_sem_j_t1 AS t1
+STRAIGHT_JOIN ptrc_sem_j_t2 AS t2
+WHERE t1.a = t2.a
+ORDER BY t1.a, t1.b, t2.b;
+
+SELECT /*+ JOIN_ORDER(t1, t2) NO_PRC_JOIN(t2) */
+       t1.a, t1.b, t2.b
+FROM ptrc_sem_j_t1 AS t1
+STRAIGHT_JOIN ptrc_sem_j_t2 AS t2
+WHERE t1.a = t2.a
+ORDER BY t1.a, t1.b, t2.b;
+
+DROP TABLE ptrc_sem_j_t2, ptrc_sem_j_t1;
+
+--echo # Repeated-key join rows should preserve reverse-index scan order.
+CREATE TABLE ptrc_sem_order_t1 (
+  a INT,
+  b INT,
+  c INT,
+  KEY(a DESC, b ASC, c DESC)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_sem_order_t2 (
+  d INT,
+  KEY(d ASC)
+) ENGINE=InnoDB;
+
+--disable_query_log
+let $i=5;
+while ($i)
+{
+  let $j=5;
+  while ($j)
+  {
+    let $k=5;
+    while ($k)
+    {
+      let $l=5;
+      while ($l)
+      {
+        --eval INSERT INTO ptrc_sem_order_t1 VALUES($k, $j, $i)
+        dec $l;
+      }
+      dec $k;
+    }
+    dec $j;
+  }
+  --eval INSERT INTO ptrc_sem_order_t2 VALUES($i)
+  dec $i;
+}
+--enable_query_log
+
+ANALYZE TABLE ptrc_sem_order_t1, ptrc_sem_order_t2;
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT *
+FROM ptrc_sem_order_t2, ptrc_sem_order_t1 FORCE INDEX(`a`)
+HAVING c < 3
+ORDER BY a, b
+LIMIT 10;
+SELECT *
+FROM ptrc_sem_order_t2, ptrc_sem_order_t1 FORCE INDEX(`a`)
+HAVING c < 3
+ORDER BY a, b
+LIMIT 10;
+
+DROP TABLE ptrc_sem_order_t1, ptrc_sem_order_t2;
+
+--echo # Tuple NOT IN and ANY subqueries should preserve NULL state.
+CREATE TABLE ptrc_sem_c (
+  col_int_nokey INTEGER NOT NULL,
+  col_int_key INTEGER GENERATED ALWAYS AS
+    (col_int_nokey + col_int_nokey) VIRTUAL,
+  col_varchar_nokey VARCHAR(1) NOT NULL,
+  col_varchar_key VARCHAR(2) GENERATED ALWAYS AS
+    (CONCAT(col_varchar_nokey, col_varchar_nokey)),
+  KEY (col_int_key),
+  KEY (col_int_key, col_varchar_key)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_sem_cc (
+  col_int_nokey INTEGER,
+  col_int_key INTEGER GENERATED ALWAYS AS
+    (col_int_nokey + col_int_nokey) VIRTUAL,
+  col_varchar_nokey VARCHAR(1),
+  col_varchar_key VARCHAR(2) GENERATED ALWAYS AS
+    (CONCAT(col_varchar_nokey, col_varchar_nokey)),
+  KEY (col_int_key),
+  KEY (col_varchar_key),
+  KEY (col_int_key, col_varchar_key),
+  KEY (col_int_key, col_int_nokey),
+  KEY (col_varchar_key, col_varchar_nokey)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_sem_c (col_int_nokey, col_varchar_nokey)
+VALUES (8,'m');
+INSERT INTO ptrc_sem_cc (col_int_nokey, col_varchar_nokey)
+VALUES (8,'e'),(NULL,NULL),(8,'p');
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT alias2.col_int_key, alias1.col_int_nokey, alias2.col_varchar_key
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE (alias2.col_int_key, alias1.col_int_nokey) NOT IN
+      (SELECT /*+ PRC_SUBQUERY() */ sq2.col_int_nokey, sq1.col_int_key
+       FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+       GROUP BY 1, 2);
+
+SELECT alias2.col_int_key, alias1.col_int_nokey,
+       alias2.col_varchar_key AS field1
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE (alias2.col_int_key, alias1.col_int_nokey) NOT IN
+      (SELECT /*+ PRC_SUBQUERY() */
+              sq2.col_int_nokey, sq1.col_int_key
+       FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+       GROUP BY 1, 2)
+ORDER BY 1, 2, 3;
+
+SELECT alias2.col_int_key, alias1.col_int_nokey,
+       alias2.col_varchar_key AS field1
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE (alias2.col_int_key, alias1.col_int_nokey) NOT IN
+      (SELECT sq2.col_int_nokey, sq1.col_int_key
+       FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+       GROUP BY 1, 2)
+ORDER BY 1, 2, 3;
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT alias2.col_int_key, alias1.col_int_nokey, alias2.col_varchar_key
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE NOT(alias2.col_int_key >= ANY
+          (SELECT /*+ PRC_SUBQUERY() */ sq2.col_int_nokey
+           FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+           WHERE sq1.col_int_key = alias1.col_int_key
+           GROUP BY 1));
+
+SELECT alias2.col_int_key, alias1.col_int_nokey,
+       alias2.col_varchar_key AS field1
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE NOT(alias2.col_int_key >= ANY
+          (SELECT /*+ PRC_SUBQUERY() */ sq2.col_int_nokey
+           FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+           WHERE sq1.col_int_key = alias1.col_int_key
+           GROUP BY 1))
+ORDER BY 1, 2, 3;
+
+SELECT alias2.col_int_key, alias1.col_int_nokey,
+       alias2.col_varchar_key AS field1
+FROM ptrc_sem_cc AS alias1, ptrc_sem_cc AS alias2
+WHERE NOT(alias2.col_int_key >= ANY
+          (SELECT sq2.col_int_nokey
+           FROM ptrc_sem_cc AS sq1, ptrc_sem_c AS sq2
+           WHERE sq1.col_int_key = alias1.col_int_key
+           GROUP BY 1))
+ORDER BY 1, 2, 3;
+
+DROP TABLE ptrc_sem_c, ptrc_sem_cc;
+
+--echo # View-derived cache keys should be found correctly.
+CREATE TABLE ptrc_sem_view_t1 (
+  pk INT NOT NULL AUTO_INCREMENT,
+  col_int_key INT NOT NULL,
+  col_varchar_key VARCHAR(1) NOT NULL,
+  col_varchar_nokey VARCHAR(1) NOT NULL,
+  PRIMARY KEY (pk),
+  KEY col_int_key (col_int_key),
+  KEY col_varchar_key (col_varchar_key, col_int_key)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_sem_view_t1 VALUES
+  (1,0,'j','j'),(2,8,'v','v'),(3,1,'c','c'),
+  (4,8,'m','m'),(5,9,'d','d');
+
+CREATE VIEW ptrc_sem_v1 AS SELECT * FROM ptrc_sem_view_t1;
+
+let $query=
+SELECT alias2.col_varchar_nokey
+FROM ptrc_sem_v1 AS alias1
+RIGHT JOIN ptrc_sem_view_t1 AS alias2 ON TRUE
+WHERE alias2.col_varchar_key IN
+      (SELECT /*+ PRC_SUBQUERY() */ sq1.col_varchar_nokey
+       FROM ptrc_sem_v1 AS sq1
+       WHERE sq1.pk != alias1.col_int_key
+             AND sq1.col_varchar_key > alias1.col_varchar_key)
+ORDER BY alias2.pk, alias1.pk;
+
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=TREE $query;
+
+eval $query;
+
+DROP VIEW ptrc_sem_v1;
+CREATE VIEW ptrc_sem_v1 AS
+SELECT (pk + 0) AS pk,
+       (col_int_key + 0) AS col_int_key,
+       CONCAT(col_varchar_key, '') AS col_varchar_key,
+       CONCAT(col_varchar_nokey, '') AS col_varchar_nokey
+FROM ptrc_sem_view_t1;
+
+--replace_regex $elide_costs_and_rows
+eval EXPLAIN FORMAT=TREE $query;
+
+eval $query;
+
+DROP VIEW ptrc_sem_v1;
+DROP TABLE ptrc_sem_view_t1;
+
+SET optimizer_switch=@saved_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold=@saved_ptrc_cost_threshold;

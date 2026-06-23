@@ -1,0 +1,260 @@
+# PTRC acceptance hardening
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET @saved_ptrc_cost_threshold=@@rds_partial_result_cache_cost_threshold;
+SET @saved_ptrc_max_mem_size=@@rds_partial_result_cache_max_mem_size;
+SET @saved_ptrc_min_hit_ratio=@@rds_partial_result_cache_min_hit_ratio;
+SET @saved_ptrc_hit_ratio_frequency=@@rds_partial_result_cache_hit_ratio_frequency;
+SET @saved_optimizer_trace=@@optimizer_trace;
+SET @saved_optimizer_trace_max_mem_size=@@optimizer_trace_max_mem_size;
+SET optimizer_switch='partial_result_cache=on,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold=0;
+SET optimizer_trace_max_mem_size=1048576;
+# Unsupported subquery shapes should fall back without a Result cache plan.
+CREATE TABLE ptrc_acc_outer (
+id INT PRIMARY KEY,
+k INT NULL,
+grp INT NOT NULL,
+txt TEXT,
+KEY(k),
+KEY(grp)
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_acc_inner (
+k INT NOT NULL,
+grp INT NOT NULL,
+val INT NULL,
+txt TEXT,
+KEY(k),
+KEY(grp)
+) ENGINE=InnoDB;
+INSERT INTO ptrc_acc_outer VALUES
+(1, 1, 10, 'a'), (2, 2, 20, 'b'), (3, 1, 10, 'a'),
+(4, 3, 30, 'c'), (5, 4, 40, 'd'), (6, NULL, 50, 'n');
+INSERT INTO ptrc_acc_inner VALUES
+(1, 10, 1, 'a'), (2, 20, 2, 'b'), (3, 30, NULL, 'c'),
+(5, 50, 5, 'e');
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+(SELECT /*+ PRC_SUBQUERY() */ COUNT(*)
+FROM ptrc_acc_inner AS i
+WHERE i.txt = o.txt) AS cnt
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+EXPLAIN
+-> Index scan on o using PRIMARY  (...)
+-> Select #2 (subquery in projection; dependent)
+    -> Aggregate: count(0)  (...)
+        -> Filter: (i.txt = o.txt)  (...)
+            -> Table scan on i  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.o.txt' of SELECT #2 was resolved in SELECT #1
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+(SELECT /*+ PRC_SUBQUERY() */ MAX(i.val)
+FROM ptrc_acc_inner AS i
+WHERE i.k = o.k AND RAND() >= 0) AS rand_v
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+EXPLAIN
+-> Index scan on o using PRIMARY  (...)
+-> Select #2 (subquery in projection; dependent)
+    -> Aggregate: max(i.val)  (...)
+        -> Filter: (rand() >= 0)  (...)
+            -> Index lookup on i using k (k=o.k)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.o.k' of SELECT #2 was resolved in SELECT #1
+EXPLAIN FORMAT=TREE
+SELECT o.grp, COUNT(*)
+FROM ptrc_acc_outer AS o
+GROUP BY o.grp
+HAVING (SELECT /*+ PRC_SUBQUERY() */ MAX(i.val)
+FROM ptrc_acc_inner AS i
+WHERE i.grp = o.grp) >= 0;
+EXPLAIN
+-> Filter: ((select #2) >= 0)  (...)
+    -> Group aggregate: count(0)  (...)
+        -> Index scan on o using grp  (...)
+    -> Select #2 (subquery in condition; dependent)
+        -> Aggregate: max(i.val)  (...)
+            -> Index lookup on i using grp (grp=o.grp)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.o.grp' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.o.grp' of SELECT #2 was resolved in SELECT #1
+# Pushed HAVING subqueries should also fall back without PTRC.
+CREATE TABLE ptrc_acc_having (
+timestamp_col TIMESTAMP(6),
+char_col CHAR(4)
+) ENGINE=InnoDB;
+INSERT INTO ptrc_acc_having VALUES
+('2023-10-30 15:33:09.054759', NULL),
+('2023-10-30 15:33:09.054759', 'aaaa'),
+('2023-11-17 11:05:13.979002', 'aaa2');
+EXPLAIN FORMAT=TREE
+SELECT timestamp_col, char_col
+FROM ptrc_acc_having AS a
+GROUP BY 1, 2
+HAVING (SELECT /*+ PRC_SUBQUERY() */ timestamp_col
+FROM ptrc_acc_having AS d
+WHERE a.char_col < d.char_col
+ORDER BY 1 LIMIT 1)
+ORDER BY 1, 2;
+EXPLAIN
+-> Sort: a.timestamp_col, a.char_col
+    -> Filter: (0 <> (select #2))
+        -> Table scan on <temporary>  (...)
+            -> Temporary table with deduplication  (...)
+                -> Table scan on a  (...)
+        -> Select #2 (subquery in condition; dependent)
+            -> Limit: 1 row(s)  (...)
+                -> Sort: d.timestamp_col, limit input to 1 row(s) per chunk  (...)
+                    -> Filter: (a.char_col < d.char_col)  (...)
+                        -> Table scan on d  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.a.char_col' of SELECT #2 was resolved in SELECT #1
+Note	1276	Field or reference 'test.a.char_col' of SELECT #2 was resolved in SELECT #1
+SELECT timestamp_col, char_col
+FROM ptrc_acc_having AS a
+GROUP BY 1, 2
+HAVING (SELECT /*+ PRC_SUBQUERY() */ timestamp_col
+FROM ptrc_acc_having AS d
+WHERE a.char_col < d.char_col
+ORDER BY 1 LIMIT 1)
+ORDER BY 1, 2;
+timestamp_col	char_col
+2023-11-17 11:05:13.979002	aaa2
+DROP TABLE ptrc_acc_having;
+# EXISTS, ANY, and ALL subquery semantics should be preserved.
+SET optimizer_switch='partial_result_cache=off,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+EXISTS (SELECT /*+ PRC_SUBQUERY() */ 1
+FROM ptrc_acc_inner AS i
+WHERE i.k = o.k AND i.val >= 2) AS exists_flag
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+EXPLAIN
+-> Index scan on o using PRIMARY  (...)
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(o.k)
+        -> Limit: 1 row(s)  (...)
+            -> Filter: (i.val >= 2)  (...)
+                -> Index lookup on i using k (k=o.k)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.o.k' of SELECT #2 was resolved in SELECT #1
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+o.k = ANY (SELECT /*+ PRC_SUBQUERY() */ i.val
+FROM ptrc_acc_inner AS i
+WHERE i.grp = o.grp) AS any_flag
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+EXPLAIN
+-> Index scan on o using PRIMARY  (...)
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(o.grp, o.k)
+        -> Limit: 1 row(s)  (...)
+            -> Filter: <if>(outer_field_is_not_null, <is_not_null_test>(i.val), true)  (...)
+                -> Filter: <if>(outer_field_is_not_null, ((<cache>(o.k) = i.val) or (i.val is null)), true)  (...)
+                    -> Index lookup on i using grp (grp=o.grp)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.o.grp' of SELECT #2 was resolved in SELECT #1
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+o.k < ALL (SELECT /*+ PRC_SUBQUERY() */ i.val
+FROM ptrc_acc_inner AS i
+WHERE i.grp = o.grp) AS all_flag
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+EXPLAIN
+-> Index scan on o using PRIMARY  (...)
+-> Select #2 (subquery in projection; dependent)
+    -> Result cache : cache keys(o.grp, o.k)
+        -> Limit: 1 row(s)  (...)
+            -> Filter: <if>(outer_field_is_not_null, <is_not_null_test>(i.val), true)  (...)
+                -> Filter: <if>(outer_field_is_not_null, ((<cache>(o.k) >= i.val) or (i.val is null)), true)  (...)
+                    -> Index lookup on i using grp (grp=o.grp)  (...)
+
+Warnings:
+Note	1276	Field or reference 'test.o.grp' of SELECT #2 was resolved in SELECT #1
+SELECT o.id, o.k,
+EXISTS (SELECT /*+ PRC_SUBQUERY() */ 1
+FROM ptrc_acc_inner AS i
+WHERE i.k = o.k AND i.val >= 2) AS exists_flag,
+o.k = ANY (SELECT /*+ PRC_SUBQUERY() */ i.val
+FROM ptrc_acc_inner AS i
+WHERE i.grp = o.grp) AS any_flag,
+o.k < ALL (SELECT /*+ PRC_SUBQUERY() */ i.val
+FROM ptrc_acc_inner AS i
+WHERE i.grp = o.grp) AS all_flag
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+id	k	exists_flag	any_flag	all_flag
+1	1	0	1	0
+2	2	1	1	0
+3	1	0	1	0
+4	3	0	NULL	NULL
+5	4	0	0	1
+6	NULL	0	NULL	NULL
+DROP TABLE ptrc_acc_inner, ptrc_acc_outer;
+# LRU eviction should keep complete cached batches and preserve results.
+CREATE TABLE ptrc_lru_outer (
+id INT PRIMARY KEY,
+k INT NOT NULL,
+KEY(k)
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_lru_inner (
+k INT NOT NULL,
+pad VARCHAR(1000) NOT NULL,
+KEY(k)
+) ENGINE=InnoDB;
+INSERT INTO ptrc_lru_outer
+WITH RECURSIVE qn(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM qn WHERE n < 120)
+SELECT n, n FROM qn;
+INSERT INTO ptrc_lru_inner
+WITH RECURSIVE qn(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM qn WHERE n < 120)
+SELECT n, RPAD(n, 1000, 'x') FROM qn;
+SET optimizer_switch='partial_result_cache=on,hash_join=off,block_nested_loop=off,batched_key_access=off';
+SET rds_partial_result_cache_max_mem_size=65536;
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ o.id, i.pad
+FROM ptrc_lru_outer AS o
+JOIN ptrc_lru_inner AS i ON i.k = o.k
+ORDER BY o.id;
+EXPLAIN
+-> Nested loop inner join  (...) (actual rows=120 loops=1)
+    -> Index scan on o using PRIMARY  (...) (actual rows=120 loops=1)
+    -> Result cache : cache keys(o.id, o.k) (Cache Hits: #, Cache Misses: #, Cache Evictions: #nonzero, Cache Overflows: #, Memory Usage: # )  (...) (actual rows=1 loops=120)
+        -> Index lookup on i using k (k=o.k)  (...) (actual rows=1 loops=120)
+
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ COUNT(i.pad) AS joined_rows
+FROM ptrc_lru_outer AS o
+JOIN ptrc_lru_inner AS i ON i.k = o.k;
+joined_rows
+120
+# Low runtime hit ratio should disable PTRC and keep query results.
+SET optimizer_trace='enabled=on';
+SET rds_partial_result_cache_min_hit_ratio=1;
+SET rds_partial_result_cache_hit_ratio_frequency=1;
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ COUNT(i.pad) AS bypass_joined_rows
+FROM ptrc_lru_outer AS o
+JOIN ptrc_lru_inner AS i ON i.k = o.k;
+bypass_joined_rows
+120
+SELECT trace LIKE '%"disabled": true%' AND
+trace LIKE '%hit count is too low%' AS hit_ratio_disabled
+FROM information_schema.optimizer_trace;
+hit_ratio_disabled
+1
+DROP TABLE ptrc_lru_inner, ptrc_lru_outer;
+SET optimizer_trace=@saved_optimizer_trace;
+SET optimizer_trace_max_mem_size=@saved_optimizer_trace_max_mem_size;
+SET optimizer_switch=@saved_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold=@saved_ptrc_cost_threshold;
+SET rds_partial_result_cache_max_mem_size=@saved_ptrc_max_mem_size;
+SET rds_partial_result_cache_min_hit_ratio=@saved_ptrc_min_hit_ratio;
+SET rds_partial_result_cache_hit_ratio_frequency=@saved_ptrc_hit_ratio_frequency;

@@ -1,0 +1,201 @@
+--echo # PTRC acceptance hardening
+
+--source include/have_optimizer_trace.inc
+--source include/elide_costs.inc
+
+let $elide_ptrc_analyze_lru = /[(]cost=[0-9.e+-]+ rows=[0-9.e+-]+[)]/(...)/ /[(]actual time=[0-9.e+-]+ rows/(actual rows/ /Cache Hits: [0-9]+/Cache Hits: #/ /Cache Misses: [0-9]+/Cache Misses: #/ /Cache Evictions: [1-9][0-9]*/Cache Evictions: #nonzero/ /Cache Overflows: [0-9]+/Cache Overflows: #/ /Memory Usage: [0-9]+/Memory Usage: #/;
+
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET @saved_ptrc_cost_threshold=@@rds_partial_result_cache_cost_threshold;
+SET @saved_ptrc_max_mem_size=@@rds_partial_result_cache_max_mem_size;
+SET @saved_ptrc_min_hit_ratio=@@rds_partial_result_cache_min_hit_ratio;
+SET @saved_ptrc_hit_ratio_frequency=@@rds_partial_result_cache_hit_ratio_frequency;
+SET @saved_optimizer_trace=@@optimizer_trace;
+SET @saved_optimizer_trace_max_mem_size=@@optimizer_trace_max_mem_size;
+
+SET optimizer_switch='partial_result_cache=on,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold=0;
+SET optimizer_trace_max_mem_size=1048576;
+
+--echo # Unsupported subquery shapes should fall back without a Result cache plan.
+CREATE TABLE ptrc_acc_outer (
+  id INT PRIMARY KEY,
+  k INT NULL,
+  grp INT NOT NULL,
+  txt TEXT,
+  KEY(k),
+  KEY(grp)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_acc_inner (
+  k INT NOT NULL,
+  grp INT NOT NULL,
+  val INT NULL,
+  txt TEXT,
+  KEY(k),
+  KEY(grp)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_acc_outer VALUES
+  (1, 1, 10, 'a'), (2, 2, 20, 'b'), (3, 1, 10, 'a'),
+  (4, 3, 30, 'c'), (5, 4, 40, 'd'), (6, NULL, 50, 'n');
+
+INSERT INTO ptrc_acc_inner VALUES
+  (1, 10, 1, 'a'), (2, 20, 2, 'b'), (3, 30, NULL, 'c'),
+  (5, 50, 5, 'e');
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+       (SELECT /*+ PRC_SUBQUERY() */ COUNT(*)
+        FROM ptrc_acc_inner AS i
+        WHERE i.txt = o.txt) AS cnt
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+       (SELECT /*+ PRC_SUBQUERY() */ MAX(i.val)
+        FROM ptrc_acc_inner AS i
+        WHERE i.k = o.k AND RAND() >= 0) AS rand_v
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.grp, COUNT(*)
+FROM ptrc_acc_outer AS o
+GROUP BY o.grp
+HAVING (SELECT /*+ PRC_SUBQUERY() */ MAX(i.val)
+        FROM ptrc_acc_inner AS i
+        WHERE i.grp = o.grp) >= 0;
+
+--echo # Pushed HAVING subqueries should also fall back without PTRC.
+CREATE TABLE ptrc_acc_having (
+  timestamp_col TIMESTAMP(6),
+  char_col CHAR(4)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_acc_having VALUES
+  ('2023-10-30 15:33:09.054759', NULL),
+  ('2023-10-30 15:33:09.054759', 'aaaa'),
+  ('2023-11-17 11:05:13.979002', 'aaa2');
+
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT timestamp_col, char_col
+FROM ptrc_acc_having AS a
+GROUP BY 1, 2
+HAVING (SELECT /*+ PRC_SUBQUERY() */ timestamp_col
+        FROM ptrc_acc_having AS d
+        WHERE a.char_col < d.char_col
+        ORDER BY 1 LIMIT 1)
+ORDER BY 1, 2;
+SELECT timestamp_col, char_col
+FROM ptrc_acc_having AS a
+GROUP BY 1, 2
+HAVING (SELECT /*+ PRC_SUBQUERY() */ timestamp_col
+        FROM ptrc_acc_having AS d
+        WHERE a.char_col < d.char_col
+        ORDER BY 1 LIMIT 1)
+ORDER BY 1, 2;
+
+DROP TABLE ptrc_acc_having;
+
+--echo # EXISTS, ANY, and ALL subquery semantics should be preserved.
+SET optimizer_switch='partial_result_cache=off,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+       EXISTS (SELECT /*+ PRC_SUBQUERY() */ 1
+               FROM ptrc_acc_inner AS i
+               WHERE i.k = o.k AND i.val >= 2) AS exists_flag
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+       o.k = ANY (SELECT /*+ PRC_SUBQUERY() */ i.val
+                  FROM ptrc_acc_inner AS i
+                  WHERE i.grp = o.grp) AS any_flag
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+       o.k < ALL (SELECT /*+ PRC_SUBQUERY() */ i.val
+                  FROM ptrc_acc_inner AS i
+                  WHERE i.grp = o.grp) AS all_flag
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+
+SELECT o.id, o.k,
+       EXISTS (SELECT /*+ PRC_SUBQUERY() */ 1
+               FROM ptrc_acc_inner AS i
+               WHERE i.k = o.k AND i.val >= 2) AS exists_flag,
+       o.k = ANY (SELECT /*+ PRC_SUBQUERY() */ i.val
+                  FROM ptrc_acc_inner AS i
+                  WHERE i.grp = o.grp) AS any_flag,
+       o.k < ALL (SELECT /*+ PRC_SUBQUERY() */ i.val
+                  FROM ptrc_acc_inner AS i
+                  WHERE i.grp = o.grp) AS all_flag
+FROM ptrc_acc_outer AS o
+ORDER BY o.id;
+
+DROP TABLE ptrc_acc_inner, ptrc_acc_outer;
+
+--echo # LRU eviction should keep complete cached batches and preserve results.
+CREATE TABLE ptrc_lru_outer (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  KEY(k)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_lru_inner (
+  k INT NOT NULL,
+  pad VARCHAR(1000) NOT NULL,
+  KEY(k)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_lru_outer
+WITH RECURSIVE qn(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM qn WHERE n < 120)
+SELECT n, n FROM qn;
+
+INSERT INTO ptrc_lru_inner
+WITH RECURSIVE qn(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM qn WHERE n < 120)
+SELECT n, RPAD(n, 1000, 'x') FROM qn;
+
+SET optimizer_switch='partial_result_cache=on,hash_join=off,block_nested_loop=off,batched_key_access=off';
+SET rds_partial_result_cache_max_mem_size=65536;
+--replace_regex $elide_ptrc_analyze_lru
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ o.id, i.pad
+FROM ptrc_lru_outer AS o
+JOIN ptrc_lru_inner AS i ON i.k = o.k
+ORDER BY o.id;
+
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ COUNT(i.pad) AS joined_rows
+FROM ptrc_lru_outer AS o
+JOIN ptrc_lru_inner AS i ON i.k = o.k;
+
+--echo # Low runtime hit ratio should disable PTRC and keep query results.
+SET optimizer_trace='enabled=on';
+SET rds_partial_result_cache_min_hit_ratio=1;
+SET rds_partial_result_cache_hit_ratio_frequency=1;
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */ COUNT(i.pad) AS bypass_joined_rows
+FROM ptrc_lru_outer AS o
+JOIN ptrc_lru_inner AS i ON i.k = o.k;
+SELECT trace LIKE '%"disabled": true%' AND
+       trace LIKE '%hit count is too low%' AS hit_ratio_disabled
+FROM information_schema.optimizer_trace;
+
+DROP TABLE ptrc_lru_inner, ptrc_lru_outer;
+
+SET optimizer_trace=@saved_optimizer_trace;
+SET optimizer_trace_max_mem_size=@saved_optimizer_trace_max_mem_size;
+SET optimizer_switch=@saved_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold=@saved_ptrc_cost_threshold;
+SET rds_partial_result_cache_max_mem_size=@saved_ptrc_max_mem_size;
+SET rds_partial_result_cache_min_hit_ratio=@saved_ptrc_min_hit_ratio;
+SET rds_partial_result_cache_hit_ratio_frequency=@saved_ptrc_hit_ratio_frequency;
