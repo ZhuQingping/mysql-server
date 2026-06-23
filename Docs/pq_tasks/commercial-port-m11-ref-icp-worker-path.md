@@ -2612,11 +2612,151 @@ Completion Report - M11-F6a-2 Coding:
     executed/secondary-row counters；the test labels this as diagnostic noise and
     separately proves worker/range/worker-row/MQ counters remain zero。
 - Review:
-  - pending independent Code / Docs / Test / Reference Review Agent。
+  - Code / Docs / Test / Reference Review Agent returned `ACCEPT`；
+  - no blocking findings；
+  - non-blocking risks carried forward: F6a-2 remains leader-local diagnostic
+    noise, and future unsupported/no-row cleanup contracts should add explicit
+    unsupported/no-row windows if needed。
 - Safe next task after review:
   - decide whether to continue with F6b private row-token handoff or add another
     no-row source inventory if review finds worker-owned context semantics still
     too leader-local。
+
+#### M11-F6b: Worker Constant-ref Private Row-token Handoff
+
+Status: design-only taskbook created；pending design review；no source edits yet。
+
+Goal:
+
+- Define the smallest private row-token handoff for worker-side constant covering
+  ref；
+- reuse the current `PQWR` stable-ref / local MQ adapter contract where possible；
+- prove row-token ownership and decode shape without opening user-visible ref
+  worker execution；
+- keep F6a-1/F6a-2 diagnostics explicitly separate from true worker TABLE /
+  handler / row execution evidence。
+
+Current Dependencies:
+
+- M11-B1/B2/B3 established `PQWR` worker-result frame and local
+  `Query_result_mq` adapter smokes；
+- M11-E6g-3/E6g-4 established DBUG-only stable-ref `PQWR` frame decode,
+  immediate deep-copy to owned row-id bytes, and pair `cmp_ref()` tie-break
+  contracts；
+- F6a-1/F6a-2 established owned constant-ref key context shape and SQL-only
+  scoped cleanup diagnostics；
+- F6a owned constant-ref key bytes are not handler row-id bytes and are not
+  stable-ref bytes；
+- current F6a-1/F6a-2 counters are leader-local diagnostic noise and must not be
+  treated as proof of worker-side ref TABLE/handler execution。
+
+Mandatory First Step:
+
+- F6b-0 is mandatory and must complete as a read-only source inventory before
+  any F6b source or MTR coding；
+- F6b-0 must decide whether F6b-1 reuses existing `PQWR` stable-ref local-MQ
+  helpers as transport-only evidence, or whether a separate constant-ref /
+  private token kind is required。
+
+Hard Stops:
+
+- no generic `pq_worker_scan_next()`；
+- no `PQRefIterator::Read()` / `PQblockScanIterator::Read()` implementation；
+- no `ha_pq_next()`；
+- no production `Query_result_mq::send_data()` or `m_stable_output` behavior
+  change；
+- do not reinterpret F6a owned constant-ref key bytes as handler row-id /
+  stable-ref bytes；
+- do not feed constant-ref key bytes into ORDER BY stable-ref comparator,
+  `cmp_ref()`, cached-record row-id, or any handler-ref consumer；
+- no `PQWR` frame header, flag, or production wire-format changes unless a
+  separate reviewed task explicitly authorizes them；
+- no visible ref / ICP gate migration from M9-C2 leader-local path；
+- no AccessPath / optimizer hook / `HAS_ORDER_BY` / ORDER BY readiness changes；
+- no storage / InnoDB source changes；
+- no native `Record_buffer` positive path；
+- no worker-side ICP clone/refix/pushdown；
+- no user SQL result materialization from the private row-token smoke。
+
+Allowed Files for F6b Design:
+
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`；
+- optional read-only references in M11-B / M11-E taskbooks, no edits。
+
+Forbidden Files for F6b Design:
+
+- any `sql/**` or `storage/**` source changes；
+- any MTR test/result changes。
+
+Proposed Coding Split After F6b Review:
+
+1. M11-F6b-0 Source Inventory / Contract Confirmation:
+   - read-only confirmation of available PQWR stable-ref helpers, local MQ
+     adapter limits, and constant-ref context input shape；
+   - decide whether F6b coding should use only `query_result_mq.*` local helper,
+     or a `pq_iterators.cc` DBUG wrapper around the F6a-owned context；
+   - mandatory before any F6b source or MTR coding。
+2. M11-F6b-1 Local Stable-ref Token Helper:
+   - may reuse existing `query_result_mq.*` stable-ref local-MQ helper only for
+     local transport / decode / deep-copy mechanics；
+   - if payload source is F6a constant-ref key context, helper or wrapper must
+     name it as a private constant-ref token and must not call it handler row-id
+     or stable handler ref；
+   - no worker thread, no worker TABLE, no InnoDB, no production `send_data()`；
+   - status counters are diagnostic only。
+3. M11-F6b-2 Constant-ref Context to Token Smoke:
+   - DBUG-only bridge from F6a-owned constant-ref context to the private token
+     smoke only after F6b-0 confirms byte semantics；
+   - still no row production and no user-visible result path；
+   - prove ownership and cleanup only；must not prove worker TABLE / handler
+     execution or row materialization；
+   - prove normal no-DBUG zero and worker/range/MQ production counters remain
+     stable。
+4. M11-F6c User-visible Migration Decision:
+   - only after F6b review；
+   - decide whether to migrate current M9-C2 leader-local constant covering ref
+     toward worker-side path or add further worker TABLE/handler source inventory。
+
+Required Future MTR Windows:
+
+- no-DBUG zero deltas for F6b counters；
+- local token success with owned bytes after MQ cleanup；
+- invalid/mismatched token reject；
+- proof that existing PQWR normal frames still reject stable-ref-only decode
+  where appropriate；
+- zero deltas for workers, ranges, worker result rows, callback rows, and visible
+  executed counters unless the exact diagnostic window is explicitly labelled as
+  leader-local noise；
+- current M9-C2 `c2_ref_rows_produced_delta` and visible result rows remain
+  correct。
+
+Validation for F6b Design:
+
+- docs-only `git diff --check`；
+- independent Design / Source / Test Review Agent must return `ACCEPT` before
+  any F6b coding。
+
+Design Review Prompt - M11-F6b:
+
+请作为 M11-F6b Design / Source / Test Review Agent，只读审查本任务书：
+
+1. F6b 是否正确站在 F6a-1/F6a-2 之后，只设计 private row-token handoff，
+   没有误把 leader-local cleanup counters 当作 worker-side 执行证据；
+2. 是否应先做 F6b-0 source inventory，而不是直接编码；
+3. 是否可复用 M11-B / M11-E 的 `PQWR` stable-ref local MQ helper，还是需要
+   ref/ICP 专用 token；
+4. hard stops 是否足够防止提前打开 `PQRefIterator::Read()`、
+   `pq_worker_scan_next()`、production `Query_result_mq::send_data()`、
+   storage/InnoDB 或用户可见 ref gate；
+5. F6b-1/F6b-2/F6c 拆分是否足够小。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Required taskbook fixes
+- Safe next task recommendation
 
 Design / Source / Test Review Prompt:
 
