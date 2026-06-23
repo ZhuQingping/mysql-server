@@ -9523,6 +9523,113 @@ Required review after E6d coding:
 - Docs Review: confirm E6d does not claim real ORDER BY readiness；
 - Test Review: confirm no-DBUG and visible ORDER BY negative guards remain。
 
+### M11-E6e: Exchange_sort Handler-ref Comparator Adapter Smoke
+
+Status: taskbook in progress；design review required before source changes。
+
+Background:
+
+- Commercial `Exchange_sort::heap_compare_records()` first compares ORDER BY
+  sort keys and, when stable output is required and sort keys are equal, uses
+  `handler::cmp_ref(row_id_0, row_id_1)` as the tie-break；
+- Commercial `Query_result_mq::send_data()` sends handler refs when stable
+  output is enabled, relying on worker-side `file->position()` having filled
+  `file->ref`；
+- Current branch has private contracts for handler-ref production, private
+  `PQOF` wire, post-cleanup `cmp_ref(ref, ref)`, and two-row
+  `cmp_ref(ref0, ref1)` / reverse antisymmetry；
+- Current default `pq_orderby_cached_compare_records()` still compares equal
+  sort-key `row_id` byte vectors directly. It is intentionally not yet a
+  commercial `handler::cmp_ref()` tie-break path。
+
+Goal:
+
+- Add a private/DBUG-only comparator adapter shape inside `Exchange_sort` that
+  models the commercial equal-sort-key tie-break；
+- Construct two controlled ORDER BY cached records with identical sort key and
+  `row_id` containing real handler refs copied by the E6d worker attach smoke；
+- Compare equal sort-key records through still-open leader handler
+  `cmp_ref(left.row_id, right.row_id)` and reverse direction；
+- Verify adapter forward/reverse results are non-zero, antisymmetric, and
+  directionally consistent with direct `handler::cmp_ref()`；
+- Keep the default cached comparator, heap reader, visible ORDER BY path,
+  readiness flags, and `HAS_ORDER_BY` serial boundary unchanged。
+
+Non-goals:
+
+- Do not replace `pq_orderby_cached_compare_records()`；
+- Do not connect the adapter to the default `Exchange_sort` binary heap or
+  `read_next_ordered_record_image_owned_shape()`；
+- Do not modify `Query_result_mq`, `PQWR`, or `PQOF` frame formats；
+- Do not set `rowid_tiebreak_ready`, `exchange_sort_heap_read_ready`, or
+  `default_ordered_read_ready`；
+- Do not relax optimizer eligibility or open visible ORDER BY PQ。
+
+Allowed files for E6e code:
+
+- `sql/parallel_query/exchange_sort.{h,cc}`：
+  - private comparator adapter/helper and optional controlled smoke；
+- `sql/parallel_query/sql_parallel.{h,cc}`：
+  - reuse E6d copied refs and trigger E6e DBUG-only smoke/counters；
+- `sql/mysqld.cc`：
+  - only for E6e status counters；
+- focused MTR under `mysql-test/suite/parallel_query/`；
+- `Docs/pq_tasks/README.md` and this taskbook。
+
+No new source files for E6e；extend existing smoke/MTR unless a new focused MTR
+is explicitly justified during coding review。
+
+Forbidden files / behavior:
+
+- `sql/parallel_query/query_result_mq.{h,cc}`；
+- `PQ_worker_result_frame_header` / `PQWR` changes；
+- `PQOF` header / flags format changes；
+- `sql/parallel_query/pq_optimizer.*` and `HAS_ORDER_BY` behavior；
+- `PQOrderByExecutionPreflight` readiness flags；
+- `ParallelScanIterator::Read()` visible ORDER BY path；
+- `sql/handler.*` and `storage/innobase/**`；
+- replacing default comparator / heap reader or starting real worker ORDER BY。
+- incrementing `Parallel_orderby_execution_preflight_ready` or reducing
+  missing ORDER BY preflight prerequisite counters。
+
+TDD plan:
+
+- RED: add DBUG-only MTR assertions for E6e counters:
+  - attempts delta >= 1；
+  - success delta >= 1；
+  - refs / bytes delta >= 2 refs；
+  - equal sort-key handler tie-break delta >= 1；
+  - nonzero delta >= 1；
+  - antisymmetric success delta >= 1；
+  - direction-match success delta >= 1；
+  - unsupported delta == 0；
+  - no-DBUG/default-path E6e counters stay 0；
+  - existing visible ORDER BY guards continue to report
+    `Not parallel HAS_ORDER_BY` and no visible ORDER BY execution counters grow。
+- E6e adapter smoke counters must be named as smoke / contract diagnostics,
+  not as readiness flags。
+- RED must fail before implementation because E6e counters stay `0`；
+- GREEN: implement only private comparator adapter shape and focused smoke；
+- replay focused MTR, `pq_stats`, and full `parallel_query` suite。
+
+Required review before E6e coding:
+
+- Design Review verdict: `ACCEPT` with minor wording tightening applied；
+- Design Review: confirm E6e is the correct next task after E6d and before any
+  visible ORDER BY gate；
+- Source Scope Review: confirm default comparator / heap reader / readiness
+  flags remain forbidden；
+- Test Plan Review: confirm E6e no-DBUG and visible ORDER BY negative guards
+  are explicit。
+
+Required review after E6e coding:
+
+- Code Review: confirm adapter remains private and does not replace default
+  cached comparator；
+- Docs Review: confirm E6e does not claim real ORDER BY readiness；
+- Test Review: confirm no-DBUG, positive adapter, and visible ORDER BY negative
+  windows remain。
+
 ## Risk Areas
 
 - `Filesort` / `Sort_param` 可能修改 JOIN/QEP_TAB 状态；
