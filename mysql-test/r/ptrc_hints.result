@@ -1,0 +1,31 @@
+# PTRC optimizer hint parser smoke tests
+SELECT @@optimizer_switch LIKE '%partial_result_cache=on%' AS ptrc_default_on;
+ptrc_default_on
+1
+EXPLAIN SELECT /*+ PRC_JOIN() */ 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select /*+ PRC_JOIN(@`select#1`) */ 1 AS `1`
+EXPLAIN SELECT /*+ NO_PRC_JOIN() */ 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_PRC_JOIN(@`select#1`) */ 1 AS `1`
+EXPLAIN SELECT /*+ PRC_SUBQUERY() */ 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select /*+ PRC_SUBQUERY(@`select#1`) */ 1 AS `1`
+EXPLAIN SELECT /*+ NO_PRC_SUBQUERY() */ 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Note	1003	/* select#1 */ select /*+ NO_PRC_SUBQUERY(@`select#1`) */ 1 AS `1`
+# Commercial names are PRC_*; PTRC is not an alias.
+EXPLAIN SELECT /*+ PTRC() */ 1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
+Warnings:
+Warning	1064	Optimizer hint syntax error near 'PTRC() */ 1' at line 1
+Note	1003	/* select#1 */ select 1 AS `1`

@@ -1,0 +1,97 @@
+# PTRC nested-loop join runtime smoke
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET optimizer_switch='partial_result_cache=off,hash_join=off,batched_key_access=off';
+CREATE TABLE ptrc_outer (
+id INT PRIMARY KEY,
+k INT NOT NULL,
+pad INT,
+KEY(k)
+) ENGINE=InnoDB;
+CREATE TABLE ptrc_inner (
+k INT NOT NULL,
+v INT NOT NULL,
+KEY(k)
+) ENGINE=InnoDB;
+INSERT INTO ptrc_outer VALUES
+(1, 1, 10), (2, 2, 20), (3, 1, 30),
+(4, 3, 40), (5, 2, 50), (6, 1, 60);
+INSERT INTO ptrc_inner VALUES
+(1, 100), (1, 101), (2, 200),
+(3, 300), (3, 301), (4, 400);
+# Forced PRC_JOIN should wrap the nested-loop inner side even when the switch is off.
+EXPLAIN FORMAT=TREE
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */
+o.id, o.k, i.v
+FROM ptrc_outer AS o
+JOIN ptrc_inner AS i ON i.k = o.k
+ORDER BY o.id, i.v;
+EXPLAIN
+-> Sort: o.id, i.v
+    -> Stream results
+        -> Nested loop inner join
+            -> Index scan on o using k
+            -> Result cache : cache keys(o.id, o.k)
+                -> Index lookup on i using k (k=o.k)
+
+SET optimizer_switch='partial_result_cache=on,hash_join=off,batched_key_access=off';
+# NO_PRC_JOIN should keep the original nested-loop inner side.
+EXPLAIN FORMAT=TREE
+SELECT /*+ JOIN_ORDER(o, i) NO_PRC_JOIN(i) */
+o.id, o.k, i.v
+FROM ptrc_outer AS o
+JOIN ptrc_inner AS i ON i.k = o.k
+ORDER BY o.id, i.v;
+EXPLAIN
+-> Sort: o.id, i.v
+    -> Stream results
+        -> Nested loop inner join
+            -> Index scan on o using k
+            -> Index lookup on i using k (k=o.k)
+
+# PRC_SUBQUERY must not hide a later NO_PRC_JOIN hint.
+EXPLAIN FORMAT=TREE
+SELECT /*+ JOIN_ORDER(o, i) PRC_SUBQUERY() NO_PRC_JOIN(i) */
+o.id, o.k, i.v
+FROM ptrc_outer AS o
+JOIN ptrc_inner AS i ON i.k = o.k
+ORDER BY o.id, i.v;
+EXPLAIN
+-> Sort: o.id, i.v
+    -> Stream results
+        -> Nested loop inner join
+            -> Index scan on o using k
+            -> Index lookup on i using k (k=o.k)
+
+# Semijoin paths should not be wrapped by PTRC in Phase 5.
+EXPLAIN FORMAT=TREE
+SELECT /*+ PRC_JOIN(i) */
+o.id
+FROM ptrc_outer AS o
+WHERE o.k IN (SELECT i.k FROM ptrc_inner AS i)
+ORDER BY o.id;
+EXPLAIN
+-> Sort: o.id
+    -> Stream results
+        -> Nested loop inner join
+            -> Remove duplicates from input sorted on k
+                -> Index scan on i using k
+            -> Covering index lookup on o using k (k=i.k)
+
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */
+o.id, o.k, i.v
+FROM ptrc_outer AS o
+JOIN ptrc_inner AS i ON i.k = o.k
+ORDER BY o.id, i.v;
+id	k	v
+1	1	100
+1	1	101
+2	2	200
+3	1	100
+3	1	101
+4	3	300
+4	3	301
+5	2	200
+6	1	100
+6	1	101
+DROP TABLE ptrc_inner, ptrc_outer;
+SET optimizer_switch=@saved_optimizer_switch;

@@ -1,0 +1,114 @@
+--echo # PTRC correlated subquery runtime smoke
+
+--source include/elide_costs.inc
+
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET optimizer_switch='partial_result_cache=off,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+
+CREATE TABLE ptrc_sq_outer (
+  id INT PRIMARY KEY,
+  k INT NULL,
+  grp INT NOT NULL,
+  KEY(k),
+  KEY(grp)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_sq_inner (
+  k INT PRIMARY KEY,
+  v INT NULL,
+  KEY(k)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_sq_values (
+  grp INT NOT NULL,
+  val INT NULL,
+  KEY(grp)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_sq_outer VALUES
+  (1, 1, 10), (2, 2, 20), (3, 1, 10),
+  (4, 3, 30), (5, 4, 40), (6, NULL, 50);
+
+INSERT INTO ptrc_sq_inner VALUES
+  (1, 100), (2, 200), (3, NULL), (5, 500);
+
+INSERT INTO ptrc_sq_values VALUES
+  (10, 1), (10, NULL), (20, NULL), (30, 9), (50, NULL);
+
+--echo # PRC_SUBQUERY should force a deterministic correlated scalar subquery when the switch is off.
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+       (SELECT /*+ PRC_SUBQUERY() */ i.v
+        FROM ptrc_sq_inner AS i
+        WHERE i.k = o.k) AS scalar_v
+FROM ptrc_sq_outer AS o
+ORDER BY o.id;
+
+SET optimizer_switch='partial_result_cache=on,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+
+--echo # NO_PRC_SUBQUERY should keep the original dependent subquery path.
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+       (SELECT /*+ NO_PRC_SUBQUERY() */ i.v
+        FROM ptrc_sq_inner AS i
+        WHERE i.k = o.k) AS scalar_v
+FROM ptrc_sq_outer AS o
+ORDER BY o.id;
+
+--echo # PRC_SUBQUERY should also wrap IN subqueries so was_null state is cached.
+SET optimizer_switch='partial_result_cache=off,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+       o.k IN (SELECT /*+ PRC_SUBQUERY() */ v.val
+               FROM ptrc_sq_values AS v
+               WHERE v.grp = o.grp) AS in_flag
+FROM ptrc_sq_outer AS o
+ORDER BY o.id;
+
+--echo # Set-operation subqueries are unsupported in Phase 6 and must fall back.
+--replace_regex $elide_costs_and_rows
+EXPLAIN FORMAT=TREE
+SELECT o.id,
+       (SELECT /*+ PRC_SUBQUERY() */ i.v
+        FROM ptrc_sq_inner AS i
+        WHERE i.k = o.k
+        UNION ALL
+        SELECT i.v
+        FROM ptrc_sq_inner AS i
+        WHERE i.k = o.k AND i.k < 0) AS union_v
+FROM ptrc_sq_outer AS o
+ORDER BY o.id;
+
+--echo # Scalar subquery results should be preserved with repeated outer keys.
+SELECT o.id, o.k,
+       (SELECT /*+ PRC_SUBQUERY() */ i.v
+        FROM ptrc_sq_inner AS i
+        WHERE i.k = o.k) AS scalar_v
+FROM ptrc_sq_outer AS o
+ORDER BY o.id;
+
+--echo # IN subquery NULL and no-match semantics should be preserved.
+SELECT o.id, o.k, o.grp,
+       o.k IN (SELECT /*+ PRC_SUBQUERY() */ v.val
+               FROM ptrc_sq_values AS v
+               WHERE v.grp = o.grp) AS in_flag
+FROM ptrc_sq_outer AS o
+ORDER BY o.id;
+
+--echo # Unsupported set-operation subqueries should still preserve results.
+SELECT o.id, o.k,
+       (SELECT /*+ PRC_SUBQUERY() */ i.v
+        FROM ptrc_sq_inner AS i
+        WHERE i.k = o.k
+        UNION ALL
+        SELECT i.v
+        FROM ptrc_sq_inner AS i
+        WHERE i.k = o.k AND i.k < 0) AS union_v
+FROM ptrc_sq_outer AS o
+ORDER BY o.id;
+
+DROP TABLE ptrc_sq_values, ptrc_sq_inner, ptrc_sq_outer;
+SET optimizer_switch=@saved_optimizer_switch;

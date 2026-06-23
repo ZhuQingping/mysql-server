@@ -1,0 +1,76 @@
+--echo # PTRC nested-loop join runtime smoke
+
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET optimizer_switch='partial_result_cache=off,hash_join=off,batched_key_access=off';
+
+CREATE TABLE ptrc_outer (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  pad INT,
+  KEY(k)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_inner (
+  k INT NOT NULL,
+  v INT NOT NULL,
+  KEY(k)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_outer VALUES
+  (1, 1, 10), (2, 2, 20), (3, 1, 30),
+  (4, 3, 40), (5, 2, 50), (6, 1, 60);
+
+INSERT INTO ptrc_inner VALUES
+  (1, 100), (1, 101), (2, 200),
+  (3, 300), (3, 301), (4, 400);
+
+--echo # Forced PRC_JOIN should wrap the nested-loop inner side even when the switch is off.
+--skip_if_hypergraph  # Depends on the classic optimizer join shape.
+--replace_regex / *\(cost=.*//
+EXPLAIN FORMAT=TREE
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */
+       o.id, o.k, i.v
+FROM ptrc_outer AS o
+JOIN ptrc_inner AS i ON i.k = o.k
+ORDER BY o.id, i.v;
+
+SET optimizer_switch='partial_result_cache=on,hash_join=off,batched_key_access=off';
+
+--echo # NO_PRC_JOIN should keep the original nested-loop inner side.
+--skip_if_hypergraph  # Depends on the classic optimizer join shape.
+--replace_regex / *\(cost=.*//
+EXPLAIN FORMAT=TREE
+SELECT /*+ JOIN_ORDER(o, i) NO_PRC_JOIN(i) */
+       o.id, o.k, i.v
+FROM ptrc_outer AS o
+JOIN ptrc_inner AS i ON i.k = o.k
+ORDER BY o.id, i.v;
+
+--echo # PRC_SUBQUERY must not hide a later NO_PRC_JOIN hint.
+--skip_if_hypergraph  # Depends on the classic optimizer join shape.
+--replace_regex / *\(cost=.*//
+EXPLAIN FORMAT=TREE
+SELECT /*+ JOIN_ORDER(o, i) PRC_SUBQUERY() NO_PRC_JOIN(i) */
+       o.id, o.k, i.v
+FROM ptrc_outer AS o
+JOIN ptrc_inner AS i ON i.k = o.k
+ORDER BY o.id, i.v;
+
+--echo # Semijoin paths should not be wrapped by PTRC in Phase 5.
+--skip_if_hypergraph  # Depends on the classic optimizer join shape.
+--replace_regex / *\(cost=.*//
+EXPLAIN FORMAT=TREE
+SELECT /*+ PRC_JOIN(i) */
+       o.id
+FROM ptrc_outer AS o
+WHERE o.k IN (SELECT i.k FROM ptrc_inner AS i)
+ORDER BY o.id;
+
+SELECT /*+ JOIN_ORDER(o, i) PRC_JOIN(i) */
+       o.id, o.k, i.v
+FROM ptrc_outer AS o
+JOIN ptrc_inner AS i ON i.k = o.k
+ORDER BY o.id, i.v;
+
+DROP TABLE ptrc_inner, ptrc_outer;
+SET optimizer_switch=@saved_optimizer_switch;

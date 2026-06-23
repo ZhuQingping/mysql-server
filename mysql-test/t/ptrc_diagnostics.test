@@ -1,0 +1,88 @@
+--echo # PTRC diagnostics and stability
+
+--source include/have_optimizer_trace.inc
+--source include/elide_costs.inc
+
+let $elide_ptrc_analyze = /[(]cost=[0-9.e+-]+ rows=[0-9.e+-]+[)]/(...)/ /[(]actual time=[0-9.e+-]+ rows/(actual rows/ /Cache Hits: [0-9]+/Cache Hits: #/ /Cache Misses: [0-9]+/Cache Misses: #/ /Cache Evictions: [0-9]+/Cache Evictions: #/ /Cache Overflows: [0-9]+/Cache Overflows: #/ /Memory Usage: [0-9]+/Memory Usage: #/;
+
+SET @saved_optimizer_switch=@@optimizer_switch;
+SET @saved_ptrc_cost_threshold=@@rds_partial_result_cache_cost_threshold;
+SET @saved_ptrc_max_mem_size=@@rds_partial_result_cache_max_mem_size;
+SET @saved_optimizer_trace=@@optimizer_trace;
+SET @saved_optimizer_trace_max_mem_size=@@optimizer_trace_max_mem_size;
+SET optimizer_trace_max_mem_size=1048576;
+
+SET optimizer_switch='partial_result_cache=off,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+SET rds_partial_result_cache_cost_threshold=0;
+
+CREATE TABLE ptrc_diag_outer (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  pad INT,
+  KEY(k)
+) ENGINE=InnoDB;
+
+CREATE TABLE ptrc_diag_inner (
+  k INT NOT NULL,
+  v INT NOT NULL,
+  KEY(k)
+) ENGINE=InnoDB;
+
+INSERT INTO ptrc_diag_outer VALUES
+  (1, 1, 10), (2, 2, 20), (3, 1, 30),
+  (4, 3, 40), (5, 2, 50);
+
+INSERT INTO ptrc_diag_inner VALUES
+  (1, 100), (1, 101), (2, 200),
+  (3, 300), (3, 301);
+
+--echo # EXPLAIN ANALYZE should expose PTRC runtime counters.
+--replace_regex $elide_ptrc_analyze
+EXPLAIN ANALYZE FORMAT=TREE
+SELECT o.id,
+       (SELECT /*+ PRC_SUBQUERY() */ MAX(i.v)
+        FROM ptrc_diag_inner AS i
+        WHERE i.k = o.k) AS max_v
+FROM ptrc_diag_outer AS o
+ORDER BY o.id;
+
+--echo # Optimizer trace should record chosen PTRC paths.
+SET optimizer_trace='enabled=on';
+--disable_query_log
+--disable_result_log
+SELECT o.id, (SELECT /*+ PRC_SUBQUERY() */ MAX(i.v)
+              FROM ptrc_diag_inner AS i
+              WHERE i.k = o.k) AS max_v
+FROM ptrc_diag_outer AS o
+ORDER BY o.id;
+--enable_result_log
+--enable_query_log
+SELECT (trace LIKE '%"partial_result_cache": {%' AND
+        trace LIKE '%"caching_result_of": "subquery"%' AND
+        trace LIKE '%"chosen": true%') AS trace_chosen
+FROM information_schema.optimizer_trace;
+
+--echo # Optimizer trace should record rejected PTRC paths.
+SET optimizer_switch='partial_result_cache=off,hash_join=off,batched_key_access=off,semijoin=off,materialization=off';
+SET optimizer_trace='enabled=on';
+--disable_query_log
+--disable_result_log
+SELECT o.id, (SELECT MAX(i.v)
+              FROM ptrc_diag_inner AS i
+              WHERE i.k = o.k) AS max_v
+FROM ptrc_diag_outer AS o
+ORDER BY o.id;
+--enable_result_log
+--enable_query_log
+SELECT (trace LIKE '%"partial_result_cache": {%' AND
+        trace LIKE '%"chosen": false%' AND
+        trace LIKE '%Disabled by optimizer_switch or hint%') AS trace_rejected
+FROM information_schema.optimizer_trace;
+
+DROP TABLE ptrc_diag_inner, ptrc_diag_outer;
+
+SET optimizer_trace=@saved_optimizer_trace;
+SET optimizer_trace_max_mem_size=@saved_optimizer_trace_max_mem_size;
+SET optimizer_switch=@saved_optimizer_switch;
+SET rds_partial_result_cache_cost_threshold=@saved_ptrc_cost_threshold;
+SET rds_partial_result_cache_max_mem_size=@saved_ptrc_max_mem_size;
