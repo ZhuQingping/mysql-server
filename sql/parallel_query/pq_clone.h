@@ -32,6 +32,7 @@ class Item_ident;
 class THD;
 class Query_block;
 class JOIN;
+struct TABLE;
 struct ORDER;
 class ORDER_with_src;
 
@@ -45,6 +46,9 @@ bool pq_dup_tabs(JOIN *pq_join, JOIN *join, bool gather);
 JOIN *pq_make_join(THD *thd, JOIN *join);
 
 bool pq_dup_tabs_skeleton_preflight(JOIN *worker_join, JOIN *leader_join);
+
+bool pq_bind_qep_tab_table_preflight(JOIN *worker_join, TABLE *worker_table,
+                                     TABLE *leader_table);
 
 /**
   Run the M11-A clone contract preflight.

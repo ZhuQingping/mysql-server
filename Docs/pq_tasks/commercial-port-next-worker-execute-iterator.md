@@ -507,6 +507,48 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --tmpdir=/tmp/pq-worker-qep-skeleton-tmpdir
 ```
 
+## Worker QEP_TAB Table Bind Smoke
+
+本次小步在 worker-owned `QEP_TAB` skeleton 基础上，临时绑定
+`pq_open_worker_table()` 打开的 worker-local `TABLE` 和 `Table_ref`，验证后
+立即解绑。该步骤对应商用 `pq_set_table_ref()` / `pq_dup_tabs()` 的最小
+TABLE/Table_ref 绑定形状，但仍不迁移完整 table clone 或执行路径。
+
+实现边界：
+
+- 新增 `pq_bind_qep_tab_table_preflight(worker_join, worker_table,
+  leader_table)`；
+- 只在 `run_worker_execute_iterator_smoke()` 打开 worker table 后显式调用；
+- 仅支持当前单 base table、非 const worker `QEP_TAB[0]`；
+- 临时执行 `set_table(worker_table)` 和 `table_ref = worker_ref`；
+- 验证 worker table、handler、record buffer 均与 leader 分离；
+- 验证 `Table_ref::query_block` 可临时指向 worker query block；
+- 验证 read/write bitmap 已由 `pq_open_worker_table()` 从 leader 同步；
+- preflight 结束前恢复 `table_ref`、`Table_ref::query_block`、
+  `TABLE::pos_in_table_list` 并 `set_table(nullptr)`；
+- 不复制 `TABLE::pq_copy()`、condition、range scan、ref/keyuse、AccessPath、
+  join cache、semijoin、tmp table 或 handler 状态；
+- 后续 `NewPQblockScanAccessPath()` / `PQblockScanIterator` 仍显式使用
+  `qep_tab=nullptr`，execute gate 仍保持 fail-closed。
+
+新增诊断：
+
+- `Parallel_worker_qep_tab_table_bind_attempts`
+- `Parallel_worker_qep_tab_table_bind_success`
+- `Parallel_worker_qep_tab_table_bind_unsupported`
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-qep-table-bind-vardir \
+  --tmpdir=/tmp/pq-worker-qep-table-bind-tmpdir
+```
+
 ## Restricted Worker Plan Ownership Helper
 
 本次小步不改变执行语义，只把 `run_worker_execute_iterator_smoke()` 里散落的

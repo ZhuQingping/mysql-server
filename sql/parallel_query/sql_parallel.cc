@@ -2514,6 +2514,18 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   pq_global_stats.worker_execute_iterator_smoke_worker_table_opened.fetch_add(
       1, std::memory_order_relaxed);
 
+  if (pq_bind_qep_tab_table_preflight(worker_join,
+                                      worker->m_open_ctx.worker_table,
+                                      source_tab->table())) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_plan.cleanup(true, true);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+
   AccessPath *const worker_block_scan = NewPQblockScanAccessPath(
       worker_thd, worker->m_open_ctx.worker_table, this, DIV_TAB,
       /*qep_tab=*/nullptr,

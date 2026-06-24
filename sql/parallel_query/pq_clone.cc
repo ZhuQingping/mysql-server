@@ -23,6 +23,7 @@
 
 #include "sql/parallel_query/pq_clone.h"
 
+#include <cstring>
 #include <vector>
 
 #include "sql/parallel_query/sql_parallel.h"
@@ -38,6 +39,20 @@ AccessPath *CopyRangeScanAccessPath(THD *, AccessPath *, TABLE *) {
 ORDER *pq_dup_order(THD *, Query_block *, ORDER *) { return nullptr; }
 
 bool pq_dup_tabs(JOIN *, JOIN *, bool) { return true; }
+
+static bool pq_cstring_eq(const char *left, const char *right) {
+  if (left == nullptr || right == nullptr) return left == right;
+  return strcmp(left, right) == 0;
+}
+
+static bool pq_lex_cstring_eq(const LEX_CSTRING &left,
+                              const LEX_CSTRING &right) {
+  if (left.str == nullptr || right.str == nullptr) {
+    return left.str == right.str && left.length == right.length;
+  }
+  return left.length == right.length &&
+         memcmp(left.str, right.str, left.length) == 0;
+}
 
 bool pq_dup_tabs_skeleton_preflight(JOIN *worker_join, JOIN *leader_join) {
   pq_global_stats.worker_qep_tab_skeleton_attempts.fetch_add(
@@ -80,6 +95,79 @@ bool pq_dup_tabs_skeleton_preflight(JOIN *worker_join, JOIN *leader_join) {
   }
 
   pq_global_stats.worker_qep_tab_skeleton_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
+
+bool pq_bind_qep_tab_table_preflight(JOIN *worker_join, TABLE *worker_table,
+                                     TABLE *leader_table) {
+  pq_global_stats.worker_qep_tab_table_bind_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (worker_join == nullptr || worker_join->qep_tab == nullptr ||
+      worker_table == nullptr || leader_table == nullptr ||
+      worker_table == leader_table || worker_table->file == nullptr ||
+      leader_table->file == nullptr || worker_table->file == leader_table->file ||
+      worker_table->record[0] == nullptr || leader_table->record[0] == nullptr ||
+      worker_table->record[0] == leader_table->record[0] ||
+      worker_table->pos_in_table_list == nullptr ||
+      worker_join->const_tables >= worker_join->primary_tables ||
+      worker_join->const_tables != 0 || worker_join->primary_tables != 1) {
+    pq_global_stats.worker_qep_tab_table_bind_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  QEP_TAB *const tab = &worker_join->qep_tab[worker_join->const_tables];
+  Table_ref *const worker_ref = worker_table->pos_in_table_list;
+  Table_ref *const leader_ref = leader_table->pos_in_table_list;
+  QEP_TAB *const saved_worker_qep_tab = worker_table->reginfo.qep_tab;
+  Query_block *const saved_ref_query_block = worker_ref->query_block;
+
+  bool failed = tab->join() != worker_join || tab->idx() != 0 ||
+                tab->table() != nullptr || tab->table_ref != nullptr ||
+                tab->condition() != nullptr || tab->range_scan() != nullptr ||
+                worker_table->s == nullptr || leader_table->s == nullptr ||
+                leader_ref == nullptr || worker_ref == leader_ref ||
+                worker_ref->table != worker_table ||
+                leader_ref->table != leader_table ||
+                saved_worker_qep_tab != nullptr ||
+                !pq_lex_cstring_eq(worker_table->s->db, leader_table->s->db) ||
+                !pq_lex_cstring_eq(worker_table->s->table_name,
+                                   leader_table->s->table_name) ||
+                !pq_cstring_eq(worker_ref->alias, leader_ref->alias) ||
+                !bitmap_cmp(worker_table->read_set, leader_table->read_set) ||
+                !bitmap_cmp(worker_table->write_set, leader_table->write_set);
+
+  if (failed) {
+    pq_global_stats.worker_qep_tab_table_bind_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  worker_ref->query_block = worker_join->query_block;
+  tab->table_ref = worker_ref;
+  tab->set_table(worker_table);
+
+  failed = tab->table() != worker_table || tab->table_ref != worker_ref ||
+           worker_table->reginfo.qep_tab != tab ||
+           worker_ref->query_block != worker_join->query_block ||
+           tab->condition() != nullptr || tab->range_scan() != nullptr;
+
+  tab->set_table(nullptr);
+  worker_table->reginfo.qep_tab = saved_worker_qep_tab;
+  tab->table_ref = nullptr;
+  worker_ref->query_block = saved_ref_query_block;
+
+  if (failed || tab->table() != nullptr || tab->table_ref != nullptr ||
+      worker_ref->query_block != saved_ref_query_block ||
+      worker_table->reginfo.qep_tab != saved_worker_qep_tab) {
+    pq_global_stats.worker_qep_tab_table_bind_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  pq_global_stats.worker_qep_tab_table_bind_success.fetch_add(
       1, std::memory_order_relaxed);
   return false;
 }
