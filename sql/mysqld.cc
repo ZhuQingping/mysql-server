@@ -10328,6 +10328,15 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_blocked_readinfo,
     worker_execute_iterator_smoke_blocked_readinfo)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_blocked_access_path,
+    worker_execute_iterator_smoke_blocked_access_path)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_blocked_iterator,
+    worker_execute_iterator_smoke_blocked_iterator)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_iterator_constructed,
+    worker_execute_iterator_smoke_iterator_constructed)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_blocked_execute,
     worker_execute_iterator_smoke_blocked_execute)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
@@ -12551,12 +12560,21 @@ SHOW_VAR status_vars[] = {
     {"Parallel_worker_execute_iterator_smoke_blocked_clone",
      (char *)&show_pq_worker_execute_iterator_smoke_blocked_clone, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_blocked_access_path",
+     (char *)&show_pq_worker_execute_iterator_smoke_blocked_access_path,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_blocked_execute",
      (char *)&show_pq_worker_execute_iterator_smoke_blocked_execute, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_blocked_iterator",
+     (char *)&show_pq_worker_execute_iterator_smoke_blocked_iterator, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_blocked_readinfo",
      (char *)&show_pq_worker_execute_iterator_smoke_blocked_readinfo, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_iterator_constructed",
+     (char *)&show_pq_worker_execute_iterator_smoke_iterator_constructed,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_success",
      (char *)&show_pq_worker_execute_iterator_smoke_success, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

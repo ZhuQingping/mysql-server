@@ -243,3 +243,43 @@ readinfo 构建。
 - 开发阶段只跑该切口相关 MTR，完整 suite 留到阶段收尾；
 - 下一步必须推进 worker plan / ExecuteIterator 主路径的新事实，不再重复
   synthetic `Query_result_mq`、typed pull bridge 或 readinfo smoke。
+
+## Worker PQ_BLOCK_SCAN Iterator Construction Smoke
+
+本次小步继续停留在 debug-only smoke 链路，但把阻断点从“readinfo 后直接
+execute gate”推进到商用 worker plan 的下一层边界：
+
+- 从 leader 当前单表 `QEP_TAB/TABLE` 构造最小 `PQ_BLOCK_SCAN`
+  `AccessPath`；
+- 调用既有 `CreateIteratorFromAccessPath()` 创建 `PQblockScanIterator`；
+- 不调用 iterator `Init()` / `Read()`；
+- 不调用 `ExecuteIteratorQuery()`；
+- 不启动 production worker path，不进入 handler/InnoDB worker scan。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_blocked_access_path`
+- `Parallel_worker_execute_iterator_smoke_blocked_iterator`
+- `Parallel_worker_execute_iterator_smoke_iterator_constructed`
+
+预期 MTR 行为：
+
+- clone/readinfo/access-path/iterator 均不阻断；
+- iterator constructed 至少增加 1；
+- execute gate 仍阻断；
+- success 仍为 0。
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_worker_typed_pull_next_smoke \
+  pq_commercial_worker_result_adapter pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-accesspath-smoke-vardir2 \
+  --tmpdir=/tmp/pq-worker-accesspath-smoke-tmpdir2
+```
+
+结果：目标 MTR 5/5 通过。

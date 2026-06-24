@@ -179,6 +179,15 @@ bool pq_make_join_readinfo_smoke_contract(JOIN *join, Gather_operator *gather,
   return join != nullptr && gather != nullptr && div_tab == nullptr;
 }
 
+QEP_TAB *pq_first_worker_smoke_qep_tab(JOIN *join) {
+  if (join == nullptr || join->qep_tab == nullptr ||
+      join->const_tables >= join->primary_tables) {
+    return nullptr;
+  }
+  QEP_TAB *tab = &join->qep_tab[join->const_tables];
+  return tab->table() != nullptr ? tab : nullptr;
+}
+
 void *pq_worker_thread_entry(void *arg_ptr) {
   auto *arg = static_cast<PQ_worker_thread_arg *>(arg_ptr);
   PQ_worker_info *worker = arg != nullptr ? arg->worker : nullptr;
@@ -2310,9 +2319,41 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     return false;
   }
 
+  QEP_TAB *const source_tab = pq_first_worker_smoke_qep_tab(join);
+  if (source_tab == nullptr) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_join->destroy();
+    return false;
+  }
+
+  AccessPath *const worker_block_scan = NewPQblockScanAccessPath(
+      leader_thd, source_tab->table(), this, DIV_TAB, source_tab,
+      /*need_rowid=*/false);
+  if (worker_block_scan == nullptr) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_join->destroy();
+    return false;
+  }
+
+  auto iterator =
+      CreateIteratorFromAccessPath(leader_thd, worker_block_scan, worker_join,
+                                   /*eligible_for_batch_mode=*/false);
+  if (iterator == nullptr) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_iterator.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_join->destroy();
+    return false;
+  }
+
+  pq_global_stats.worker_execute_iterator_smoke_iterator_constructed.fetch_add(
+      1, std::memory_order_relaxed);
+
   /*
     The current branch has not migrated commercial make_pq_worker_plan() or
-    worker Query_expression ownership. Stop before ExecuteIteratorQuery().
+    worker Query_expression ownership. Stop after proving the PQ_BLOCK_SCAN
+    iterator construction boundary and before ExecuteIteratorQuery().
   */
   pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
       1, std::memory_order_relaxed);
