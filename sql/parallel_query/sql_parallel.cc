@@ -202,6 +202,119 @@ bool pq_worker_join_ownership_preflight(JOIN *worker_join, JOIN *leader_join) {
          worker_join->query_expression() != leader_join->query_expression();
 }
 
+class PQ_worker_execute_smoke_plan {
+ public:
+  bool create(PQ_worker_info *worker, Gather_operator *gather, JOIN *leader_join) {
+    m_worker = worker;
+    m_gather = gather;
+
+    m_worker_thd = pq_create_worker_thd(worker, gather);
+    if (m_worker_thd == nullptr) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_worker_open
+          .fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+
+    m_worker_join = pq_make_join(m_worker_thd, leader_join);
+    if (m_worker_join == nullptr) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_clone.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    if (!pq_make_join_readinfo_smoke_contract(m_worker_join, gather, nullptr)) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_readinfo.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    pq_global_stats.worker_execute_iterator_smoke_plan_constructed.fetch_add(
+        1, std::memory_order_relaxed);
+    m_constructed = true;
+    return true;
+  }
+
+  bool bind_result() {
+    auto *mq_result = new (m_worker_thd->mem_root)
+        Query_result_mq(m_worker_join, m_worker->m_mq_handle, false);
+    if (mq_result == nullptr ||
+        mq_result->get_mq_handler() != m_worker->m_mq_handle ||
+        m_worker_join->query_expression() == nullptr ||
+        m_worker_join->query_block == nullptr) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_result.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    m_original_expression_result =
+        m_worker_join->query_expression()->query_result();
+    m_original_block_result = m_worker_join->query_block->query_result();
+    m_worker_join->query_expression()->set_query_result(mq_result);
+    m_worker_join->query_block->set_query_result(mq_result);
+    m_result_bound = true;
+
+    if (m_worker_join->query_expression()->query_result() != mq_result ||
+        m_worker_join->query_block->query_result() != mq_result) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_result.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    pq_global_stats.worker_execute_iterator_smoke_result_bound.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  void cleanup(bool close_worker_table, bool table_error) {
+    restore_result();
+
+    if (m_worker_join != nullptr) {
+      m_worker_join->destroy();
+      m_worker_join = nullptr;
+    }
+    if (close_worker_table && m_worker != nullptr) {
+      pq_close_worker_table(&m_worker->m_open_ctx, table_error);
+    }
+    if (m_worker != nullptr && m_worker_thd != nullptr) {
+      pq_destroy_worker_thd(m_worker);
+      m_worker_thd = nullptr;
+    }
+
+    if (m_constructed) {
+      pq_global_stats.worker_execute_iterator_smoke_plan_cleaned.fetch_add(
+          1, std::memory_order_relaxed);
+      m_constructed = false;
+    }
+  }
+
+  THD *worker_thd() const { return m_worker_thd; }
+  JOIN *worker_join() const { return m_worker_join; }
+
+ private:
+  void restore_result() {
+    if (!m_result_bound || m_worker_join == nullptr ||
+        m_worker_join->query_expression() == nullptr ||
+        m_worker_join->query_block == nullptr) {
+      return;
+    }
+    m_worker_join->query_expression()->set_query_result(
+        m_original_expression_result);
+    m_worker_join->query_block->set_query_result(m_original_block_result);
+    pq_global_stats.worker_execute_iterator_smoke_result_restored.fetch_add(
+        1, std::memory_order_relaxed);
+    m_result_bound = false;
+  }
+
+  PQ_worker_info *m_worker{nullptr};
+  Gather_operator *m_gather{nullptr};
+  THD *m_worker_thd{nullptr};
+  JOIN *m_worker_join{nullptr};
+  Query_result *m_original_expression_result{nullptr};
+  Query_result *m_original_block_result{nullptr};
+  bool m_result_bound{false};
+  bool m_constructed{false};
+};
+
 void *pq_worker_thread_entry(void *arg_ptr) {
   auto *arg = static_cast<PQ_worker_thread_arg *>(arg_ptr);
   PQ_worker_info *worker = arg != nullptr ? arg->worker : nullptr;
@@ -2371,43 +2484,21 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     }
   };
 
-  THD *worker_thd = pq_create_worker_thd(worker, this);
-  if (worker_thd == nullptr) {
-    pq_global_stats.worker_execute_iterator_smoke_blocked_worker_open.fetch_add(
-        1, std::memory_order_relaxed);
+  PQ_worker_execute_smoke_plan worker_plan;
+  if (!worker_plan.create(worker, this, join)) {
+    worker_plan.cleanup(false, true);
     end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
     return false;
   }
-
-  JOIN *worker_join = pq_make_join(worker_thd, join);
-  if (worker_join == nullptr) {
-    pq_global_stats.worker_execute_iterator_smoke_blocked_clone.fetch_add(
-        1, std::memory_order_relaxed);
-    pq_destroy_worker_thd(worker);
-    end_execute_ctx();
-    leader_thd->store_globals();
-    if (initialized_here) destroy();
-    return false;
-  }
-
-  if (!pq_make_join_readinfo_smoke_contract(worker_join, this, nullptr)) {
-    pq_global_stats.worker_execute_iterator_smoke_blocked_readinfo.fetch_add(
-        1, std::memory_order_relaxed);
-    worker_join->destroy();
-    pq_destroy_worker_thd(worker);
-    end_execute_ctx();
-    leader_thd->store_globals();
-    if (initialized_here) destroy();
-    return false;
-  }
+  THD *worker_thd = worker_plan.worker_thd();
+  JOIN *worker_join = worker_plan.worker_join();
 
   if (pq_open_worker_table(&worker->m_open_ctx)) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_worker_open.fetch_add(
         1, std::memory_order_relaxed);
-    worker_join->destroy();
-    pq_destroy_worker_thd(worker);
+    worker_plan.cleanup(false, true);
     end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
@@ -2423,9 +2514,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   if (worker_block_scan == nullptr) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
         1, std::memory_order_relaxed);
-    worker_join->destroy();
-    pq_close_worker_table(&worker->m_open_ctx, true);
-    pq_destroy_worker_thd(worker);
+    worker_plan.cleanup(true, true);
     end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
@@ -2439,9 +2528,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     if (iterator == nullptr) {
       pq_global_stats.worker_execute_iterator_smoke_blocked_iterator.fetch_add(
           1, std::memory_order_relaxed);
-      worker_join->destroy();
-      pq_close_worker_table(&worker->m_open_ctx, true);
-      pq_destroy_worker_thd(worker);
+      worker_plan.cleanup(true, true);
       end_execute_ctx();
       leader_thd->store_globals();
       if (initialized_here) destroy();
@@ -2459,9 +2546,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   if (read_iterator.Init()) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_init.fetch_add(
         1, std::memory_order_relaxed);
-    worker_join->destroy();
-    pq_close_worker_table(&worker->m_open_ctx, true);
-    pq_destroy_worker_thd(worker);
+    worker_plan.cleanup(true, true);
     end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
@@ -2473,9 +2558,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     pq_global_stats.worker_execute_iterator_smoke_blocked_read.fetch_add(
         1, std::memory_order_relaxed);
     read_iterator.End();
-    worker_join->destroy();
-    pq_close_worker_table(&worker->m_open_ctx, true);
-    pq_destroy_worker_thd(worker);
+    worker_plan.cleanup(true, true);
     end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
@@ -2485,55 +2568,20 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
       1, std::memory_order_relaxed);
   read_iterator.End();
 
-  auto *mq_result = new (worker_thd->mem_root)
-      Query_result_mq(worker_join, worker->m_mq_handle, false);
-  if (mq_result == nullptr || mq_result->get_mq_handler() != worker->m_mq_handle ||
-      worker_join->query_expression() == nullptr ||
-      worker_join->query_block == nullptr) {
-    pq_global_stats.worker_execute_iterator_smoke_blocked_result.fetch_add(
-        1, std::memory_order_relaxed);
-    worker_join->destroy();
-    pq_close_worker_table(&worker->m_open_ctx, true);
-    pq_destroy_worker_thd(worker);
+  if (!worker_plan.bind_result()) {
+    worker_plan.cleanup(true, true);
     end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
     return false;
   }
-  Query_result *original_expression_result =
-      worker_join->query_expression()->query_result();
-  Query_result *original_block_result = worker_join->query_block->query_result();
-  worker_join->query_expression()->set_query_result(mq_result);
-  worker_join->query_block->set_query_result(mq_result);
-  if (worker_join->query_expression()->query_result() != mq_result ||
-      worker_join->query_block->query_result() != mq_result) {
-    pq_global_stats.worker_execute_iterator_smoke_blocked_result.fetch_add(
-        1, std::memory_order_relaxed);
-    worker_join->query_expression()->set_query_result(original_expression_result);
-    worker_join->query_block->set_query_result(original_block_result);
-    worker_join->destroy();
-    pq_close_worker_table(&worker->m_open_ctx, true);
-    pq_destroy_worker_thd(worker);
-    end_execute_ctx();
-    leader_thd->store_globals();
-    if (initialized_here) destroy();
-    return false;
-  }
-  pq_global_stats.worker_execute_iterator_smoke_result_bound.fetch_add(
-      1, std::memory_order_relaxed);
-  worker_join->query_expression()->set_query_result(original_expression_result);
-  worker_join->query_block->set_query_result(original_block_result);
-  pq_global_stats.worker_execute_iterator_smoke_result_restored.fetch_add(
-      1, std::memory_order_relaxed);
 
   if (!pq_worker_join_ownership_preflight(worker_join, join)) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_ownership.fetch_add(
         1, std::memory_order_relaxed);
     pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
         1, std::memory_order_relaxed);
-    worker_join->destroy();
-    pq_close_worker_table(&worker->m_open_ctx, false);
-    pq_destroy_worker_thd(worker);
+    worker_plan.cleanup(true, false);
     end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
@@ -2548,9 +2596,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   */
   pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
       1, std::memory_order_relaxed);
-  worker_join->destroy();
-  pq_close_worker_table(&worker->m_open_ctx, false);
-  pq_destroy_worker_thd(worker);
+  worker_plan.cleanup(true, false);
   end_execute_ctx();
   leader_thd->store_globals();
   if (initialized_here) destroy();

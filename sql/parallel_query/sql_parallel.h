@@ -433,6 +433,8 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_clone{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_readinfo{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_worker_open{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_plan_constructed{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_plan_cleaned{0};
   std::atomic<uint64> worker_execute_iterator_smoke_worker_table_opened{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_access_path{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_iterator{0};
@@ -847,6 +849,10 @@ struct PQ_global_stats {
     worker_execute_iterator_smoke_blocked_readinfo.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_worker_open.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_plan_constructed.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_plan_cleaned.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_worker_table_opened.store(
         0, std::memory_order_relaxed);
@@ -1688,9 +1694,10 @@ class Gather_operator {
     This records how far the current commercial worker execution contract can
     progress. It may create and immediately destroy a non-executable cloned
     JOIN shell, create a local EXECUTE leader context, open a worker TABLE, and
-    run one PQblockScanIterator Init/Read/End cycle. It must not start worker
-    threads, attach Query_result_mq, run ExecuteIteratorQuery(), or alter
-    user-visible execution.
+    run one PQblockScanIterator Init/Read/End cycle. It may temporarily bind a
+    worker-owned Query_result_mq and restore the original result pointers before
+    cleanup. It must not start worker threads, send Query_result_mq data, run
+    ExecuteIteratorQuery(), or alter user-visible execution.
 
     @retval false  Probe completed and recorded a success/blocker counter
     @retval true   Local fatal error such as OOM

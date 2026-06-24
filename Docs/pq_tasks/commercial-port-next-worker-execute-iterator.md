@@ -436,6 +436,41 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 
 结果：目标 MTR 4/4 通过（含 `shutdown_report`）。
 
+## Restricted Worker Plan Ownership Helper
+
+本次小步不改变执行语义，只把 `run_worker_execute_iterator_smoke()` 里散落的
+worker THD / JOIN shell / `Query_result_mq` bind-restore / cleanup 逻辑收敛
+为受限 helper，贴近商用 `make_pq_worker_plan()` 的资源所有权形状。
+
+实现边界：
+
+- helper 负责创建 worker THD；
+- helper 负责通过当前 `pq_make_join()` 创建非执行 JOIN shell；
+- helper 负责执行 smoke-only readinfo contract；
+- helper 负责 `Query_result_mq` 临时绑定和 cleanup 期间恢复原始 result；
+- helper cleanup 按调用点决定是否关闭 worker table，保持现有 close 顺序；
+- 当前仍稳定命中 ownership blocker；
+- 仍不调用 `ExecuteIteratorQuery()`。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_plan_constructed`
+- `Parallel_worker_execute_iterator_smoke_plan_cleaned`
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_commercial_worker_result pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-plan-helper-vardir \
+  --tmpdir=/tmp/pq-worker-plan-helper-tmpdir
+```
+
+结果：目标 MTR 4/4 通过（含 `shutdown_report`）。
+
 ## Worker Query Ownership Preflight Gate
 
 两个只读 Explorer 对商用仓和当前仓的结论一致：商用

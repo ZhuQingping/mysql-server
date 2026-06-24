@@ -27,6 +27,14 @@ SET @blocked_worker_open_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
         'Parallel_worker_execute_iterator_smoke_blocked_worker_open');
+SET @plan_constructed_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_plan_constructed');
+SET @plan_cleaned_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_plan_cleaned');
 SET @worker_table_opened_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -102,6 +110,14 @@ SELECT
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_blocked_worker_open') -
      @blocked_worker_open_before) = 0 AS worker_execute_not_blocked_worker_open,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_plan_constructed') -
+     @plan_constructed_before) >= 1 AS worker_execute_plan_constructed,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_plan_cleaned') -
+     @plan_cleaned_before) >= 1 AS worker_execute_plan_cleaned,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_worker_table_opened') -
