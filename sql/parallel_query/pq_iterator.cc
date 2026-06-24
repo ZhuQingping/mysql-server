@@ -321,6 +321,9 @@ bool PQTableScanIterator::Init() {
       should_enter_threaded_read_shadow_path(requested_dop);
   const bool read_shadow_path =
       !threaded_read_shadow_path && should_enter_read_shadow_path(requested_dop);
+  const bool threaded_pqwr_record_gather_path =
+      !threaded_read_shadow_path && !read_shadow_path &&
+      should_enter_threaded_pqwr_record_gather_path(requested_dop);
   pq_global_stats.probe_attempts.fetch_add(1, std::memory_order_relaxed);
   int error = table()->file->pq_leader_scan_init(
       thd(), &m_leader_ctx, PQ_leader_scan_mode::PROBE, requested_dop,
@@ -500,9 +503,13 @@ bool PQTableScanIterator::Init() {
     return true;
   }
 
-  if ((read_shadow_path || threaded_read_shadow_path) && probe_supported) {
+  if ((read_shadow_path || threaded_read_shadow_path ||
+       threaded_pqwr_record_gather_path) &&
+      probe_supported) {
     const uint threaded_execute_dop =
-        threaded_read_shadow_path ? requested_dop : 1;
+        (threaded_read_shadow_path || threaded_pqwr_record_gather_path)
+            ? requested_dop
+            : 1;
     uint execute_dop = 0;
     error = table()->file->pq_leader_scan_init(
         thd(), &m_leader_ctx, PQ_leader_scan_mode::EXECUTE,
@@ -523,7 +530,23 @@ bool PQTableScanIterator::Init() {
       return true;
     }
 
-    if (threaded_read_shadow_path) {
+    if (threaded_pqwr_record_gather_path) {
+      m_record_gather = new MQ_record_gather(thd(), table());
+      if (m_record_gather == nullptr ||
+          m_record_gather->mq_scan_init(m_gather)) {
+        cleanup_pq_resources(true);
+        PrintError(HA_ERR_INTERNAL_ERROR);
+        return true;
+      }
+      if (m_gather->run_worker_callback_pqwr_threaded_producer(
+              thd(), table(), std::numeric_limits<uint32>::max())) {
+        cleanup_pq_resources(true);
+        PrintError(HA_ERR_INTERNAL_ERROR);
+        return true;
+      }
+      m_use_worker_result_record_gather = true;
+      DEBUG_SYNC(thd(), "pq_read_threaded_worker_started");
+    } else if (threaded_read_shadow_path) {
       if (m_gather->run_worker_callback_threaded_producer(
               thd(), table(), std::numeric_limits<uint32>::max())) {
         cleanup_pq_resources(true);
@@ -615,6 +638,19 @@ bool PQTableScanIterator::should_enter_threaded_read_shadow_path(
          table()->s->reclength > 0;
 }
 
+bool PQTableScanIterator::should_enter_threaded_pqwr_record_gather_path(
+    uint requested_dop) const {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_read_threaded_pqwr_record_gather_path", {
+    enabled = true;
+  });
+  return enabled && thd() != nullptr && m_join != nullptr &&
+         m_join->pq_eligible && thd()->variables.parallel_query &&
+         requested_dop == 2 && table() != nullptr && table()->s != nullptr &&
+         table()->s->blob_fields == 0 && table()->s->fields >= 2 &&
+         table()->s->reclength > 0;
+}
+
 int PQTableScanIterator::Read() {
   if (m_parallel_scan_delegate != nullptr) {
     return m_parallel_scan_delegate->Read();
@@ -691,6 +727,17 @@ int PQTableScanIterator::Read() {
     }
 
     if (status == Exchange_nosort::Materialize_status::EOF_REACHED) {
+      const auto error_state = m_gather->resolve_error_priority(thd());
+      if (error_state.has_error()) {
+        int error_code = HA_ERR_INTERNAL_ERROR;
+        if (error_state.error_code != 0) {
+          error_code = error_state.error_code;
+          thd()->pq_error = error_code;
+        }
+        cleanup_pq_resources(true);
+        PrintError(error_code);
+        return 1;
+      }
       if (!m_executed_counted) {
         pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
         pq_global_stats.queries_executed.fetch_add(1,
@@ -702,6 +749,17 @@ int PQTableScanIterator::Read() {
     }
 
     if (status == Exchange_nosort::Materialize_status::WOULD_BLOCK) {
+      const auto error_state = m_gather->resolve_error_priority(thd());
+      if (error_state.has_error()) {
+        int error_code = HA_ERR_INTERNAL_ERROR;
+        if (error_state.error_code != 0) {
+          error_code = error_state.error_code;
+          thd()->pq_error = error_code;
+        }
+        cleanup_pq_resources(true);
+        PrintError(error_code);
+        return 1;
+      }
       exchange->wait_for_message(kPQReadWaitTimeoutUs);
       continue;
     }

@@ -193,6 +193,7 @@ void pq_set_execution_state(THD *thd, PQ_execution_state state);
 enum class PQ_worker_task : uint {
   NOOP = 0,
   CALLBACK_LIMITED_PRODUCER,
+  CALLBACK_PQWR_PRODUCER,
   QUERY_RESULT_MQ_PROBE,
   EXECUTE_ITERATOR_SMOKE,
   EXECUTE_ITERATOR_CALL_SMOKE
@@ -2076,6 +2077,17 @@ class Gather_operator {
   bool run_worker_callback_threaded_producer(THD *leader_thd,
                                              TABLE *leader_table,
                                              uint32 max_rows);
+
+  /**
+    Start worker-thread callback producers that send rows as PQWR frames.
+
+    This debug-only bridge keeps the same worker open/scan lifecycle as
+    run_worker_callback_threaded_producer(), but workers write through
+    Query_result_mq and the leader is expected to consume via MQ_record_gather.
+  */
+  bool run_worker_callback_pqwr_threaded_producer(THD *leader_thd,
+                                                  TABLE *leader_table,
+                                                  uint32 max_rows);
 
   /**
     Abort all workers and close MQ producers.

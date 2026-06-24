@@ -2283,3 +2283,56 @@ Notes:
 - commit: `b9c521a933a` Add PQTableScanIterator PQWR gather smoke；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6p - Threaded PQWR record_gather fullscan gate
+
+Status: completed, reviewed, ready to commit.
+
+目标：
+
+- 增加 debug-only DOP=2 worker-thread `PQWR` fullscan gate；
+- worker 复用现有 callback scan/open/close 生命周期，但通过
+  `Query_result_mq` 写 `PQWR` row/FINISH；
+- leader 通过 `PQTableScanIterator::Read()` 中的
+  `MQ_record_gather::mq_scan_next_worker_result()` 消费真实 worker thread
+  产生的 `PQWR` rows；
+- 不修改普通 `parallel_query=ON` 默认路径，不改 optimizer eligibility、
+  AccessPath、InnoDB 非 fullscan、ORDER BY 或 GROUP BY 路径。
+
+Implementation:
+
+- 新增 `PQ_worker_task::CALLBACK_PQWR_PRODUCER`；
+- 新增 `PQ_worker_result_mq_row_sink`，复用两个稳定 `Item_int`，避免每行
+  在 worker mem_root 上分配 Item；
+- 新增 `Gather_operator::run_worker_callback_pqwr_threaded_producer()`；
+- `PQTableScanIterator` 新增
+  `pq_read_threaded_pqwr_record_gather_path` DBUG gate，且只允许
+  `parallel_query=ON`、eligible、DOP=2、两列以上非 BLOB 表进入；
+- worker 失败时关闭 MQ producer，leader 在 `WOULD_BLOCK` 和 EOF 前检查
+  worker terminal error，避免错误路径挂起；
+- 新增成功路径 MTR `pq_read_threaded_pqwr_record_gather`；
+- 新增错误路径 MTR `pq_read_threaded_pqwr_worker_error`。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_read_threaded_pqwr_record_gather`
+  `pq_read_threaded_pqwr_worker_error`
+  `pq_leader_pqwr_record_gather_smoke`
+  `pq_read_threaded_dop2_shadow`。
+
+Review:
+
+- initial Review Agent requested fixes for worker error progress, row-order
+  stability, and per-row mem_root growth；
+- fixes were applied: worker error marks status before producer detach,
+  success MTR uses sorted output, and PQWR sink reuses stable `Item_int`
+  instances instead of per-row allocation；
+- final Review Agent accepted with no remaining findings。
+
+Notes:
+
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
