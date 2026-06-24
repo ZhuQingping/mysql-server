@@ -400,3 +400,38 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 ```
 
 结果：目标 MTR 5/5 通过。
+
+## Worker Query_result_mq Ownership Smoke
+
+本次小步继续推进 worker ExecuteIterator 链路中“结果接收者归属”的边界：
+
+- 在 worker THD mem_root 上创建 worker-owned `Query_result_mq`；
+- 校验 `Query_result_mq` 持有的 `MQueue_handle` 与 worker MQ handle 一致；
+- 将同一个 `Query_result_mq` 绑定到 worker
+  `Query_expression` 和 `Query_block`；
+- 校验两个 query result getter 均返回同一个 worker-owned result；
+- 当前 `pq_make_join()` 仍共享 leader `Query_block`，因此绑定后必须在销毁
+  worker THD 前恢复原始 result 指针；
+- 不调用 `send_result_set_metadata()` / `send_data()` / `send_eof()`；
+- 不调用 `ExecuteIteratorQuery()`；
+- execute gate 仍保持阻断，`worker_execute_iterator_smoke_success` 仍为 0。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_blocked_result`
+- `Parallel_worker_execute_iterator_smoke_result_bound`
+- `Parallel_worker_execute_iterator_smoke_result_restored`
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_commercial_worker_result pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-result-own-vardir \
+  --tmpdir=/tmp/pq-worker-result-own-tmpdir
+```
+
+结果：目标 MTR 4/4 通过（含 `shutdown_report`）。

@@ -10355,6 +10355,15 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_read_success,
     worker_execute_iterator_smoke_read_success)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_blocked_result,
+    worker_execute_iterator_smoke_blocked_result)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_result_bound,
+    worker_execute_iterator_smoke_result_bound)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_result_restored,
+    worker_execute_iterator_smoke_result_restored)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_blocked_execute,
     worker_execute_iterator_smoke_blocked_execute)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
@@ -12601,6 +12610,15 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_read_success",
      (char *)&show_pq_worker_execute_iterator_smoke_read_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_blocked_result",
+     (char *)&show_pq_worker_execute_iterator_smoke_blocked_result, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_result_bound",
+     (char *)&show_pq_worker_execute_iterator_smoke_result_bound, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_result_restored",
+     (char *)&show_pq_worker_execute_iterator_smoke_result_restored, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_blocked_worker_open",
      (char *)&show_pq_worker_execute_iterator_smoke_blocked_worker_open,

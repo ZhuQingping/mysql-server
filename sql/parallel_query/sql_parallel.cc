@@ -2472,10 +2472,52 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
       1, std::memory_order_relaxed);
   read_iterator.End();
 
+  auto *mq_result = new (worker_thd->mem_root)
+      Query_result_mq(worker_join, worker->m_mq_handle, false);
+  if (mq_result == nullptr || mq_result->get_mq_handler() != worker->m_mq_handle ||
+      worker_join->query_expression() == nullptr ||
+      worker_join->query_block == nullptr) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_result.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_join->destroy();
+    pq_close_worker_table(&worker->m_open_ctx, true);
+    pq_destroy_worker_thd(worker);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+  Query_result *original_expression_result =
+      worker_join->query_expression()->query_result();
+  Query_result *original_block_result = worker_join->query_block->query_result();
+  worker_join->query_expression()->set_query_result(mq_result);
+  worker_join->query_block->set_query_result(mq_result);
+  if (worker_join->query_expression()->query_result() != mq_result ||
+      worker_join->query_block->query_result() != mq_result) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_result.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_join->query_expression()->set_query_result(original_expression_result);
+    worker_join->query_block->set_query_result(original_block_result);
+    worker_join->destroy();
+    pq_close_worker_table(&worker->m_open_ctx, true);
+    pq_destroy_worker_thd(worker);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+  pq_global_stats.worker_execute_iterator_smoke_result_bound.fetch_add(
+      1, std::memory_order_relaxed);
+  worker_join->query_expression()->set_query_result(original_expression_result);
+  worker_join->query_block->set_query_result(original_block_result);
+  pq_global_stats.worker_execute_iterator_smoke_result_restored.fetch_add(
+      1, std::memory_order_relaxed);
+
   /*
     The current branch has not migrated commercial make_pq_worker_plan() or
     worker Query_expression ownership. Stop after proving the PQ_BLOCK_SCAN
-    iterator single-row Read boundary and before ExecuteIteratorQuery().
+    iterator single-row Read and Query_result_mq ownership boundaries before
+    ExecuteIteratorQuery().
   */
   pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
       1, std::memory_order_relaxed);
