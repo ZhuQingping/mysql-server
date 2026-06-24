@@ -37,6 +37,14 @@ SET @iterator_constructed_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME =
 'Parallel_worker_execute_iterator_smoke_iterator_constructed');
+SET @blocked_init_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_smoke_blocked_init');
+SET @init_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_smoke_init_success');
 SET @blocked_execute_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME =
@@ -84,14 +92,22 @@ WHERE VARIABLE_NAME =
 @iterator_constructed_before) >= 1 AS worker_execute_iterator_constructed,
 ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_smoke_blocked_init') -
+@blocked_init_before) = 0 AS worker_execute_not_blocked_init,
+((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_smoke_init_success') -
+@init_success_before) >= 1 AS worker_execute_init_success,
+((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
 'Parallel_worker_execute_iterator_smoke_blocked_execute') -
 @blocked_execute_before) >= 1 AS worker_execute_blocked_execute,
 ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME =
 'Parallel_worker_execute_iterator_smoke_success') -
 @success_before) = 0 AS worker_execute_not_success;
-worker_execute_attempted	worker_execute_not_blocked_clone	worker_execute_not_blocked_readinfo	worker_execute_not_blocked_worker_open	worker_execute_worker_table_opened	worker_execute_not_blocked_access_path	worker_execute_not_blocked_iterator	worker_execute_iterator_constructed	worker_execute_blocked_execute	worker_execute_not_success
-1	1	1	1	1	1	1	1	1	1
+worker_execute_attempted	worker_execute_not_blocked_clone	worker_execute_not_blocked_readinfo	worker_execute_not_blocked_worker_open	worker_execute_worker_table_opened	worker_execute_not_blocked_access_path	worker_execute_not_blocked_iterator	worker_execute_iterator_constructed	worker_execute_not_blocked_init	worker_execute_init_success	worker_execute_blocked_execute	worker_execute_not_success
+1	1	1	1	1	1	1	1	1	1	1	1
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;
 SET SESSION parallel_default_dop=4;

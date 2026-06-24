@@ -2295,7 +2295,9 @@ bool Gather_operator::run_query_result_mq_threaded_probe_smoke(
 }
 
 bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
-                                                        JOIN *join) {
+                                                        JOIN *join,
+                                                        PQ_Leader_context
+                                                            *leader_ctx) {
   pq_global_stats.worker_execute_iterator_smoke_attempts.fetch_add(
       1, std::memory_order_relaxed);
 
@@ -2331,8 +2333,15 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   }
 
   worker->m_open_ctx.leader_table = source_tab->table();
+  worker->m_open_ctx.leader_ctx = leader_ctx;
   worker->m_open_ctx.actual_dop = m_dop;
   worker->m_open_ctx.mq_handle = worker->m_mq_handle;
+  if (worker->m_open_ctx.leader_ctx == nullptr) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_init.fetch_add(
+        1, std::memory_order_relaxed);
+    if (initialized_here) destroy();
+    return false;
+  }
 
   THD *worker_thd = pq_create_worker_thd(worker, this);
   if (worker_thd == nullptr) {
@@ -2404,15 +2413,27 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
       if (initialized_here) destroy();
       return false;
     }
-  }
 
-  pq_global_stats.worker_execute_iterator_smoke_iterator_constructed.fetch_add(
-      1, std::memory_order_relaxed);
+    pq_global_stats.worker_execute_iterator_smoke_iterator_constructed.fetch_add(
+        1, std::memory_order_relaxed);
+    if (iterator->Init()) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_init.fetch_add(
+          1, std::memory_order_relaxed);
+      worker_join->destroy();
+      pq_close_worker_table(&worker->m_open_ctx, true);
+      pq_destroy_worker_thd(worker);
+      leader_thd->store_globals();
+      if (initialized_here) destroy();
+      return false;
+    }
+    pq_global_stats.worker_execute_iterator_smoke_init_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
 
   /*
     The current branch has not migrated commercial make_pq_worker_plan() or
     worker Query_expression ownership. Stop after proving the PQ_BLOCK_SCAN
-    iterator construction boundary and before ExecuteIteratorQuery().
+    iterator Init/End boundary and before ExecuteIteratorQuery().
   */
   pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
       1, std::memory_order_relaxed);

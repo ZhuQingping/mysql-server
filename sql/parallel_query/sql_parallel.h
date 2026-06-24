@@ -437,6 +437,8 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_access_path{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_iterator{0};
   std::atomic<uint64> worker_execute_iterator_smoke_iterator_constructed{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_init{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_init_success{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_execute{0};
   std::atomic<uint64> worker_execute_iterator_smoke_success{0};
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
@@ -848,6 +850,10 @@ struct PQ_global_stats {
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_iterator_constructed.store(
         0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_init.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_init_success.store(0,
+                                                     std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_execute.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_success.store(0,
@@ -1669,7 +1675,8 @@ class Gather_operator {
     @retval false  Probe completed and recorded a success/blocker counter
     @retval true   Local fatal error such as OOM
   */
-  bool run_worker_execute_iterator_smoke(THD *leader_thd, JOIN *join);
+  bool run_worker_execute_iterator_smoke(THD *leader_thd, JOIN *join,
+                                         PQ_Leader_context *leader_ctx);
 
   /**
     Run a limited V2-8J callback multi-row producer smoke pass.

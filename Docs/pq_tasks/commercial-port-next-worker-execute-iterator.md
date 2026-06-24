@@ -325,3 +325,37 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 ```
 
 结果：目标 MTR 5/5 通过。
+
+## Worker PQ_BLOCK_SCAN Init/End Smoke
+
+本次小步继续推进到 `PQblockScanIterator::Init()` 边界：
+
+- `run_worker_execute_iterator_smoke()` 显式接收 `PQ_Leader_context`，不再隐式
+  依赖 gather 状态；
+- 使用 worker THD + worker TABLE 构造 iterator 后调用 `Init()`；
+- `Init()` 成功后立即离开 iterator 作用域，由 `PQblockScanIterator`
+  析构执行 `End()`，再关闭 worker table / 销毁 worker THD；
+- 不调用 `Read()`；
+- 不调用 `ExecuteIteratorQuery()`；
+- execute gate 仍保持阻断，`worker_execute_iterator_smoke_success` 仍为 0。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_blocked_init`
+- `Parallel_worker_execute_iterator_smoke_init_success`
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_worker_dop1 \
+  pq_worker_attach_contract_smoke pq_parallel_scan_iterator_row_values \
+  pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-init-smoke-vardir3 \
+  --tmpdir=/tmp/pq-worker-init-smoke-tmpdir3
+```
+
+结果：目标 MTR 6/6 通过。
