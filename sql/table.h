@@ -2171,6 +2171,8 @@ struct TABLE {
   void update_covering_prefix_keys(Field *field, uint16 key_read_length,
                                    Key_map *covering_prefix_keys);
 
+  [[nodiscard]] bool pq_copy(THD *thd, void *select, TABLE *orig);
+
   /**
     Returns the primary engine handler for the table.
     If none exist, nullptr is returned.

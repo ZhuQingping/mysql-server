@@ -243,6 +243,9 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_table_ref_clone_attempts{0};  ///< Table_ref clone
   std::atomic<uint64> worker_table_ref_clone_success{0};  ///< Table_ref ok
   std::atomic<uint64> worker_table_ref_clone_unsupported{0};  ///< Clone reject
+  std::atomic<uint64> worker_table_scalar_clone_attempts{0};  ///< TABLE clone
+  std::atomic<uint64> worker_table_scalar_clone_success{0};  ///< TABLE clone ok
+  std::atomic<uint64> worker_table_scalar_clone_unsupported{0};  ///< Table reject
   std::atomic<uint64> worker_position_clone_attempts{0};  ///< Position clone
   std::atomic<uint64> worker_position_clone_success{0};  ///< Position clone ok
   std::atomic<uint64> worker_position_clone_unsupported{0};  ///< Pos rejects
@@ -602,6 +605,9 @@ struct PQ_global_stats {
     worker_table_ref_clone_attempts.store(0, std::memory_order_relaxed);
     worker_table_ref_clone_success.store(0, std::memory_order_relaxed);
     worker_table_ref_clone_unsupported.store(0, std::memory_order_relaxed);
+    worker_table_scalar_clone_attempts.store(0, std::memory_order_relaxed);
+    worker_table_scalar_clone_success.store(0, std::memory_order_relaxed);
+    worker_table_scalar_clone_unsupported.store(0, std::memory_order_relaxed);
     worker_position_clone_attempts.store(0, std::memory_order_relaxed);
     worker_position_clone_success.store(0, std::memory_order_relaxed);
     worker_position_clone_unsupported.store(0, std::memory_order_relaxed);

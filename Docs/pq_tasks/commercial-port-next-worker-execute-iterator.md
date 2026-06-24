@@ -637,6 +637,46 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --tmpdir=/tmp/pq-worker-table-ref-clone-tmpdir
 ```
 
+## Worker TABLE Scalar Clone Smoke
+
+本次小步开始引入商用 `TABLE::pq_copy()` 接口，但只平移当前 worker
+full-scan smoke 需要且当前分支可安全验证的 scalar subset：
+
+- 在 `TABLE` 上新增 `pq_copy(THD*, void*, TABLE*)` 成员声明；
+- 复制 `possible_quick_keys`、`covering_keys`、`key_read`、`null_row`、
+  `const_table`、nullable 标记、handler pushed ICP keyno、handler
+  `stats.records`；
+- 新增 `pq_clone_table_scalar_preflight()`，在 worker table 打开后验证
+  worker `TABLE` / handler / record buffer 与 leader 不共享；
+- 当前不复制 partition metadata 和 ICP condition deep clone；如果 leader 或
+  worker table 已存在 `part_info` / `pushed_idx_cond`，本小步返回
+  unsupported。
+
+新增诊断：
+
+- `Parallel_worker_table_scalar_clone_attempts`
+- `Parallel_worker_table_scalar_clone_success`
+- `Parallel_worker_table_scalar_clone_unsupported`
+
+当前边界：
+
+- 不迁移 `partition_info::pq_copy_from()`；
+- 不迁移 `Item::pq_clone()` / `refix_fields()` for ICP；
+- 不把完整 `TABLE::pq_copy()` 用作生产 worker plan attach；
+- 不修改 optimizer / executor / handler / InnoDB 主路径。
+
+验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-table-scalar-vardir \
+  --tmpdir=/tmp/pq-worker-table-scalar-tmpdir
+```
+
 ## Worker POSITION Scalar Clone Smoke
 
 本次小步继续平移商用 `POSITION::pq_copy()` 的前置合同，但只做

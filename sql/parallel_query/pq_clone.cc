@@ -26,6 +26,7 @@
 #include <cstring>
 #include <vector>
 
+#include "sql/handler.h"
 #include "sql/parallel_query/sql_parallel.h"
 #include "sql/range_optimizer/range_optimizer.h"
 #include "sql/sql_class.h"
@@ -60,6 +61,32 @@ bool Table_ref::pq_copy(THD *thd, Table_ref *tbl_list) {
     db_length = tbl_list->db_length;
   }
 
+  return false;
+}
+
+bool TABLE::pq_copy(THD *thd, void *select_arg, TABLE *orig) {
+  (void)select_arg;
+  /*
+    Staged PQ clone helper: copy only scalar TABLE/handler metadata that the
+    worker execute smoke can validate. Do not copy or share handler objects,
+    record buffers, partition metadata, or ICP Item trees here.
+  */
+  if (thd == nullptr || orig == nullptr || file == nullptr ||
+      orig->file == nullptr || part_info != nullptr || orig->part_info != nullptr ||
+      file->pushed_idx_cond != nullptr || orig->file->pushed_idx_cond != nullptr ||
+      file->pushed_idx_cond_keyno != MAX_KEY ||
+      orig->file->pushed_idx_cond_keyno != MAX_KEY || orig->null_row) {
+    return true;
+  }
+
+  possible_quick_keys = orig->possible_quick_keys;
+  covering_keys = orig->covering_keys;
+  key_read = orig->key_read;
+  null_row = orig->null_row;
+  const_table = orig->const_table;
+  if (orig->is_nullable()) set_nullable();
+  file->pushed_idx_cond_keyno = orig->file->pushed_idx_cond_keyno;
+  file->stats.records = orig->file->stats.records;
   return false;
 }
 
@@ -474,6 +501,58 @@ bool pq_clone_table_ref_preflight(THD *worker_thd, Table_ref *leader_ref) {
   }
 
   pq_global_stats.worker_table_ref_clone_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
+
+bool pq_clone_table_scalar_preflight(THD *worker_thd, TABLE *worker_table,
+                                     TABLE *leader_table) {
+  pq_global_stats.worker_table_scalar_clone_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (worker_thd == nullptr || worker_table == nullptr ||
+      leader_table == nullptr || worker_table == leader_table ||
+      worker_table->in_use != worker_thd || worker_table->file == nullptr ||
+      leader_table->file == nullptr || worker_table->file == leader_table->file ||
+      worker_table->record[0] == nullptr || leader_table->record[0] == nullptr ||
+      worker_table->record[0] == leader_table->record[0] ||
+      (worker_table->record[1] != nullptr &&
+       worker_table->record[1] == leader_table->record[1])) {
+    pq_global_stats.worker_table_scalar_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  if (worker_table->pq_copy(worker_thd, nullptr, leader_table)) {
+    pq_global_stats.worker_table_scalar_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  const bool failed =
+      worker_table->possible_quick_keys != leader_table->possible_quick_keys ||
+      worker_table->covering_keys != leader_table->covering_keys ||
+      worker_table->key_read != leader_table->key_read ||
+      worker_table->null_row != leader_table->null_row ||
+      worker_table->const_table != leader_table->const_table ||
+      worker_table->is_nullable() != leader_table->is_nullable() ||
+      worker_table->file->pushed_idx_cond != nullptr ||
+      leader_table->file->pushed_idx_cond != nullptr ||
+      worker_table->file->pushed_idx_cond_keyno !=
+          leader_table->file->pushed_idx_cond_keyno ||
+      worker_table->file->stats.records != leader_table->file->stats.records ||
+      worker_table->file == leader_table->file ||
+      worker_table->record[0] == leader_table->record[0] ||
+      (worker_table->record[1] != nullptr &&
+       worker_table->record[1] == leader_table->record[1]);
+
+  if (failed) {
+    pq_global_stats.worker_table_scalar_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  pq_global_stats.worker_table_scalar_clone_success.fetch_add(
       1, std::memory_order_relaxed);
   return false;
 }
