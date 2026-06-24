@@ -269,6 +269,7 @@ class PQ_worker_execute_smoke_plan {
     restore_result();
 
     if (m_worker_join != nullptr) {
+      m_worker_join->pq_restore();
       m_worker_join->destroy();
       m_worker_join = nullptr;
     }

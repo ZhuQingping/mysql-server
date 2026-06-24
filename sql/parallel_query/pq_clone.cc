@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "sql/parallel_query/sql_parallel.h"
+#include "sql/sql_class.h"
 #include "sql/sql_lex.h"
 #include "sql/sql_optimizer.h"
 
@@ -44,17 +45,52 @@ bool pq_clone_shell_supported(THD *thd, JOIN *join) {
          join->query_block->table_count() == 1;
 }
 
+Query_block *pq_dup_query_shell(THD *thd, Query_block *leader_query_block) {
+  LEX *const lex = thd->lex;
+  if (lex == nullptr || lex->query_block != nullptr || lex->unit != nullptr ||
+      leader_query_block->pq_last_clone() != nullptr) {
+    return nullptr;
+  }
+
+  lex->thd = thd;
+  Query_block *const worker_query_block = lex->new_query(nullptr);
+  if (worker_query_block == nullptr) return nullptr;
+
+  leader_query_block->pq_link_clone(worker_query_block);
+  lex->set_current_query_block(worker_query_block);
+  lex->unit = worker_query_block->master_query_expression();
+  lex->query_block = worker_query_block;
+
+  worker_query_block->select_number = leader_query_block->select_number;
+  worker_query_block->add_active_options(leader_query_block->active_options());
+  worker_query_block->parallel_exec = leader_query_block->parallel_exec;
+  worker_query_block->uncacheable = leader_query_block->uncacheable;
+  worker_query_block->master_query_expression()->uncacheable =
+      leader_query_block->master_query_expression()->uncacheable;
+
+  return worker_query_block;
+}
+
 }  // namespace
 
 JOIN *pq_make_join(THD *thd, JOIN *join) {
   if (!pq_clone_shell_supported(thd, join)) return nullptr;
 
-  return new (thd->mem_root) JOIN(thd, join->query_block);
+  Query_block *const worker_query_block =
+      pq_dup_query_shell(thd, join->query_block);
+  if (worker_query_block == nullptr) return nullptr;
+
+  JOIN *const worker_join = new (thd->mem_root) JOIN(thd, worker_query_block);
+  if (worker_join == nullptr) worker_query_block->pq_restore();
+
+  return worker_join;
 }
 
 void Query_block::pq_backup() {}
 
-void Query_block::pq_restore() {}
+void Query_block::pq_restore() {
+  if (pq_is_clone()) pq_unlink_clone();
+}
 
 bool JOIN::pq_copy_from(JOIN *) { return true; }
 
@@ -62,7 +98,9 @@ bool JOIN::setup_tmp_table_info(JOIN *) { return true; }
 
 bool JOIN::restore_optimized_vars() { return true; }
 
-void JOIN::pq_restore() {}
+void JOIN::pq_restore() {
+  if (query_block != nullptr) query_block->pq_restore();
+}
 
 bool pq_clone_contract_preflight(THD *thd, JOIN *join) {
   pq_global_stats.clone_preflight_attempts.fetch_add(
@@ -106,6 +144,7 @@ bool pq_clone_activation_probe(THD *thd, JOIN *join) {
     return false;
   }
 
+  clone_shell->pq_restore();
   clone_shell->destroy();
 
   /*

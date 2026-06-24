@@ -507,3 +507,40 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 ```
 
 结果：目标 MTR 4/4 通过（含 `shutdown_report`）。
+
+## Worker-Owned Query Shell Smoke
+
+本次小步把 `pq_make_join()` 从共享 leader `Query_block` 的 JOIN shell 推进为
+worker-owned 顶层 `Query_block` / `Query_expression` shell，但仍不构造可执行
+worker plan，也不调用 `ExecuteIteratorQuery()`。
+
+实现边界：
+
+- 仅在既有 `pq_clone_shell_supported()` 单表场景下创建 owned shell；
+- 在 worker THD 的 `LEX` 上创建新的顶层 `Query_block`；
+- 复制最小非执行元数据：`select_number`、active options、`parallel_exec`、
+  `uncacheable`；
+- 通过 `pq_link_clone()` 记录 leader -> worker clone 关系；
+- `JOIN::pq_restore()` / `Query_block::pq_restore()` 在 cleanup 前 unlink clone；
+- `pq_make_join()` 在 JOIN 分配失败时立即 rollback clone link；
+- `PQ_worker_execute_smoke_plan::cleanup()` 销毁 worker JOIN 前恢复 clone link；
+- ownership preflight 现在应通过；
+- execute gate 仍保持 fail-closed，`success` 仍为 0。
+
+说明：当前 `pq_clone_activation_probe()` 仍运行在 leader THD 上，本切片后会在
+preflight 成功后更保守地 fallback，不再创建 leader-side shell；worker-owned shell
+仅由 worker THD 的 smoke plan 路径验证。
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_commercial_worker_result pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-owned-shell-vardir \
+  --tmpdir=/tmp/pq-worker-owned-shell-tmpdir
+```
+
+结果：目标 MTR 4/4 通过（含 `shutdown_report`）。
