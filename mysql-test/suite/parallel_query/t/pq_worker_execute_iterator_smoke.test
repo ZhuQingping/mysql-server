@@ -1,0 +1,62 @@
+# Verify the guarded worker ExecuteIteratorQuery contract probe.
+
+--source include/have_innodb_16k.inc
+
+CREATE TABLE pq_worker_execute_t (
+  id INT PRIMARY KEY,
+  v INT
+) ENGINE=InnoDB;
+INSERT INTO pq_worker_execute_t VALUES (1,10),(2,20),(3,30);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+
+SET @attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_attempts');
+SET @blocked_clone_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_blocked_clone');
+SET @blocked_readinfo_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_blocked_readinfo');
+SET @blocked_execute_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_blocked_execute');
+SET @success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_success');
+
+SELECT id, v FROM pq_worker_execute_t WHERE v >= 0;
+
+SELECT
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_attempts') -
+     @attempts_before) >= 1 AS worker_execute_attempted,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_blocked_clone') -
+     @blocked_clone_before) = 0 AS worker_execute_not_blocked_clone,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_blocked_readinfo') -
+     @blocked_readinfo_before) >= 1 AS worker_execute_blocked_readinfo,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_blocked_execute') -
+     @blocked_execute_before) = 0 AS worker_execute_not_reached_execute,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_success') -
+     @success_before) = 0 AS worker_execute_not_success;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE pq_worker_execute_t;

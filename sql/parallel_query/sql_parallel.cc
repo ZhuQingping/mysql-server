@@ -60,12 +60,14 @@
 #include "sql/field.h"            // Field
 #include "sql/item.h"             // Item_int
 #include "sql/mysqld.h"           // key_thread_parallel_query_worker
+#include "sql/parallel_query/pq_clone.h"
 #include "sql/parallel_query/pq_resource_stat.h"
 #include "sql/handler.h"          // handler
 #include "sql/parallel_query/exchange_sort.h"  // Exchange_sort
 #include "sql/parallel_query/query_result_mq.h"  // pq_run_query_result_mq_contract_smoke
 #include "sql/sql_base.h"         // close_thread_tables, open_ltable
 #include "sql/sql_class.h"        // THD
+#include "sql/sql_optimizer.h"    // JOIN
 #include "sql/sql_thd_internal_api.h"  // create_internal_thd
 #include "sql/table.h"            // TABLE, Table_ref
 #include "sql/transaction.h"      // trans_commit_stmt, trans_rollback_stmt
@@ -2267,6 +2269,41 @@ bool Gather_operator::run_query_result_mq_threaded_probe_smoke(
       rows_read, std::memory_order_relaxed);
   pq_global_stats.worker_result_smoke_finishes.fetch_add(
       finishes_read, std::memory_order_relaxed);
+  return false;
+}
+
+bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
+                                                        JOIN *join) {
+  pq_global_stats.worker_execute_iterator_smoke_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (!pq_clone_contract_preflight(leader_thd, join)) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_clone.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  JOIN *worker_join = pq_make_join(leader_thd, join);
+  if (worker_join == nullptr) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_clone.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  if (pq_make_join_readinfo(worker_join, this, nullptr)) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_readinfo.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_join->destroy();
+    return false;
+  }
+
+  /*
+    The current branch has not migrated commercial make_pq_worker_plan() or
+    worker Query_expression ownership. Stop before ExecuteIteratorQuery().
+  */
+  pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
+      1, std::memory_order_relaxed);
+  worker_join->destroy();
   return false;
 }
 

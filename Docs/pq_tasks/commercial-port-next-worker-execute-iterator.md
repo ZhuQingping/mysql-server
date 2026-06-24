@@ -2,7 +2,7 @@
 
 ## 状态
 
-Design prepared. Coding not started.
+Implementation completed / review pending.
 
 本任务书承接：
 
@@ -138,3 +138,45 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 
 本任务是小任务小提交。完成后单独 commit，不与 native Record_buffer、
 range/ref/ICP、ORDER BY、GROUP BY 等改动混合。
+
+## 实现记录
+
+本次小步实现选择“可观测阻断点”收口，没有打开 worker
+`ExecuteIteratorQuery()`：
+
+- 新增 `Gather_operator::run_worker_execute_iterator_smoke()`；
+- probe 创建并销毁非执行 `pq_make_join()` shell；
+- 当前阻断点记录在 `pq_make_join_readinfo()`，对应
+  `Parallel_worker_execute_iterator_smoke_blocked_readinfo`；
+- 新增 5 个 status 变量：
+  - `Parallel_worker_execute_iterator_smoke_attempts`
+  - `Parallel_worker_execute_iterator_smoke_blocked_clone`
+  - `Parallel_worker_execute_iterator_smoke_blocked_readinfo`
+  - `Parallel_worker_execute_iterator_smoke_blocked_execute`
+  - `Parallel_worker_execute_iterator_smoke_success`
+- 新增 `pq_worker_execute_iterator_smoke`，断言当前能通过 clone shell，
+  并在 readinfo 阶段阻断，尚未到达 execute/success；
+- 同步更新 `pq_stats` 变量清单。
+
+本次未改动：
+
+- 默认生产执行路径；
+- handler / InnoDB；
+- optimizer / access path；
+- `Query_result_mq` 协议；
+- ORDER BY / GROUP BY / ref / ICP / partition 路径。
+
+验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_worker_typed_pull_next_smoke \
+  pq_commercial_worker_result_adapter pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-exec-target2-vardir \
+  --tmpdir=/tmp/pq-worker-exec-target2-tmpdir
+```
+
+结果：目标 MTR 5/5 通过（含 `shutdown_report`）。

@@ -429,6 +429,11 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_result_smoke_finishes{0};  ///< FINISH frames
   std::atomic<uint64> worker_result_smoke_errors{0};  ///< ERROR frames
   std::atomic<uint64> worker_result_smoke_workers{0};  ///< Smoke workers
+  std::atomic<uint64> worker_execute_iterator_smoke_attempts{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_clone{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_readinfo{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_execute{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_success{0};
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
   std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
   std::atomic<uint64> exchange_row_image_smoke_rows{0};  ///< Row-image smoke rows
@@ -822,6 +827,16 @@ struct PQ_global_stats {
     worker_result_smoke_finishes.store(0, std::memory_order_relaxed);
     worker_result_smoke_errors.store(0, std::memory_order_relaxed);
     worker_result_smoke_workers.store(0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_attempts.store(0,
+                                                 std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_clone.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_readinfo.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_execute.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_success.store(0,
+                                                std::memory_order_relaxed);
     exchange_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_smoke_finishes.store(0, std::memory_order_relaxed);
     exchange_row_image_smoke_rows.store(0, std::memory_order_relaxed);
@@ -1627,6 +1642,19 @@ class Gather_operator {
     @retval true   Smoke pass failed
   */
   bool run_query_result_mq_threaded_probe_smoke(THD *leader_thd);
+
+  /**
+    Run a guarded worker ExecuteIteratorQuery contract probe.
+
+    This records how far the current commercial worker execution contract can
+    progress. It may create and immediately destroy a non-executable cloned
+    JOIN shell, but it must not start worker threads, call handler/InnoDB, run
+    ExecuteIteratorQuery(), or alter user-visible execution.
+
+    @retval false  Probe completed and recorded a success/blocker counter
+    @retval true   Local fatal error such as OOM
+  */
+  bool run_worker_execute_iterator_smoke(THD *leader_thd, JOIN *join);
 
   /**
     Run a limited V2-8J callback multi-row producer smoke pass.
