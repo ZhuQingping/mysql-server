@@ -214,3 +214,17 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --parallel=1 --vardir=/tmp/pq-worker-readinfo-target-vardir \
   --tmpdir=/tmp/pq-worker-readinfo-target-tmpdir
 ```
+
+## Readinfo Interface Risk Closure
+
+Review Agent 提醒：`pq_make_join_readinfo()` 是导出的生产形态接口，如果它对
+`div_tab == nullptr` 返回 success，未来非 smoke 调用可能误判为已完成
+readinfo 构建。
+
+修复决策：
+
+- `pq_make_join_readinfo()` 恢复 fail-closed；
+- 新增内部 `pq_make_join_readinfo_smoke_contract()`，只供
+  `run_worker_execute_iterator_smoke()` 使用；
+- smoke 仍能推进到 execute gate；
+- 生产调用在真实 QEP_TAB / AccessPath 构建迁移前不会得到假阳性 success。

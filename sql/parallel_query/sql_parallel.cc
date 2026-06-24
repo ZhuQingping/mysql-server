@@ -148,13 +148,10 @@ void *pq_worker_exec(void *arg [[maybe_unused]]) { return nullptr; }
 
 bool pq_make_join_readinfo(JOIN *join, Gather_operator *gather,
                            QEP_TAB *div_tab) {
-  /*
-    Smoke-only minimum contract: the commercial worker ExecuteIterator probe can
-    prove that readinfo reached a well-formed shell, but production QEP_TAB /
-    access-path construction is still closed.
-  */
-  if (join == nullptr || gather == nullptr || div_tab != nullptr) return true;
-  return false;
+  (void)join;
+  (void)gather;
+  (void)div_tab;
+  return true;
 }
 
 bool pq_check_stable_sort(JOIN *join [[maybe_unused]]) { return false; }
@@ -170,6 +167,17 @@ struct PQ_worker_thread_arg {
 };
 
 bool pq_run_worker_thread_task(PQ_worker_info *worker, Gather_operator *gather);
+
+bool pq_make_join_readinfo_smoke_contract(JOIN *join, Gather_operator *gather,
+                                          QEP_TAB *div_tab) {
+  /*
+    Smoke-only minimum contract: the worker ExecuteIterator probe can prove
+    that readinfo reached a well-formed shell, while the exported production
+    pq_make_join_readinfo() remains fail-closed until real QEP_TAB/access-path
+    construction is migrated.
+  */
+  return join != nullptr && gather != nullptr && div_tab == nullptr;
+}
 
 void *pq_worker_thread_entry(void *arg_ptr) {
   auto *arg = static_cast<PQ_worker_thread_arg *>(arg_ptr);
@@ -2295,7 +2303,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     return false;
   }
 
-  if (pq_make_join_readinfo(worker_join, this, nullptr)) {
+  if (!pq_make_join_readinfo_smoke_contract(worker_join, this, nullptr)) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_readinfo.fetch_add(
         1, std::memory_order_relaxed);
     worker_join->destroy();
