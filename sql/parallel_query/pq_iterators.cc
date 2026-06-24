@@ -1395,10 +1395,19 @@ bool PQblockScanIterator::Init() {
     return true;
   }
 
+  if (table()->file->ha_rnd_init(true) != 0) {
+    return true;
+  }
+  m_rnd_inited = true;
+
   PQ_Worker_context *new_ctx = nullptr;
   const int error =
       table()->file->pq_worker_scan_init(&worker->m_open_ctx, &new_ctx);
   if (error != 0 || new_ctx == nullptr) {
+    if (m_rnd_inited && table()->file->inited == handler::RND) {
+      table()->file->ha_rnd_end();
+    }
+    m_rnd_inited = false;
     if (error != HA_ERR_UNSUPPORTED) {
       PrintError(error);
     }
@@ -1422,6 +1431,11 @@ int PQblockScanIterator::End() {
     }
     m_worker_ctx = nullptr;
   }
+  if (m_rnd_inited && table() != nullptr && table()->file != nullptr &&
+      table()->file->inited == handler::RND) {
+    table()->file->ha_rnd_end();
+  }
+  m_rnd_inited = false;
   m_inited = false;
   return -1;
 }

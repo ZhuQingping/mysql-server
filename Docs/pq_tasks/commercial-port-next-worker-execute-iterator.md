@@ -295,6 +295,77 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 
 完整 `parallel_query` suite 继续留到阶段收尾，不在本开发小步中运行。
 
+## Threaded ExecuteIteratorQuery PQWR Value Decode Smoke
+
+Status: done.
+
+本轮切口继续收敛 worker result path：上一小步已经证明 worker 线程可以真实
+调用 `ExecuteIteratorQuery()` 并由 leader drain `PQWR` ROW/FINISH；本轮要求
+leader drain 不只计数，还校验 worker `Query_result_mq::send_data()` 编码后的
+decoded field values。
+
+目标：
+
+- 保持 debug-only `pq_worker_execute_iterator_threaded_call_smoke`；
+- leader drain helper 对 `SELECT id, v` 的 3 行 worker 输出做 decoded numeric
+  checksum 校验，确认 `id`、`v`、`id*v` 的累计值分别为 `6`、`60`、`140`；
+- 校验仍使用 `PQWR` decoded string payload，不写入用户 SQL 结果；
+- 新增 value 校验计数：
+  - `Parallel_worker_execute_iterator_thread_smoke_value_rows`
+  - `Parallel_worker_execute_iterator_thread_smoke_value_errors`
+  - `Parallel_worker_execute_iterator_thread_smoke_value_id_sum`
+  - `Parallel_worker_execute_iterator_thread_smoke_value_v_sum`
+  - `Parallel_worker_execute_iterator_thread_smoke_value_id_v_sum`
+
+边界：
+
+- 不把 `PQWR` 接入 `Exchange_nosort`；
+- 不 materialize 到 leader `TABLE::record[0]`；
+- 不打开默认 visible PQ path；
+- 不改变 handler/InnoDB、optimizer hook、ORDER BY/ref/ICP 路径。
+
+开发阶段验证仍限定为相关模块：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_threaded_call_smoke \
+  pq_worker_execute_threaded_precheck_smoke \
+  pq_worker_execute_iterator_smoke \
+  pq_commercial_worker_result \
+  pq_commercial_worker_result_adapter \
+  pq_stats \
+  --parallel=1 --vardir=/tmp/pq-threaded-value-target-vardir \
+  --tmpdir=/tmp/pq-threaded-value-target-tmpdir
+```
+
+本轮实际验证：
+
+- `git diff --check`
+- `cmake --build build-ninja --target mysqld -j 16`
+- `pq_worker_execute_threaded_call_smoke`
+- `pq_worker_execute_threaded_precheck_smoke`
+- `pq_worker_execute_iterator_smoke`
+- `pq_worker_typed_pull_next_smoke`
+- `pq_parallel_scan_iterator_row_values`
+- `pq_parallel_scan_iterator_order_gather_smoke`
+- `pq_worker_attach_contract_smoke`
+- `pq_commercial_worker_result`
+- `pq_commercial_worker_result_adapter`
+- `pq_stats`
+
+主控 review 结论：
+
+- `PQblockScanIterator` 需要和已有 worker producer 一样，在 worker scan
+  init 前执行 `ha_rnd_init(true)`，并在 `End()` 中按 handler 状态做幂等
+  `ha_rnd_end()`；
+- `pq_clone_worker_base_table_fields_smoke()` 在追加 worker select-list read bits
+  后重新应用 `column_bitmaps_set_no_signal()`，保证 handler 看到最新 read set；
+- `PQWR` decoded numeric checksum 使用 checked parse 和 checked multiply，避免
+  debug helper 被复用到大数值时静默 overflow。
+
 ## Worker JOIN Root AccessPath Smoke
 
 本次小步在已完成的 worker QEP_TAB/TABLE attach 基础上继续推进 root

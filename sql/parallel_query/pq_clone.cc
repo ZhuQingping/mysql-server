@@ -841,6 +841,8 @@ bool pq_clone_worker_base_table_fields_smoke(THD *worker_thd,
     worker_query_block->base_ref_items[index++] = worker_item;
   }
 
+  worker_table->column_bitmaps_set_no_signal(worker_table->read_set,
+                                             worker_table->write_set);
   return worker_query_block->fields.size() != visible_count;
 }
 

@@ -118,6 +118,7 @@ class PQblockScanIterator final : public TableRowIterator {
   PQ_Worker_context *m_worker_ctx{nullptr};
   bool m_seen_eof{false};
   bool m_inited{false};
+  bool m_rnd_inited{false};
 };
 
 /**

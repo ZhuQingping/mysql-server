@@ -10546,6 +10546,21 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_threaded_smoke_drain_errors,
     worker_execute_iterator_threaded_smoke_drain_errors)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_threaded_smoke_value_rows,
+    worker_execute_iterator_threaded_smoke_value_rows)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_threaded_smoke_value_errors,
+    worker_execute_iterator_threaded_smoke_value_errors)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_threaded_smoke_value_id_sum,
+    worker_execute_iterator_threaded_smoke_value_id_sum)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_threaded_smoke_value_v_sum,
+    worker_execute_iterator_threaded_smoke_value_v_sum)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_threaded_smoke_value_id_v_sum,
+    worker_execute_iterator_threaded_smoke_value_id_v_sum)
 
 #undef DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC
 
@@ -13006,6 +13021,21 @@ SHOW_VAR status_vars[] = {
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_thread_smoke_success",
      (char *)&show_pq_worker_execute_iterator_threaded_smoke_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_thread_smoke_value_errors",
+     (char *)&show_pq_worker_execute_iterator_threaded_smoke_value_errors,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_thread_smoke_value_id_sum",
+     (char *)&show_pq_worker_execute_iterator_threaded_smoke_value_id_sum,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_thread_smoke_value_id_v_sum",
+     (char *)&show_pq_worker_execute_iterator_threaded_smoke_value_id_v_sum,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_thread_smoke_value_rows",
+     (char *)&show_pq_worker_execute_iterator_threaded_smoke_value_rows,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_thread_smoke_value_v_sum",
+     (char *)&show_pq_worker_execute_iterator_threaded_smoke_value_v_sum,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_smoke_runs", (char *)&show_pq_worker_smoke_runs,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
