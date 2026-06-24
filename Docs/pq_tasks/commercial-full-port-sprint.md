@@ -2286,7 +2286,7 @@ Notes:
 
 #### Batch D1.6p - Threaded PQWR record_gather fullscan gate
 
-Status: completed, reviewed, ready to commit.
+Status: completed, reviewed, committed, and pushed.
 
 目标：
 
@@ -2334,5 +2334,6 @@ Review:
 
 Notes:
 
+- commit: `48c26181885` Add threaded PQWR record gather smoke；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
