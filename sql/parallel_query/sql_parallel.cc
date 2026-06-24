@@ -59,7 +59,7 @@
 #include "scope_guard.h"          // create_scope_guard
 #include "sql/debug_sync.h"       // DEBUG_SYNC
 #include "sql/field.h"            // Field
-#include "sql/item.h"             // Item_int
+#include "sql/item.h"             // Item_field, Item_int
 #include "sql/mysqld.h"           // key_thread_parallel_query_worker
 #include "sql/parallel_query/pq_clone.h"
 #include "sql/parallel_query/pq_resource_stat.h"
@@ -258,6 +258,7 @@ class PQ_worker_execute_smoke_plan {
     m_original_block_result = m_worker_join->query_block->query_result();
     m_worker_join->query_expression()->set_query_result(mq_result);
     m_worker_join->query_block->set_query_result(mq_result);
+    m_mq_result = mq_result;
     m_result_bound = true;
 
     if (m_worker_join->query_expression()->query_result() != mq_result ||
@@ -268,6 +269,81 @@ class PQ_worker_execute_smoke_plan {
     }
 
     pq_global_stats.worker_execute_iterator_smoke_result_bound.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  bool send_current_row_result() {
+    if (!m_result_bound || m_mq_result == nullptr || m_worker_thd == nullptr ||
+        m_worker == nullptr || m_worker->m_mq_handle == nullptr ||
+        m_worker_join == nullptr || m_worker_join->query_expression() == nullptr) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_result_send.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    TABLE *const worker_table = m_worker->m_open_ctx.worker_table;
+    mem_root_deque<Item *> fields(m_worker_thd->mem_root);
+    if (worker_table != nullptr && worker_table->s != nullptr &&
+        worker_table->field != nullptr) {
+      for (uint i = 0; i < worker_table->s->fields && i < 2; ++i) {
+        Field *field = worker_table->field[i];
+        if (field == nullptr) continue;
+        bitmap_set_bit(worker_table->read_set, field->field_index());
+        fields.push_back(new (m_worker_thd->mem_root) Item_field(field));
+      }
+    }
+    const ha_rows sent_rows_before = m_worker_thd->get_sent_row_count();
+    bool failed = fields.empty() || m_mq_result->send_data(m_worker_thd, fields) ||
+                  m_mq_result->send_eof(m_worker_thd);
+    m_worker_thd->set_sent_row_count(sent_rows_before);
+
+    uint32 rows_read = 0;
+    uint32 finishes_read = 0;
+    for (uint32 i = 0; !failed && i < 2; ++i) {
+      void *raw_data = nullptr;
+      uint32 raw_len = 0;
+      if (m_worker->m_mq_handle->receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+        failed = true;
+        break;
+      }
+
+      const PQ_worker_result_frame_header *header = nullptr;
+      const uchar *decoded_null_bitmap = nullptr;
+      const uchar *decoded_payload = nullptr;
+      if (pq_validate_worker_result_frame(raw_data, raw_len, &header,
+                                          &decoded_null_bitmap,
+                                          &decoded_payload)) {
+        failed = true;
+        break;
+      }
+
+      if (header->type ==
+          static_cast<uint16>(PQ_worker_result_message_type::ROW)) {
+        std::vector<PQ_worker_result_decoded_field> decoded_fields;
+        failed = pq_decode_worker_result_row(raw_data, raw_len, &decoded_fields) ||
+                 decoded_fields.empty() || decoded_fields.size() != fields.size();
+        if (!failed) ++rows_read;
+      } else if (header->type ==
+                 static_cast<uint16>(PQ_worker_result_message_type::FINISH)) {
+        failed = decoded_null_bitmap != nullptr || decoded_payload != nullptr ||
+                 header->field_count != 0 || header->null_bitmap_len != 0 ||
+                 header->payload_len != 0;
+        if (!failed) ++finishes_read;
+      } else {
+        failed = true;
+      }
+    }
+
+    if (failed || rows_read != 1 || finishes_read != 1) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_result_send.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    pq_global_stats.worker_execute_iterator_smoke_result_row_sent.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.worker_execute_iterator_smoke_result_eof_sent.fetch_add(
         1, std::memory_order_relaxed);
     return true;
   }
@@ -308,6 +384,7 @@ class PQ_worker_execute_smoke_plan {
     m_worker_join->query_expression()->set_query_result(
         m_original_expression_result);
     m_worker_join->query_block->set_query_result(m_original_block_result);
+    m_mq_result = nullptr;
     pq_global_stats.worker_execute_iterator_smoke_result_restored.fetch_add(
         1, std::memory_order_relaxed);
     m_result_bound = false;
@@ -319,6 +396,7 @@ class PQ_worker_execute_smoke_plan {
   JOIN *m_worker_join{nullptr};
   Query_result *m_original_expression_result{nullptr};
   Query_result *m_original_block_result{nullptr};
+  Query_result_mq *m_mq_result{nullptr};
   bool m_result_bound{false};
   bool m_constructed{false};
 };
@@ -2673,6 +2751,14 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     }
   }
   if (!root_iterator_constructed) {
+    detach_qep_tab.reset();
+    worker_plan.cleanup(true, true);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+  if (!worker_plan.send_current_row_result()) {
     detach_qep_tab.reset();
     worker_plan.cleanup(true, true);
     end_execute_ctx();

@@ -175,6 +175,18 @@ SET @result_bound_before_read_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
         'Parallel_worker_execute_iterator_smoke_result_bound_before_read');
+SET @blocked_result_send_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_blocked_result_send');
+SET @result_row_sent_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_result_row_sent');
+SET @result_eof_sent_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_result_eof_sent');
 SET @result_restored_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -379,6 +391,18 @@ SELECT
           'Parallel_worker_execute_iterator_smoke_result_bound_before_read') -
      @result_bound_before_read_before) >= 1
        AS worker_execute_result_bound_before_root_read,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_blocked_result_send') -
+     @blocked_result_send_before) = 0 AS worker_execute_not_blocked_result_send,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_result_row_sent') -
+     @result_row_sent_before) >= 1 AS worker_execute_result_row_sent,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_result_eof_sent') -
+     @result_eof_sent_before) >= 1 AS worker_execute_result_eof_sent,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_result_restored') -

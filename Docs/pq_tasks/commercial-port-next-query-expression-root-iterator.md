@@ -238,3 +238,21 @@ context。因此本阶段将 smoke 切换为 root iterator 唯一 row-read 路�
   且恢复发生在 worker JOIN destroy 之前；
 - 仍不调用 `ExecuteIteratorQuery()`，也不发送 Query_result_mq data frame；
 - 默认用户可见 PQ gate 不变。
+
+## Result MQ row/eof smoke 实现记录
+
+本阶段继续补齐 root `Read()` 后的 worker result frame 闭环：
+
+- root iterator `Read()` 成功后，构造 smoke-only worker-owned `Item_field`
+  列表，字段来源是 `worker->m_open_ctx.worker_table->field[]`；
+- 不使用 worker query block fields，也不使用 leader fields，因为当前 worker
+  query shell 还没有完整 Item clone / refix / replace-base-item；
+- 使用已绑定的 `Query_result_mq` 执行一次 `send_data()` 和一次 `send_eof()`；
+- 立即从 worker `MQueue_handle` 解码 ROW/FINISH frame，证明发送链路可用；
+- 新增诊断：
+  - `Parallel_worker_execute_iterator_smoke_blocked_result_send`
+  - `Parallel_worker_execute_iterator_smoke_result_row_sent`
+  - `Parallel_worker_execute_iterator_smoke_result_eof_sent`
+- 仍不调用 `ExecuteIteratorQuery()`；
+- 仍不声明真实 SELECT 输出正确性；正式路径还需要完整 worker Item clone /
+  refix / replace-base-item。

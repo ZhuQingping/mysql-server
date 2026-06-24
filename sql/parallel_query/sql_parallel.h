@@ -480,6 +480,9 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_result_bound{0};
   std::atomic<uint64>
       worker_execute_iterator_smoke_result_bound_before_root_read{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_result_send{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_result_row_sent{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_result_eof_sent{0};
   std::atomic<uint64> worker_execute_iterator_smoke_result_restored{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_ownership{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_execute{0};
@@ -952,6 +955,12 @@ struct PQ_global_stats {
     worker_execute_iterator_smoke_result_bound.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_result_bound_before_root_read.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_result_send.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_result_row_sent.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_result_eof_sent.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_result_restored.store(
         0, std::memory_order_relaxed);
@@ -1774,11 +1783,11 @@ class Gather_operator {
     progress. It may create and immediately destroy a non-executable cloned
     JOIN shell, create a local EXECUTE leader context, open a worker TABLE, and
     create a factory root iterator over a worker-owned PQ block scan access path.
-    The probe runs local root iterator Init/Read once, then destroys the iterator
-    before detaching worker QEP_TAB/TABLE state. It may temporarily bind a
-    worker-owned Query_result_mq and restore the original result pointers before
-    cleanup. It must not start worker threads, send Query_result_mq data, run
-    ExecuteIteratorQuery(), or alter user-visible execution.
+    The probe runs local root iterator Init/Read once, then sends one smoke-only
+    worker-owned field row and EOF through the bound Query_result_mq. It destroys
+    the iterator before detaching worker QEP_TAB/TABLE state and restores the
+    original result pointers before cleanup. It must not start worker threads,
+    call ExecuteIteratorQuery(), or alter user-visible execution.
 
     @retval false  Probe completed and recorded a success/blocker counter
     @retval true   Local fatal error such as OOM
