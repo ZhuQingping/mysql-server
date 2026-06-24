@@ -205,3 +205,73 @@ W2 只允许窄桥接：
 - 如果实现需要共享 leader `row_prebuilt_t`、绕过 typed worker context、绕过
   `Parallel_reader::available_threads()/release_threads()` 或绕过 leader
   read-view close-on-end，则停止编码。
+
+## W2 完成报告
+
+Status: completed.
+
+### 实现内容
+
+- `ha_innobase::pq_worker_scan_next(PQ_Worker_context*, uchar*, bool*)`
+  不再直接 unsupported，改为 typed callback-backed pull bridge；
+- bridge 继续使用当前已验证的
+  `InnoDB_pq_scan_ctx::produce_callback_rows_for_range()`，不启用
+  commercial `void *` API，也不启用 latent `InnoDB_pq_ctx::read_record()`
+  / `row_search_mvcc()` cursor path；
+- `InnoDB_pq_worker_ctx` 增加 worker-local record-image buffer，第一次
+  typed pull 时通过 `PQ_row_sink` deep-copy assigned range 的 MySQL record
+  image，后续逐行 copy 到传入的 worker `record`；
+- typed next 每次重新校验 `open_ctx` owner：worker handler、worker table、
+  worker THD、record buffer 必须与当前 handler/prebuilt 一致；
+- buffer 增加 8MB hard cap、8192 row cap，并取 session
+  `parallel_memory_limit` 的较小值；cap 命中或 `std::bad_alloc` 转为
+  `DB_OUT_OF_MEMORY` / fail-closed；
+- 新增 `Parallel_worker_typed_pull_next_calls/rows/eofs` status counters；
+- 新增 debug-only MTR `pq_worker_typed_pull_next_smoke`，证明 typed pull-next
+  被执行、读出 3 行并到达 EOF，同时用户可见查询仍走 serial fallback。
+
+### 保持不变的边界
+
+- `pq_worker_scan_next(void*, uchar*)` 仍保持 unsupported；
+- 没有打开 secondary/ref/ICP/partition/MVI/ORDER BY/GROUP BY 主路径；
+- read-view、thread budget、worker TABLE/handler 独立性仍由现有
+  leader/worker init 与 cleanup gate 负责；
+- W2 bridge 是向商用 worker row-at-a-time pull 形态靠近的过渡层，不是最终
+  商用 `PQ_Ctx::read_record()` full port。
+
+### Review
+
+- 独立 Review Agent 第一轮发现两个 Important：buffer 无上限/OOM 转换不足、
+  typed next 未重新校验 open context owner；
+- 已修复并复审通过；复审结论为无 Critical/Important；
+- 剩余建议：未来 full port 需要专门覆盖 cap/OOM 负向路径，并以 streaming /
+  cursor pull 替代当前 bounded eager buffer。
+
+### 验证
+
+已验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_typed_pull_next_smoke pq_stats \
+  pq_fullscan pq_read_view pq_rec_visible pq_read_record_crash \
+  pq_worker_error pq_kill pq_kill_query \
+  pq_read_threaded_dop2_read_view pq_read_threaded_dop2_external_kill \
+  --parallel=1 --vardir=/tmp/pq-worker-row-pull-target-vardir \
+  --tmpdir=/tmp/pq-worker-row-pull-target-tmpdir
+```
+
+结果：上述 targeted MTR 含 `shutdown_report` 共 12 项通过。
+
+完整套验证：
+
+```bash
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pq-worker-row-pull-full-vardir \
+  --tmpdir=/tmp/pq-worker-row-pull-full-tmpdir
+```
+
+结果：full `parallel_query` suite 含 `shutdown_report` 共 105 项通过。

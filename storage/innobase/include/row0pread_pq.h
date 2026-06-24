@@ -528,6 +528,22 @@ class InnoDB_pq_worker_ctx {
   @return 0 on success, handler error code on fatal error. */
   int read_record(byte *mysql_rec, row_prebuilt_t *prebuilt, bool *eof);
 
+  /** Pull next row through the safe callback producer buffer.
+
+  This is the typed worker pull bridge used before the latent row_search_mvcc()
+  cursor path is proven safe for worker snapshots. It drains the assigned
+  range through InnoDB_pq_scan_ctx::produce_callback_rows_for_range() once,
+  deep-copies worker record images into worker-local storage, and returns one
+  buffered row per call.
+
+  @param[out]  mysql_rec  MySQL row buffer.
+  @param[in]   prebuilt   row_prebuilt_t for callback conversion.
+  @param[out]  eof        True when range exhausted.
+  @param[in]   max_bytes  Maximum bytes this bridge may buffer.
+  @return DB_SUCCESS or error code. */
+  dberr_t read_callback_record(byte *mysql_rec, row_prebuilt_t *prebuilt,
+                               bool *eof, size_t max_bytes);
+
   size_t worker_id() const { return m_worker_id; }
   InnoDB_pq_leader_ctx *leader_ctx() const { return m_leader_ctx; }
   InnoDB_pq_ctx *cursor_ctx() const { return m_cursor_ctx; }
@@ -546,6 +562,9 @@ class InnoDB_pq_worker_ctx {
   InnoDB_pq_leader_ctx *m_leader_ctx{nullptr};
   InnoDB_pq_ctx *m_cursor_ctx{nullptr};
   InnoDB_pq_range *m_assigned_range{nullptr};
+  std::vector<std::vector<byte>> m_callback_rows;
+  size_t m_callback_row_index{0};
+  bool m_callback_rows_loaded{false};
   std::atomic<dberr_t> m_err{DB_SUCCESS};
 };
 

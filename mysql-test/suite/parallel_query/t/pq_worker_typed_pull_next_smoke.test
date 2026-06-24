@@ -1,0 +1,53 @@
+# Verify the guarded typed worker pull-next bridge.
+
+--source include/have_innodb_16k.inc
+--source include/have_debug.inc
+
+CREATE TABLE pq_worker_pull_t (
+  id INT PRIMARY KEY,
+  v INT
+) ENGINE=InnoDB;
+INSERT INTO pq_worker_pull_t VALUES (1,10),(2,20),(3,30);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+
+SET @pull_calls_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_typed_pull_next_calls');
+SET @pull_rows_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_typed_pull_next_rows');
+SET @pull_eofs_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_typed_pull_next_eofs');
+SET @fallback_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_queries_fallback');
+SET @executed_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_queries_executed');
+
+SET SESSION debug="d,pq_worker_typed_pull_next_smoke";
+SELECT id, v FROM pq_worker_pull_t;
+SET SESSION debug="";
+
+SELECT
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_typed_pull_next_calls') -
+     @pull_calls_before) >= 4 AS typed_pull_called,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_typed_pull_next_rows') -
+     @pull_rows_before) = 3 AS typed_pull_rows,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_typed_pull_next_eofs') -
+     @pull_eofs_before) = 1 AS typed_pull_eof,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_queries_fallback') -
+     @fallback_before) = 1 AS fallback_after_smoke,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_queries_executed') -
+     @executed_before) = 0 AS no_user_visible_pq_execution;
+
+DROP TABLE pq_worker_pull_t;

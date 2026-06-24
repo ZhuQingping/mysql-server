@@ -11066,6 +11066,36 @@ static int show_pq_callback_smoke_rows(THD *, SHOW_VAR *var, char *buf) {
   return 0;
 }
 
+static int show_pq_worker_typed_pull_next_calls(THD *, SHOW_VAR *var,
+                                                char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.worker_typed_pull_next_calls.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_worker_typed_pull_next_rows(THD *, SHOW_VAR *var,
+                                               char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.worker_typed_pull_next_rows.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
+static int show_pq_worker_typed_pull_next_eofs(THD *, SHOW_VAR *var,
+                                               char *buf) {
+  var->type = SHOW_LONGLONG;
+  var->value = buf;
+  *((longlong *)buf) = (longlong)(
+      pq_global_stats.worker_typed_pull_next_eofs.load(
+          std::memory_order_relaxed));
+  return 0;
+}
+
 static int show_pq_groupby_typed_smoke_groups(THD *, SHOW_VAR *var,
                                               char *buf) {
   var->type = SHOW_LONGLONG;
@@ -11777,6 +11807,15 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_callback_smoke_attempts, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_callback_smoke_rows", (char *)&show_pq_callback_smoke_rows,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_typed_pull_next_calls",
+     (char *)&show_pq_worker_typed_pull_next_calls, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_typed_pull_next_eofs",
+     (char *)&show_pq_worker_typed_pull_next_eofs, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_typed_pull_next_rows",
+     (char *)&show_pq_worker_typed_pull_next_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_smoke_finishes",
      (char *)&show_pq_exchange_smoke_finishes, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_smoke_rows", (char *)&show_pq_exchange_smoke_rows,

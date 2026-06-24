@@ -2631,6 +2631,79 @@ bool Gather_operator::run_worker_callback_multirow_producer_smoke(
   return failed;
 }
 
+bool Gather_operator::run_worker_typed_pull_next_smoke(THD *leader_thd,
+                                                       TABLE *leader_table,
+                                                       uint32 min_rows) {
+  if (leader_thd == nullptr || leader_table == nullptr || m_dop != 1) {
+    return true;
+  }
+
+  bool initialized_here = false;
+
+  if (!m_initialized) {
+    if (init()) return true;
+    initialized_here = true;
+  }
+
+  auto *worker = get_worker(0);
+  if (worker == nullptr) {
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  if (worker->m_open_ctx.leader_table == nullptr) {
+    worker->m_open_ctx.leader_table = leader_table;
+    worker->m_open_ctx.actual_dop = m_dop;
+  }
+
+  if (pq_create_worker_thd(worker, this) == nullptr) {
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return true;
+  }
+
+  bool failed = pq_open_worker_table(&worker->m_open_ctx);
+  if (!failed) {
+    failed = worker->m_open_ctx.worker_handler->pq_worker_scan_init(
+                 &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
+             worker->m_worker_ctx == nullptr;
+  }
+
+  uint32 rows_read = 0;
+  bool eof = false;
+  while (!failed && !eof) {
+    if (rows_read > min_rows + 1024) {
+      failed = true;
+      break;
+    }
+    const int error = worker->m_open_ctx.worker_handler->pq_worker_scan_next(
+        worker->m_worker_ctx, worker->m_open_ctx.worker_table->record[0],
+        &eof);
+    if (error != 0) {
+      failed = true;
+      break;
+    }
+    if (!eof) ++rows_read;
+  }
+
+  failed = failed || !eof || rows_read < min_rows;
+
+  if (worker->m_worker_ctx != nullptr &&
+      worker->m_open_ctx.worker_handler != nullptr) {
+    worker->m_open_ctx.worker_handler->pq_worker_scan_end(
+        worker->m_worker_ctx);
+    worker->m_worker_ctx = nullptr;
+  }
+  if (worker->m_open_ctx.worker_table != nullptr) {
+    pq_close_worker_table(&worker->m_open_ctx, failed);
+  }
+  pq_destroy_worker_thd(worker);
+  leader_thd->store_globals();
+
+  if (initialized_here) destroy();
+  return failed;
+}
+
 bool Gather_operator::run_worker_partial_group_smoke(THD *leader_thd,
                                                      TABLE *leader_table) {
   PQ_partial_group_merge_slot_v1 merge_slots[16];

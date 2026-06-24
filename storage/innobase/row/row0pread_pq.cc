@@ -67,6 +67,10 @@ Created 2026-06-02 by Qingping Zhu (PQ Phase 6B-2). */
 #include "trx0trx.h"
 #include "ut0new.h"
 
+#include <cstring>
+#include <new>
+#include <utility>
+
 /* ============================================================ */
 /* InnoDB_pq_iter                                               */
 /* ============================================================ */
@@ -1507,6 +1511,9 @@ void InnoDB_pq_worker_ctx::init(InnoDB_pq_range *range) {
   }
 
   m_assigned_range = range;
+  m_callback_rows.clear();
+  m_callback_row_index = 0;
+  m_callback_rows_loaded = false;
 
   /* Create the pull-row cursor context. */
   m_cursor_ctx = ut::new_withkey<InnoDB_pq_ctx>(
@@ -1532,4 +1539,110 @@ int InnoDB_pq_worker_ctx::read_record(byte *mysql_rec,
   }
 
   return err_code;
+}
+
+class InnoDB_pq_buffered_row_sink final : public PQ_row_sink {
+ public:
+  InnoDB_pq_buffered_row_sink(std::vector<std::vector<byte>> *rows,
+                              size_t max_bytes)
+      : m_rows(rows), m_max_bytes(max_bytes) {}
+
+  bool send_row(TABLE *source_table) override {
+    if (m_failed) return true;
+    if (m_rows == nullptr || source_table == nullptr ||
+        source_table->s == nullptr || source_table->record[0] == nullptr ||
+        source_table->s->reclength == 0) {
+      m_failed = true;
+      m_error = DB_UNSUPPORTED;
+      return true;
+    }
+
+    const size_t reclength = source_table->s->reclength;
+    if (m_rows->size() >= kMaxRows || reclength > m_max_bytes ||
+        m_bytes_used > m_max_bytes - reclength) {
+      m_failed = true;
+      m_error = DB_OUT_OF_MEMORY;
+      return true;
+    }
+
+    try {
+      std::vector<byte> row(reclength);
+      std::memcpy(row.data(), source_table->record[0], reclength);
+      m_rows->push_back(std::move(row));
+      m_bytes_used += reclength;
+    } catch (const std::bad_alloc &) {
+      m_failed = true;
+      m_error = DB_OUT_OF_MEMORY;
+      return true;
+    }
+    return false;
+  }
+
+  bool should_abort() const override { return m_failed; }
+
+  bool stop_is_success() const override { return false; }
+
+  dberr_t error() const { return m_error; }
+
+ private:
+  static constexpr size_t kMaxRows = 8192;
+  std::vector<std::vector<byte>> *m_rows;
+  size_t m_max_bytes{0};
+  size_t m_bytes_used{0};
+  dberr_t m_error{DB_SUCCESS};
+  bool m_failed{false};
+};
+
+dberr_t InnoDB_pq_worker_ctx::read_callback_record(byte *mysql_rec,
+                                                    row_prebuilt_t *prebuilt,
+                                                    bool *eof,
+                                                    size_t max_bytes) {
+  if (eof != nullptr) {
+    *eof = false;
+  }
+
+  if (mysql_rec == nullptr || prebuilt == nullptr || max_bytes == 0 ||
+      prebuilt->m_mysql_table == nullptr ||
+      prebuilt->m_mysql_table->record[0] == nullptr ||
+      prebuilt->m_mysql_table->s == nullptr || m_leader_ctx == nullptr ||
+      m_leader_ctx->scan_ctx() == nullptr) {
+    return DB_UNSUPPORTED;
+  }
+
+  if (!m_callback_rows_loaded) {
+    m_callback_rows.clear();
+    m_callback_row_index = 0;
+
+    InnoDB_pq_buffered_row_sink row_sink(&m_callback_rows, max_bytes);
+    const dberr_t err =
+        m_leader_ctx->scan_ctx()->produce_callback_rows_for_range(
+            prebuilt->m_mysql_table->record[0], prebuilt, &row_sink,
+            m_assigned_range);
+    if (err != DB_SUCCESS) {
+      m_callback_rows.clear();
+      m_callback_row_index = 0;
+      const dberr_t bridge_err =
+          row_sink.error() != DB_SUCCESS ? row_sink.error() : err;
+      m_err.store(bridge_err, std::memory_order_relaxed);
+      return bridge_err;
+    }
+
+    m_callback_rows_loaded = true;
+  }
+
+  if (m_callback_row_index >= m_callback_rows.size()) {
+    if (eof != nullptr) {
+      *eof = true;
+    }
+    return DB_SUCCESS;
+  }
+
+  const auto &row = m_callback_rows[m_callback_row_index++];
+  if (row.size() != prebuilt->m_mysql_table->s->reclength) {
+    m_err.store(DB_ERROR, std::memory_order_relaxed);
+    return DB_ERROR;
+  }
+
+  std::memcpy(mysql_rec, row.data(), row.size());
+  return DB_SUCCESS;
 }

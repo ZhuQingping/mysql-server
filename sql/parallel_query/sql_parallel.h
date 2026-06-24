@@ -533,6 +533,9 @@ struct PQ_global_stats {
   std::atomic<uint64> groupby_typed_smoke_sum{0};     ///< Typed SUM check
   std::atomic<uint64> callback_smoke_attempts{0};  ///< Callback smoke attempts
   std::atomic<uint64> callback_smoke_rows{0};      ///< Callback converted rows
+  std::atomic<uint64> worker_typed_pull_next_calls{0};  ///< Typed pull calls
+  std::atomic<uint64> worker_typed_pull_next_rows{0};   ///< Typed pull rows
+  std::atomic<uint64> worker_typed_pull_next_eofs{0};   ///< Typed pull EOFs
 
   /** Reset all counters. */
   void reset() {
@@ -978,6 +981,9 @@ struct PQ_global_stats {
     groupby_typed_smoke_sum.store(0, std::memory_order_relaxed);
     callback_smoke_attempts.store(0, std::memory_order_relaxed);
     callback_smoke_rows.store(0, std::memory_order_relaxed);
+    worker_typed_pull_next_calls.store(0, std::memory_order_relaxed);
+    worker_typed_pull_next_rows.store(0, std::memory_order_relaxed);
+    worker_typed_pull_next_eofs.store(0, std::memory_order_relaxed);
   }
 };
 
@@ -1638,6 +1644,19 @@ class Gather_operator {
   */
   bool run_worker_callback_multirow_producer_smoke(THD *leader_thd,
                                                    TABLE *leader_table);
+
+  /**
+    Run a worker typed pull-next smoke pass.
+
+    This opens an independent worker TABLE, initializes a typed worker context,
+    calls handler::pq_worker_scan_next(PQ_Worker_context*, uchar*, bool*) until
+    EOF, and counts rows. It does not return those rows to the user query.
+
+    @retval false  Smoke pass completed and read at least min_rows rows
+    @retval true   Smoke pass failed
+  */
+  bool run_worker_typed_pull_next_smoke(THD *leader_thd, TABLE *leader_table,
+                                        uint32 min_rows);
 
   /**
     Run a worker-local partial GROUP BY producer smoke pass.

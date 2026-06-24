@@ -140,6 +140,32 @@ bool PQTableScanIterator::Init() {
     return init_serial_fallback();
   });
 
+  DBUG_EXECUTE_IF("pq_worker_typed_pull_next_smoke", {
+    uint execute_dop = 0;
+    PQ_Leader_context *execute_ctx = nullptr;
+    int execute_error = table()->file->pq_leader_scan_init(
+        thd(), &execute_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+        false);
+    if (execute_error == 0) {
+      Gather_operator pull_smoke(1);
+      const bool pull_failed =
+          pull_smoke.init() ||
+          pull_smoke.configure_worker_open_contexts(table(), execute_ctx, 1) ||
+          pull_smoke.run_worker_typed_pull_next_smoke(thd(), table(), 2);
+      table()->file->pq_leader_scan_end(execute_ctx);
+      if (pull_failed) {
+        PrintError(HA_ERR_INTERNAL_ERROR);
+        return true;
+      }
+      return init_serial_fallback();
+    }
+    if (execute_error != HA_ERR_UNSUPPORTED) {
+      PrintError(execute_error);
+      return true;
+    }
+    return init_serial_fallback();
+  });
+
   DBUG_EXECUTE_IF("pq_leader_row_stream_smoke", {
     pq_global_stats.leader_row_stream_smoke_attempts.fetch_add(
         1, std::memory_order_relaxed);

@@ -517,9 +517,11 @@ int ha_innobase::pq_worker_scan_init(uint keyno, void *scan_ctx) {
 }
 
 /**
-  Pull one row for a PQ worker via the InnoDB pull-row adapter.
+  Pull one row for a PQ worker via the callback-backed typed bridge.
 
-  V2-3: disabled until workers have independent mutable scan state.
+  This keeps the latent row_search_mvcc() cursor path disabled. Rows are
+  produced through the existing Parallel_reader callback producer and buffered
+  in the worker typed context with a small memory cap.
 
   @param[in]   worker_ctx  Worker context (PQ_Worker_context*; unused in V2-8C gate)
   @param[out]  record       MySQL row buffer (table->record[0])
@@ -532,12 +534,68 @@ int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
     *eof = false;
   }
 
-  (void)worker_ctx;
-  (void)record;
-  if (eof != nullptr) {
-    *eof = true;
+  if (worker_ctx == nullptr || record == nullptr || eof == nullptr ||
+      m_prebuilt == nullptr ||
+      worker_ctx->kind() != PQ_Worker_context_kind::INNODB) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, eof);
   }
-  return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, eof);
+
+  auto sql_worker =
+      static_cast<InnoDB_pq_sql_worker_context *>(worker_ctx);
+  auto *open_ctx = sql_worker->open_ctx();
+  auto innodb_worker = sql_worker->innodb_ctx();
+  if (innodb_worker == nullptr || innodb_worker->leader_ctx() == nullptr ||
+      innodb_worker->leader_ctx()->scan_ctx() == nullptr ||
+      m_prebuilt->m_mysql_table == nullptr ||
+      m_prebuilt->m_mysql_table->record[0] == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, eof);
+  }
+
+  if (open_ctx == nullptr || open_ctx->worker_handler != this ||
+      open_ctx->worker_table == nullptr ||
+      open_ctx->worker_table != m_prebuilt->m_mysql_table ||
+      open_ctx->worker_table->record[0] != record ||
+      open_ctx->worker_thd == nullptr ||
+      open_ctx->worker_table->in_use != open_ctx->worker_thd ||
+      open_ctx->worker_table->file != this) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, eof);
+  }
+
+  static constexpr size_t kMaxTypedPullBridgeBufferBytes = 8 * 1024 * 1024;
+  size_t max_buffer_bytes = kMaxTypedPullBridgeBufferBytes;
+  if (ha_thd() != nullptr) {
+    const ulonglong session_limit = ha_thd()->variables.parallel_memory_limit;
+    if (session_limit < max_buffer_bytes) {
+      max_buffer_bytes = static_cast<size_t>(session_limit);
+    }
+  }
+
+  for (;;) {
+    pq_global_stats.worker_typed_pull_next_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    auto err = innodb_worker->read_callback_record(record, m_prebuilt, eof,
+                                                   max_buffer_bytes);
+    if (err != DB_SUCCESS) {
+      return pq_map_dberr_to_handler_error(err, eof);
+    }
+    if (!*eof) {
+      pq_global_stats.worker_typed_pull_next_rows.fetch_add(
+          1, std::memory_order_relaxed);
+      return 0;
+    }
+
+    auto *range = innodb_worker->leader_ctx()->dispatch_next_range();
+    if (range == nullptr) {
+      pq_global_stats.worker_typed_pull_next_eofs.fetch_add(
+          1, std::memory_order_relaxed);
+      return 0;
+    }
+
+    innodb_worker->init(range);
+    pq_global_stats.ranges_dispatched.fetch_add(1,
+                                                std::memory_order_relaxed);
+    *eof = false;
+  }
 }
 
 int ha_innobase::pq_worker_scan_next(void *scan_ctx [[maybe_unused]],
