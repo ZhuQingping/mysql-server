@@ -244,6 +244,62 @@ readinfo 构建。
 - 下一步必须推进 worker plan / ExecuteIterator 主路径的新事实，不再重复
   synthetic `Query_result_mq`、typed pull bridge 或 readinfo smoke。
 
+## Worker JOIN Root AccessPath Smoke
+
+本次小步在已完成的 worker QEP_TAB/TABLE attach 基础上继续推进 root
+AccessPath 合同，但仍保持为 debug-only smoke：
+
+- 复用 worker-owned `PQ_BLOCK_SCAN` `AccessPath`；
+- 保存 `worker_join->root_access_path()`，临时调用
+  `worker_join->set_root_access_path(worker_block_scan)`；
+- 通过 `CreateIteratorFromAccessPath(worker_thd,
+  worker_join->root_access_path(), worker_join, false)` 构造 root iterator；
+- 作用域退出时恢复原 `JOIN` root path；
+- 不修改 `Query_expression::m_root_access_path`；
+- 不调用 `Query_expression::force_create_iterators()`；
+- 不调用 `ExecuteIteratorQuery()`；
+- 不修改 `sql/sql_lex.h`、`sql/sql_union.cc`、optimizer、handler 或 InnoDB。
+
+只读调研结论已确认：当前分支没有 public setter 设置
+`Query_expression::m_root_access_path`，而
+`Query_expression::force_create_iterators()` 使用的是 unit root path，不是
+`JOIN::root_access_path()`。因此本阶段只能证明 worker JOIN root
+AccessPath 可以被 iterator factory 消费，不能声称 worker unit/root iterator
+已接通。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_root_attached`
+- `Parallel_worker_execute_iterator_smoke_root_iterator_ok`
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-root-accesspath-vardir \
+  --tmpdir=/tmp/pq-worker-root-accesspath-tmpdir
+```
+
+验证结果：
+
+- `git diff --check` 通过；
+- `cmake --build build-ninja --target mysqld -j 16` 通过；
+- `TMPDIR=/tmp ./mtr --suite=parallel_query pq_worker_execute_iterator_smoke
+  pq_clone_diagnostics pq_stats --parallel=1
+  --vardir=/tmp/pq-worker-root-accesspath-vardir3
+  --tmpdir=/tmp/pq-worker-root-accesspath-tmpdir3` 通过，4/4 successful。
+
+当前剩余边界：
+
+- `Query_expression::m_root_access_path` 仍未设置；
+- `Query_expression::force_create_iterators()` 仍未使用；
+- `ExecuteIteratorQuery()` 仍未调用；
+- 真实 worker unit/root iterator 接通需要后续单独设计核心 API 边界。
+
 ## Worker PQ_BLOCK_SCAN Iterator Construction Smoke
 
 本次小步继续停留在 debug-only smoke 链路，但把阻断点从“readinfo 后直接

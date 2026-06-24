@@ -2625,6 +2625,37 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
         1, std::memory_order_relaxed);
   }
 
+  bool root_iterator_constructed = false;
+  {
+    AccessPath *const saved_root_access_path = worker_join->root_access_path();
+    worker_join->set_root_access_path(worker_block_scan);
+    pq_global_stats.worker_execute_iterator_smoke_root_attached.fetch_add(
+        1, std::memory_order_relaxed);
+    auto restore_root_access_path = create_scope_guard([&]() {
+      worker_join->set_root_access_path(saved_root_access_path);
+    });
+
+    auto iterator = CreateIteratorFromAccessPath(
+        worker_thd, worker_join->root_access_path(), worker_join,
+        /*eligible_for_batch_mode=*/false);
+    if (iterator == nullptr) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_iterator.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats.worker_execute_iterator_smoke_root_iterator_constructed
+          .fetch_add(1, std::memory_order_relaxed);
+      root_iterator_constructed = true;
+    }
+  }
+  if (!root_iterator_constructed) {
+    pq_detach_qep_tab_table_smoke(&qep_tab_attach);
+    worker_plan.cleanup(true, true);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+
   ha_rows examined_rows = 0;
   PQblockScanIterator read_iterator(
       worker_thd, worker->m_open_ctx.worker_table, 1.0, &examined_rows, DIV_TAB,
