@@ -439,6 +439,8 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_iterator_constructed{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_init{0};
   std::atomic<uint64> worker_execute_iterator_smoke_init_success{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_read{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_read_success{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_execute{0};
   std::atomic<uint64> worker_execute_iterator_smoke_success{0};
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
@@ -853,6 +855,10 @@ struct PQ_global_stats {
     worker_execute_iterator_smoke_blocked_init.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_init_success.store(0,
+                                                     std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_read.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_read_success.store(0,
                                                      std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_execute.store(
         0, std::memory_order_relaxed);
@@ -1669,8 +1675,10 @@ class Gather_operator {
 
     This records how far the current commercial worker execution contract can
     progress. It may create and immediately destroy a non-executable cloned
-    JOIN shell, but it must not start worker threads, call handler/InnoDB, run
-    ExecuteIteratorQuery(), or alter user-visible execution.
+    JOIN shell, create a local EXECUTE leader context, open a worker TABLE, and
+    run one PQblockScanIterator Init/Read/End cycle. It must not start worker
+    threads, attach Query_result_mq, run ExecuteIteratorQuery(), or alter
+    user-visible execution.
 
     @retval false  Probe completed and recorded a success/blocker counter
     @retval true   Local fatal error such as OOM

@@ -64,6 +64,7 @@
 #include "sql/parallel_query/pq_resource_stat.h"
 #include "sql/handler.h"          // handler
 #include "sql/parallel_query/exchange_sort.h"  // Exchange_sort
+#include "sql/parallel_query/pq_iterators.h"   // PQblockScanIterator
 #include "sql/parallel_query/query_result_mq.h"  // pq_run_query_result_mq_contract_smoke
 #include "sql/sql_base.h"         // close_thread_tables, open_ltable
 #include "sql/sql_class.h"        // THD
@@ -2298,6 +2299,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
                                                         JOIN *join,
                                                         PQ_Leader_context
                                                             *leader_ctx) {
+  (void)leader_ctx;
   pq_global_stats.worker_execute_iterator_smoke_attempts.fetch_add(
       1, std::memory_order_relaxed);
 
@@ -2333,20 +2335,34 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   }
 
   worker->m_open_ctx.leader_table = source_tab->table();
-  worker->m_open_ctx.leader_ctx = leader_ctx;
   worker->m_open_ctx.actual_dop = m_dop;
   worker->m_open_ctx.mq_handle = worker->m_mq_handle;
-  if (worker->m_open_ctx.leader_ctx == nullptr) {
+
+  uint execute_dop = 0;
+  PQ_Leader_context *execute_ctx = nullptr;
+  const int execute_error = source_tab->table()->file->pq_leader_scan_init(
+      leader_thd, &execute_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+      false);
+  if (execute_error != 0 || execute_ctx == nullptr) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_init.fetch_add(
         1, std::memory_order_relaxed);
     if (initialized_here) destroy();
     return false;
   }
+  worker->m_open_ctx.leader_ctx = execute_ctx;
+  worker->m_open_ctx.actual_dop = execute_dop > 0 ? execute_dop : 1;
+  auto end_execute_ctx = [&]() {
+    if (execute_ctx != nullptr) {
+      source_tab->table()->file->pq_leader_scan_end(execute_ctx);
+      execute_ctx = nullptr;
+    }
+  };
 
   THD *worker_thd = pq_create_worker_thd(worker, this);
   if (worker_thd == nullptr) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_worker_open.fetch_add(
         1, std::memory_order_relaxed);
+    end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
     return false;
@@ -2357,6 +2373,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     pq_global_stats.worker_execute_iterator_smoke_blocked_clone.fetch_add(
         1, std::memory_order_relaxed);
     pq_destroy_worker_thd(worker);
+    end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
     return false;
@@ -2367,6 +2384,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
         1, std::memory_order_relaxed);
     worker_join->destroy();
     pq_destroy_worker_thd(worker);
+    end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
     return false;
@@ -2377,6 +2395,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
         1, std::memory_order_relaxed);
     worker_join->destroy();
     pq_destroy_worker_thd(worker);
+    end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
     return false;
@@ -2394,6 +2413,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     worker_join->destroy();
     pq_close_worker_table(&worker->m_open_ctx, true);
     pq_destroy_worker_thd(worker);
+    end_execute_ctx();
     leader_thd->store_globals();
     if (initialized_here) destroy();
     return false;
@@ -2409,6 +2429,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
       worker_join->destroy();
       pq_close_worker_table(&worker->m_open_ctx, true);
       pq_destroy_worker_thd(worker);
+      end_execute_ctx();
       leader_thd->store_globals();
       if (initialized_here) destroy();
       return false;
@@ -2416,30 +2437,52 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
 
     pq_global_stats.worker_execute_iterator_smoke_iterator_constructed.fetch_add(
         1, std::memory_order_relaxed);
-    if (iterator->Init()) {
-      pq_global_stats.worker_execute_iterator_smoke_blocked_init.fetch_add(
-          1, std::memory_order_relaxed);
-      worker_join->destroy();
-      pq_close_worker_table(&worker->m_open_ctx, true);
-      pq_destroy_worker_thd(worker);
-      leader_thd->store_globals();
-      if (initialized_here) destroy();
-      return false;
-    }
-    pq_global_stats.worker_execute_iterator_smoke_init_success.fetch_add(
-        1, std::memory_order_relaxed);
   }
+
+  ha_rows examined_rows = 0;
+  PQblockScanIterator read_iterator(
+      worker_thd, worker->m_open_ctx.worker_table, 1.0, &examined_rows, DIV_TAB,
+      this, /*tab=*/nullptr, /*need_rowid=*/false, /*handler=*/nullptr);
+  if (read_iterator.Init()) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_init.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_join->destroy();
+    pq_close_worker_table(&worker->m_open_ctx, true);
+    pq_destroy_worker_thd(worker);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+  pq_global_stats.worker_execute_iterator_smoke_init_success.fetch_add(
+      1, std::memory_order_relaxed);
+  if (read_iterator.Read() != 0) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_read.fetch_add(
+        1, std::memory_order_relaxed);
+    read_iterator.End();
+    worker_join->destroy();
+    pq_close_worker_table(&worker->m_open_ctx, true);
+    pq_destroy_worker_thd(worker);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+  pq_global_stats.worker_execute_iterator_smoke_read_success.fetch_add(
+      1, std::memory_order_relaxed);
+  read_iterator.End();
 
   /*
     The current branch has not migrated commercial make_pq_worker_plan() or
     worker Query_expression ownership. Stop after proving the PQ_BLOCK_SCAN
-    iterator Init/End boundary and before ExecuteIteratorQuery().
+    iterator single-row Read boundary and before ExecuteIteratorQuery().
   */
   pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
       1, std::memory_order_relaxed);
   worker_join->destroy();
   pq_close_worker_table(&worker->m_open_ctx, false);
   pq_destroy_worker_thd(worker);
+  end_execute_ctx();
   leader_thd->store_globals();
   if (initialized_here) destroy();
   return false;

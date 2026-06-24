@@ -326,12 +326,6 @@ bool PQTableScanIterator::Init() {
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
     }
-    if (m_gather->run_worker_execute_iterator_smoke(thd(), m_join,
-                                                   m_leader_ctx)) {
-      cleanup_pq_resources(true);
-      PrintError(HA_ERR_OUT_OF_MEM);
-      return true;
-    }
     Gather_operator partial_group_smoke(smoke_dop);
     if (partial_group_smoke.init() ||
         partial_group_smoke.run_exchange_partial_group_smoke(thd())) {
@@ -379,6 +373,13 @@ bool PQTableScanIterator::Init() {
       return true;
     }
     cleanup_pq_resources(false);
+
+    Gather_operator worker_execute_smoke(1);
+    if (worker_execute_smoke.run_worker_execute_iterator_smoke(thd(), m_join,
+                                                              nullptr)) {
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
 
     if (!read_shadow_path && !threaded_read_shadow_path) {
       PQ_Leader_context *partial_execute_ctx = nullptr;

@@ -359,3 +359,44 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 ```
 
 结果：目标 MTR 6/6 通过。
+
+## Worker PQ_BLOCK_SCAN Single Row Read Smoke
+
+本次小步继续推进到 `PQblockScanIterator::Read()` 的单行读取边界：
+
+- 保留上一小步的 factory construction smoke；
+- 单行 Read 使用直接构造的 `PQblockScanIterator`，便于显式控制
+  `Init()` / `Read()` / `End()` 生命周期；
+- `Read()` 只调用一次，读到一行即停止，不读 EOF；
+- `need_rowid=false`，不触发 `handler::position()` / rowid / stable ref；
+- 不接 `Query_result_mq`；
+- 不调用 `ExecuteIteratorQuery()`；
+- execute gate 仍保持阻断，`worker_execute_iterator_smoke_success` 仍为 0。
+
+实现过程中确认：
+
+- 外层 `m_leader_ctx` 是 PROBE context，不能用于真实单行 Read；
+- 必须在外层 PROBE context `cleanup_pq_resources(false)` 之后运行本 smoke，
+  避免 caller 持有被同一 handler 重建时清理掉的 PROBE ctx；
+- 本 smoke 内部创建局部 EXECUTE leader context，完成后在所有路径释放；
+- worker table / worker THD / iterator ctx 均在局部 EXECUTE context 释放前清理。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_blocked_read`
+- `Parallel_worker_execute_iterator_smoke_read_success`
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_worker_typed_pull_next_smoke \
+  pq_parallel_scan_iterator_row_values pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-read-smoke-vardir5 \
+  --tmpdir=/tmp/pq-worker-read-smoke-tmpdir5
+```
+
+结果：目标 MTR 5/5 通过。
