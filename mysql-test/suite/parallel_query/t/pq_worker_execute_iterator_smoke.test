@@ -35,6 +35,15 @@ SET @plan_cleaned_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
         'Parallel_worker_execute_iterator_smoke_plan_cleaned');
+SET @join_shape_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_join_shape_attempts');
+SET @join_shape_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_join_shape_success');
+SET @join_shape_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_join_shape_unsupported');
 SET @worker_table_opened_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -118,6 +127,15 @@ SELECT
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_plan_cleaned') -
      @plan_cleaned_before) >= 1 AS worker_execute_plan_cleaned,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_join_shape_attempts') -
+     @join_shape_attempts_before) >= 1 AS worker_join_shape_attempted,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_join_shape_success') -
+     @join_shape_success_before) >= 1 AS worker_join_shape_success,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_join_shape_unsupported') -
+     @join_shape_unsupported_before) = 0 AS worker_join_shape_not_unsupported,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_worker_table_opened') -

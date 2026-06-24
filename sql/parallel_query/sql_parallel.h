@@ -231,6 +231,9 @@ struct PQ_global_stats {
   std::atomic<uint64> clone_preflight_attempts{0};  ///< Contract preflights
   std::atomic<uint64> clone_preflight_success{0};  ///< Shell preflights
   std::atomic<uint64> clone_preflight_unsupported{0};  ///< Contract rejects
+  std::atomic<uint64> worker_join_shape_attempts{0};  ///< JOIN shape copies
+  std::atomic<uint64> worker_join_shape_success{0};  ///< JOIN shape copied
+  std::atomic<uint64> worker_join_shape_unsupported{0};  ///< Shape rejects
   std::atomic<uint64> saved_order_group_contract_attempts{0};  ///< E5d-S1
   std::atomic<uint64> saved_order_group_contract_unsupported{0};  ///< E5d-S1
   std::atomic<uint64> saved_order_group_restore_smoke_attempts{0};  ///< E5d-S2
@@ -568,6 +571,9 @@ struct PQ_global_stats {
     clone_preflight_attempts.store(0, std::memory_order_relaxed);
     clone_preflight_success.store(0, std::memory_order_relaxed);
     clone_preflight_unsupported.store(0, std::memory_order_relaxed);
+    worker_join_shape_attempts.store(0, std::memory_order_relaxed);
+    worker_join_shape_success.store(0, std::memory_order_relaxed);
+    worker_join_shape_unsupported.store(0, std::memory_order_relaxed);
     saved_order_group_contract_attempts.store(0, std::memory_order_relaxed);
     saved_order_group_contract_unsupported.store(0,
                                                  std::memory_order_relaxed);

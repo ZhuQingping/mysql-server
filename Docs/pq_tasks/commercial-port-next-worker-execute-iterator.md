@@ -436,6 +436,43 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 
 结果：目标 MTR 4/4 通过（含 `shutdown_report`）。
 
+## Worker JOIN Scalar Shape Copy Smoke
+
+本次小步把 worker-owned query shell 继续推进为带 JOIN 标量 shape 的非执行
+worker shell。该步骤只复制安全标量字段和本地 PQ 标记，不复制 `QEP_TAB`、
+`TABLE`、handler、AccessPath 或 Item/ORDER/GROUP 树，也不打开 worker
+`ExecuteIteratorQuery()`。
+
+实现边界：
+
+- `pq_make_join()` 在创建 worker JOIN 后调用 `JOIN::pq_copy_from()`；
+- `JOIN::pq_copy_from()` 分配 ref item slice，并把 active slice 指向 worker
+  query block 的 `base_ref_items`；
+- 设置 `query_block->join = worker_join`；
+- 复制表数量、const/primary table 数量、plan state、limit、found rows 相关
+  标量、rowcount 估算和 PQ 本地标记；
+- worker offset 在 `parallel_exec` 场景下归零，避免 worker 单独应用 leader
+  OFFSET；
+- `qep_tab` 仍保持未复制，真实 worker plan 仍在后续 `pq_dup_tabs()` 切片；
+- 新增诊断：
+  - `Parallel_worker_join_shape_attempts`
+  - `Parallel_worker_join_shape_success`
+  - `Parallel_worker_join_shape_unsupported`
+- `pq_worker_execute_iterator_smoke` 断言 shape copy 成功且 unsupported 不增加；
+- execute gate 仍保持 fail-closed，`success` 仍为 0。
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-join-shape-vardir \
+  --tmpdir=/tmp/pq-worker-join-shape-tmpdir
+```
+
 ## Restricted Worker Plan Ownership Helper
 
 本次小步不改变执行语义，只把 `run_worker_execute_iterator_smoke()` 里散落的

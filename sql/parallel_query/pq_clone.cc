@@ -81,7 +81,11 @@ JOIN *pq_make_join(THD *thd, JOIN *join) {
   if (worker_query_block == nullptr) return nullptr;
 
   JOIN *const worker_join = new (thd->mem_root) JOIN(thd, worker_query_block);
-  if (worker_join == nullptr) worker_query_block->pq_restore();
+  if (worker_join == nullptr || worker_join->pq_copy_from(join)) {
+    worker_query_block->pq_restore();
+    if (worker_join != nullptr) worker_join->destroy();
+    return nullptr;
+  }
 
   return worker_join;
 }
@@ -92,7 +96,53 @@ void Query_block::pq_restore() {
   if (pq_is_clone()) pq_unlink_clone();
 }
 
-bool JOIN::pq_copy_from(JOIN *) { return true; }
+bool JOIN::pq_copy_from(JOIN *orig) {
+  pq_global_stats.worker_join_shape_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (orig == nullptr || query_block == nullptr || query_expression() == nullptr ||
+      orig->query_expression() == nullptr) {
+    pq_global_stats.worker_join_shape_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  if (alloc_indirection_slices()) {
+    pq_global_stats.worker_join_shape_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  query_block->join = this;
+  ref_items[REF_SLICE_ACTIVE] = query_block->base_ref_items;
+  where_cond = query_block->where_cond();
+  tables_list = query_block->leaf_tables;
+
+  tables = orig->tables;
+  const_tables = orig->const_tables;
+  primary_tables = orig->primary_tables;
+  explain_flags = orig->explain_flags;
+  set_plan_state(orig->plan_state);
+  zero_result_cause = orig->zero_result_cause;
+  calc_found_rows = orig->calc_found_rows;
+  m_select_limit = orig->m_select_limit;
+  query_expression()->select_limit_cnt =
+      orig->query_expression()->select_limit_cnt;
+  query_expression()->offset_limit_cnt =
+      query_block->parallel_exec ? 0 : orig->query_expression()->offset_limit_cnt;
+  found_const_table_map = orig->found_const_table_map;
+  best_rowcount = orig->best_rowcount;
+
+  pq_eligible = orig->pq_eligible;
+  pq_unsuitable_reason = orig->pq_unsuitable_reason;
+  pq_plan_rewritten = orig->pq_plan_rewritten;
+  need_tmp_pq_leader = orig->need_tmp_pq_leader;
+  pq_dop = orig->pq_dop;
+
+  pq_global_stats.worker_join_shape_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
 
 bool JOIN::setup_tmp_table_info(JOIN *) { return true; }
 
