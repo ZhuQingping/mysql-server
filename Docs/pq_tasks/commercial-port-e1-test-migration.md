@@ -192,7 +192,9 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 状态
 
-Status: E1 planning baseline completed. E1-A1 completed.
+Status: E1 planning baseline completed. E1-A1 completed. E1-A2 targeted
+validation completed; full-suite follow-up is pending on an existing
+`pq_agg_fallback` EXPLAIN row-estimate stabilization.
 
 ## E1-A1 Completion Report
 
@@ -250,3 +252,48 @@ Review:
 - Code-Docs-Test Review accepted the E1-A1 direction and requested stronger
   counter assertions for `pq_not_equal` / `pq_aggr_no_record` plus doc cleanup；
 - review hardening was applied and revalidated with targeted and full MTR。
+
+## E1-A2 Completion Report
+
+Changed files:
+
+- `mysql-test/suite/parallel_query/t/pq_worker_error.test`
+- `mysql-test/suite/parallel_query/r/pq_worker_error.result`
+- `mysql-test/suite/parallel_query/t/pq_kill.test`
+- `mysql-test/suite/parallel_query/r/pq_kill.result`
+- `mysql-test/suite/parallel_query/t/pq_kill_query.test`
+- `mysql-test/suite/parallel_query/r/pq_kill_query.result`
+- `Docs/pq_tasks/commercial-port-e1-test-migration.md`
+
+Implementation:
+
+- added three commercial-name adapted tests for worker error and kill paths；
+- `pq_worker_error` covers current debug-gated worker ERROR priority and
+  threaded worker ERROR token propagation；
+- `pq_kill` covers leader-side kill priority before row materialization；
+- `pq_kill_query` covers external `KILL QUERY` after threaded worker start；
+- review hardening carries over the low-level counter assertions:
+  worker-error and external-kill paths must start a worker without executed or
+  fallback accounting, and leader-kill must select the row-stream path before
+  materialization is interrupted；
+- commercial-only debug flags such as `pq_worker_abort*`、`pq_msort_error*` and
+  `debug_pq_worker_stall` remain deferred。
+
+Validation:
+
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+  pq_worker_error pq_kill pq_kill_query --parallel=1
+  --vardir=/tmp/pq-e1a2-target3-vardir
+  --tmpdir=/tmp/pq-e1a2-target3-tmpdir` passed, all 4 tests successful；
+- after review hardening, `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr
+  --suite=parallel_query pq_worker_error pq_kill pq_kill_query --parallel=1
+  --vardir=/tmp/pq-commit-target-vardir
+  --tmpdir=/tmp/pq-commit-target-tmpdir` passed, all 4 tests successful；
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+  --parallel=1 --vardir=/tmp/pq-e1a2-full-vardir
+  --tmpdir=/tmp/pq-e1a2-full-tmpdir` needs follow-up rerun；the latest
+  full-suite attempt stopped before E1-A2 on an existing `pq_agg_fallback`
+  EXPLAIN row-estimate mismatch (`rows` 5 vs 6).
+
+Review: first review requested counter hardening for worker-error, external
+kill, and leader-kill paths；the hardening was applied and targeted MTR passed.
