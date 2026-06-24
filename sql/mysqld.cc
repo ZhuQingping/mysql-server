@@ -10364,6 +10364,9 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_result_restored,
     worker_execute_iterator_smoke_result_restored)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_blocked_ownership,
+    worker_execute_iterator_smoke_blocked_ownership)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_blocked_execute,
     worker_execute_iterator_smoke_blocked_execute)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
@@ -12619,6 +12622,9 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_result_restored",
      (char *)&show_pq_worker_execute_iterator_smoke_result_restored, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_blocked_ownership",
+     (char *)&show_pq_worker_execute_iterator_smoke_blocked_ownership, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_blocked_worker_open",
      (char *)&show_pq_worker_execute_iterator_smoke_blocked_worker_open,

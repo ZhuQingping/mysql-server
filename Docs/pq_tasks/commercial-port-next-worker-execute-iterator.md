@@ -435,3 +435,40 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 ```
 
 结果：目标 MTR 4/4 通过（含 `shutdown_report`）。
+
+## Worker Query Ownership Preflight Gate
+
+两个只读 Explorer 对商用仓和当前仓的结论一致：商用
+`make_pq_worker_plan()` 依赖 `pq_dup_select()` / `pq_dup_tabs()` /
+`pq_make_join_readinfo()` 构造 worker-owned `Query_block`、`Query_expression`
+和可执行 worker `JOIN`；当前仓的 `pq_make_join()` 仍只是
+`new JOIN(worker_thd, leader_query_block)` shell。
+
+本次小步把这个真实阻断点固化为 execute 前的 fail-closed preflight：
+
+- 保留前一小步的 `Query_result_mq` bind/restore smoke；
+- 新增 `pq_worker_join_ownership_preflight()`，拒绝共享 leader
+  `Query_block` 或 `Query_expression` 的 worker JOIN；
+- 当前预期稳定命中 ownership blocker；
+- 仍不调用 `ExecuteIteratorQuery()`；
+- 仍同步记录 `blocked_execute`，保持既有 smoke 语义连续；
+- 下一阶段只有实现 worker-owned query shell 后，才能把该 gate 从 blocked
+  推进到 success。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_blocked_ownership`
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_commercial_worker_result pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-ownership-gate-vardir \
+  --tmpdir=/tmp/pq-worker-ownership-gate-tmpdir
+```
+
+结果：目标 MTR 4/4 通过（含 `shutdown_report`）。

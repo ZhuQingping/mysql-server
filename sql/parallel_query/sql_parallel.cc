@@ -189,6 +189,19 @@ QEP_TAB *pq_first_worker_smoke_qep_tab(JOIN *join) {
   return tab->table() != nullptr ? tab : nullptr;
 }
 
+bool pq_worker_join_ownership_preflight(JOIN *worker_join, JOIN *leader_join) {
+  if (worker_join == nullptr || leader_join == nullptr ||
+      worker_join->query_block == nullptr ||
+      leader_join->query_block == nullptr ||
+      worker_join->query_expression() == nullptr ||
+      leader_join->query_expression() == nullptr) {
+    return false;
+  }
+
+  return worker_join->query_block != leader_join->query_block &&
+         worker_join->query_expression() != leader_join->query_expression();
+}
+
 void *pq_worker_thread_entry(void *arg_ptr) {
   auto *arg = static_cast<PQ_worker_thread_arg *>(arg_ptr);
   PQ_worker_info *worker = arg != nullptr ? arg->worker : nullptr;
@@ -2512,6 +2525,20 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   worker_join->query_block->set_query_result(original_block_result);
   pq_global_stats.worker_execute_iterator_smoke_result_restored.fetch_add(
       1, std::memory_order_relaxed);
+
+  if (!pq_worker_join_ownership_preflight(worker_join, join)) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_ownership.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_join->destroy();
+    pq_close_worker_table(&worker->m_open_ctx, false);
+    pq_destroy_worker_thd(worker);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
 
   /*
     The current branch has not migrated commercial make_pq_worker_plan() or
