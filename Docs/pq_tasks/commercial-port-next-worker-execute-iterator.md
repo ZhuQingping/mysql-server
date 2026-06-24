@@ -2,7 +2,7 @@
 
 ## 状态
 
-Implementation completed / review pending.
+Readinfo smoke contract in progress / review pending.
 
 本任务书承接：
 
@@ -141,7 +141,7 @@ range/ref/ICP、ORDER BY、GROUP BY 等改动混合。
 
 ## 实现记录
 
-本次小步实现选择“可观测阻断点”收口，没有打开 worker
+上一小步实现选择“可观测阻断点”收口，没有打开 worker
 `ExecuteIteratorQuery()`：
 
 - 新增 `Gather_operator::run_worker_execute_iterator_smoke()`；
@@ -180,3 +180,37 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 ```
 
 结果：目标 MTR 5/5 通过（含 `shutdown_report`）。
+
+## Readinfo Smoke Contract 记录
+
+本次继续推进一个小步：把 `pq_make_join_readinfo()` 从恒失败改为
+smoke-safe 最小成功合同。
+
+实现边界：
+
+- 仅当 `join != nullptr`、`gather != nullptr` 且 `div_tab == nullptr` 时返回
+  success；
+- 仍不创建 QEP_TAB、AccessPath、worker iterator 或 cloned worker plan；
+- 不启动 worker，不调用 handler/InnoDB，不调用 `ExecuteIteratorQuery()`；
+- 默认用户可见路径不变。
+
+MTR 预期同步为：
+
+- clone shell 不阻断；
+- readinfo 不再阻断；
+- execute 前仍阻断在
+  `Parallel_worker_execute_iterator_smoke_blocked_execute`；
+- success 仍为 0。
+
+开发阶段目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_worker_typed_pull_next_smoke \
+  pq_commercial_worker_result_adapter pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-readinfo-target-vardir \
+  --tmpdir=/tmp/pq-worker-readinfo-target-tmpdir
+```
