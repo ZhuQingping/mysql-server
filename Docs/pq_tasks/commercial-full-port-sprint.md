@@ -1876,7 +1876,8 @@ Next blocker:
 
 #### Batch D1.6i - ExecuteIteratorQuery direct-call blocker
 
-Status: completed locally；awaiting final code review。
+Status: completed and committed as `ec8cc2dbe7b`；Code / Docs / Test Review
+accepted。
 
 目标：
 
@@ -1926,7 +1927,8 @@ Next blocker:
 
 #### Batch D1.6j - Query_result_mq pre-wait leader drain
 
-Status: completed locally；awaiting code review。
+Status: completed and committed as `9476338d18e`；Code / Docs / Test Review
+accepted。
 
 目标：
 
@@ -1967,6 +1969,82 @@ Next blocker:
 - 新增 `PQ_worker_task::EXECUTE_ITERATOR_SMOKE`，在线程内复用/拆分
   `PQ_worker_execute_smoke_plan`，由 leader 使用同一 PQWR pre-wait drain
   解析 ROW/FINISH/ERROR，成功后再递增 `xiq_*`。
+
+#### Batch D1.6k - Worker-thread ExecuteIteratorQuery positive smoke
+
+Status: completed and committed.
+
+目标：
+
+- 在 DBUG-only worker thread 中运行 worker plan precheck；
+- 先以 precheck task 证明 worker thread 可以构造 worker JOIN/root/result/unit
+  合同且不调用 `ExecuteIteratorQuery()`；
+- 随后在独立 call smoke 中真实调用
+  `Query_expression::ExecuteIteratorQuery(worker_thd)`；
+- leader 在线程 wait 前 drain `PQWR` ROW/FINISH，避免同线程 no-consumer
+  blocker；
+- 最后校验 decoded worker output values，而不把 `PQWR` 接到用户 SQL 结果。
+
+Completion Report - Batch D1.6k:
+
+- commits:
+  - `a995a880d50` Add PQ worker execute threaded precheck；
+  - `e5355e7a8a1` Run PQ worker execute iterator in smoke；
+  - `c2946599f21` Validate PQ worker execute output values。
+- changed areas:
+  - `sql/parallel_query/sql_parallel.*`
+  - `sql/parallel_query/pq_iterator.cc`
+  - `sql/parallel_query/pq_iterators.*`
+  - `sql/parallel_query/pq_clone.cc`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t|r/pq_worker_execute_threaded_*`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+  - `Docs/pq_tasks/commercial-port-next-worker-execute-iterator.md`
+- implementation:
+  - added worker-thread `EXECUTE_ITERATOR_SMOKE` precheck task；
+  - added `EXECUTE_ITERATOR_CALL_SMOKE` task that calls
+    `ExecuteIteratorQuery(worker_thd)` with worker-owned
+    `Query_result_mq`；
+  - added pre-wait leader `PQWR` drain for real worker `ROW` / `FINISH`
+    frames；
+  - added decoded numeric checksum counters for worker output values:
+    `value_rows`、`value_errors`、`value_id_sum`、`value_v_sum`、
+    `value_id_v_sum`；
+  - fixed worker `PQblockScanIterator` handler lifecycle by pairing
+    `ha_rnd_init(true)` with handler-state-guarded `ha_rnd_end()`；
+  - reapplied worker table column bitmaps after worker select-list read bits
+    are set, so `Query_result_mq::send_data()` reads real worker record values。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `pq_worker_execute_threaded_call_smoke`
+    `pq_worker_execute_threaded_precheck_smoke`
+    `pq_worker_execute_iterator_smoke`
+    `pq_worker_typed_pull_next_smoke`
+    `pq_parallel_scan_iterator_row_values`
+    `pq_parallel_scan_iterator_order_gather_smoke`
+    `pq_worker_attach_contract_smoke`
+    `pq_commercial_worker_result`
+    `pq_commercial_worker_result_adapter`
+    `pq_stats`。
+- review:
+  - independent Review Agent accepted；
+  - low-risk unchecked checksum multiplication finding was fixed before
+    commit；
+  - no Critical or Important findings remained。
+
+Next blocker:
+
+- worker `ExecuteIteratorQuery()` positive smoke is now proven only for
+  DBUG-gated single-table `SELECT id, v` with `PQWR` leader drain；
+- default visible PQ path still consumes typed row-image `Exchange_nosort`,
+  not worker `PQWR` result frames；
+- next source batch should choose one of two serial paths:
+  1. connect worker `PQWR` decoded rows to leader record materialization under
+     a debug-only `ParallelScanIterator` path；or
+  2. move from debug-only worker execute smoke toward a guarded visible
+     single-table fullscan gate that still excludes ORDER BY/ref/ICP。
 
 ### Batch E1 - Commercial MTR migration
 
