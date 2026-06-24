@@ -192,9 +192,9 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 状态
 
-Status: E1 planning baseline completed. E1-A1 completed. E1-A2 targeted
-validation completed; full-suite follow-up is pending on an existing
-`pq_agg_fallback` EXPLAIN row-estimate stabilization.
+Status: E1 planning baseline completed. E1-A1 completed. E1-A2 full-suite
+follow-up completed after stabilizing existing EXPLAIN row-estimate-only
+assertions.
 
 ## E1-A1 Completion Report
 
@@ -289,11 +289,14 @@ Validation:
   --suite=parallel_query pq_worker_error pq_kill pq_kill_query --parallel=1
   --vardir=/tmp/pq-commit-target-vardir
   --tmpdir=/tmp/pq-commit-target-tmpdir` passed, all 4 tests successful；
-- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
-  --parallel=1 --vardir=/tmp/pq-e1a2-full-vardir
-  --tmpdir=/tmp/pq-e1a2-full-tmpdir` needs follow-up rerun；the latest
-  full-suite attempt stopped before E1-A2 on an existing `pq_agg_fallback`
-  EXPLAIN row-estimate mismatch (`rows` 5 vs 6).
+- follow-up stabilization masks only non-deterministic EXPLAIN estimate columns
+  in `pq_agg_fallback` and `pq_explain_off`; targeted rerun
+  `pq_agg_fallback pq_explain_off` passed, all 3 tests successful.
+- after EXPLAIN estimate stabilization, `cd build-ninja/mysql-test &&
+  TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1
+  --vardir=/tmp/pq-full-after-explainfix-vardir
+  --tmpdir=/tmp/pq-full-after-explainfix-tmpdir` passed, all 100 tests
+  successful.
 
 Review: first review requested counter hardening for worker-error, external
 kill, and leader-kill paths；the hardening was applied and targeted MTR passed.
