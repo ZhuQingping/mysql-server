@@ -618,6 +618,55 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 
 结果：目标 MTR 4/4 通过（含 `shutdown_report`）。
 
+## PQWR Leader Materialization Smoke
+
+Status: coding/target validation completed; awaiting independent review.
+
+本轮切口保持 debug-only，验证 leader 能把 worker `PQWR` decoded row 临时写入
+leader `TABLE::record[0]`：
+
+- leader 在 pre-wait drain `PQWR` ROW frame 时执行 materialization；
+- 写入前保存原始 `record[0]`，函数退出时恢复，避免影响当前 serial SELECT
+  的用户可见返回；
+- 写入期间临时启用 `write_set`，满足 debug build 下 `Field::store()` 对目标列
+  bitmap 的断言，退出时恢复原 `write_set`；
+- materialized row 只用于 debug counters 校验，不接入默认 `Exchange_nosort`
+  或用户可见结果路径。
+
+新增 status counters：
+
+- `Parallel_worker_execute_iterator_thread_smoke_mat_rows`
+- `Parallel_worker_execute_iterator_thread_smoke_mat_errors`
+- `Parallel_worker_execute_iterator_thread_smoke_mat_id_sum`
+- `Parallel_worker_execute_iterator_thread_smoke_mat_v_sum`
+- `Parallel_worker_execute_iterator_thread_smoke_mat_id_v_sum`
+
+开发期验证范围保持为相关模块：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_threaded_call_smoke \
+  pq_worker_execute_threaded_precheck_smoke \
+  pq_worker_execute_iterator_smoke \
+  pq_commercial_worker_result \
+  pq_commercial_worker_result_adapter \
+  pq_stats \
+  --parallel=1 --vardir=/tmp/pq-pqwr-mat-target-vardir \
+  --tmpdir=/tmp/pq-pqwr-mat-target-tmpdir
+```
+
+结果：目标 MTR 7/7 通过（含 `shutdown_report`）。
+
+Next blocker:
+
+- 当前只证明 `PQWR` decoded row 可以安全写入 leader record buffer 并恢复；
+- 尚未把 worker `PQWR` 作为默认 visible `Exchange_nosort` 输入；
+- 下一步应继续在 DBUG gate 下把 materialized row 交给更接近
+  `Exchange_nosort::Read()` 的 leader pull adapter，而不是直接打开用户路径。
+
 ## Worker JOIN Scalar Shape Copy Smoke
 
 本次小步把 worker-owned query shell 继续推进为带 JOIN 标量 shape 的非执行

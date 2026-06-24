@@ -2073,3 +2073,48 @@ Next action:
 - E1-A1 fullscan edge commercial-name mapping；
 - then E1-A2 kill / worker-error mapping；
 - then E1-B1 ORDER / prepare / correlated-subquery deferred boundary。
+
+#### Batch D1.6l - PQWR leader materialization smoke
+
+Status: completed locally; awaiting review/commit.
+
+目标：
+
+- 在 worker-thread `ExecuteIteratorQuery()` positive smoke 基础上，验证 leader
+  能消费真实 worker `PQWR` ROW frame；
+- 将 decoded row 临时 materialize 到 leader `TABLE::record[0]`；
+- 使用 checksum counters 证明 materialized row values 与 worker 输出一致；
+- 保持 debug-only，不打开默认 visible PQ path。
+
+Implementation:
+
+- added debug helper `pq_materialize_worker_result_smoke_row()`；
+- helper saves/restores leader `record[0]`；
+- helper temporarily enables/restores `write_set` to satisfy debug
+  `Field::store()` bitmap checks；
+- extended `pq_drain_worker_result_frames()` with optional
+  `materialize_table`；
+- added `mat_*` status counters and reset coverage；
+- updated `pq_worker_execute_threaded_call_smoke` and `pq_stats` expected
+  results。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_worker_execute_threaded_call_smoke`
+  `pq_worker_execute_threaded_precheck_smoke`
+  `pq_worker_execute_iterator_smoke`
+  `pq_commercial_worker_result`
+  `pq_commercial_worker_result_adapter`
+  `pq_stats`。
+
+Notes:
+
+- initial `--record` run exposed a debug assertion in `Field::store()` because
+  the target fields were not in `write_set`；
+- fixed by reusing existing `dbug_tmp_use_all_columns()` /
+  `dbug_tmp_restore_column_map()` around the smoke-only store path；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。

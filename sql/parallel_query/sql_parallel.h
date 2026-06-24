@@ -530,6 +530,11 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_threaded_smoke_value_id_sum{0};
   std::atomic<uint64> worker_execute_iterator_threaded_smoke_value_v_sum{0};
   std::atomic<uint64> worker_execute_iterator_threaded_smoke_value_id_v_sum{0};
+  std::atomic<uint64> worker_execute_iterator_threaded_smoke_mat_rows{0};
+  std::atomic<uint64> worker_execute_iterator_threaded_smoke_mat_errors{0};
+  std::atomic<uint64> worker_execute_iterator_threaded_smoke_mat_id_sum{0};
+  std::atomic<uint64> worker_execute_iterator_threaded_smoke_mat_v_sum{0};
+  std::atomic<uint64> worker_execute_iterator_threaded_smoke_mat_id_v_sum{0};
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
   std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
   std::atomic<uint64> exchange_row_image_smoke_rows{0};  ///< Row-image smoke rows
@@ -1073,6 +1078,16 @@ struct PQ_global_stats {
     worker_execute_iterator_threaded_smoke_value_v_sum.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_threaded_smoke_value_id_v_sum.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_threaded_smoke_mat_rows.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_threaded_smoke_mat_errors.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_threaded_smoke_mat_id_sum.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_threaded_smoke_mat_v_sum.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_threaded_smoke_mat_id_v_sum.store(
         0, std::memory_order_relaxed);
     exchange_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_smoke_finishes.store(0, std::memory_order_relaxed);

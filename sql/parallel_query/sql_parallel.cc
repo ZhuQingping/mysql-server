@@ -237,11 +237,58 @@ bool pq_checked_mul_uint64(uint64 left, uint64 right, uint64 *result) {
   return false;
 }
 
+bool pq_materialize_worker_result_smoke_row(
+    TABLE *table, const std::vector<PQ_worker_result_decoded_field> &fields) {
+  // Debug-only proof for the current SELECT id, v worker smoke. This is not a
+  // general decoded-row materializer.
+  if (table == nullptr || table->s == nullptr || table->field == nullptr ||
+      table->record[0] == nullptr || table->s->fields < fields.size() ||
+      table->s->reclength == 0 || fields.size() != 2) {
+    return true;
+  }
+
+  std::vector<uchar> saved_record(table->s->reclength);
+  memcpy(saved_record.data(), table->record[0], table->s->reclength);
+  auto restore_saved_record = create_scope_guard([&]() {
+    memcpy(table->record[0], saved_record.data(), table->s->reclength);
+  });
+  my_bitmap_map *old_write_set =
+      dbug_tmp_use_all_columns(table, table->write_set);
+  auto restore_write_set = create_scope_guard(
+      [&]() { dbug_tmp_restore_column_map(table->write_set, old_write_set); });
+
+  restore_record(table, s->default_values);
+  for (uint32 i = 0; i < fields.size(); ++i) {
+    Field *field = table->field[i];
+    if (field == nullptr || fields[i].is_null || fields[i].value == nullptr ||
+        field->store(fields[i].value, fields[i].value_len,
+                     &my_charset_bin) != TYPE_OK) {
+      return true;
+    }
+  }
+
+  const uint64 id_value = static_cast<uint64>(table->field[0]->val_int());
+  const uint64 v_value = static_cast<uint64>(table->field[1]->val_int());
+  uint64 id_v_value = 0;
+  if (pq_checked_mul_uint64(id_value, v_value, &id_v_value)) return true;
+
+  pq_global_stats.worker_execute_iterator_threaded_smoke_mat_rows.fetch_add(
+      1, std::memory_order_relaxed);
+  pq_global_stats.worker_execute_iterator_threaded_smoke_mat_id_sum.fetch_add(
+      id_value, std::memory_order_relaxed);
+  pq_global_stats.worker_execute_iterator_threaded_smoke_mat_v_sum.fetch_add(
+      v_value, std::memory_order_relaxed);
+  pq_global_stats.worker_execute_iterator_threaded_smoke_mat_id_v_sum.fetch_add(
+      id_v_value, std::memory_order_relaxed);
+  return false;
+}
+
 bool pq_drain_worker_result_frames(PQ_worker_info *worker,
                                    size_t expected_fields,
                                    uint32 max_messages, uint32 *rows_read,
                                    uint32 *finishes_read, uint32 *errors_read,
-                                   bool collect_value_checksums) {
+                                   bool collect_value_checksums,
+                                   TABLE *materialize_table) {
   if (worker == nullptr || worker->m_mq_handle == nullptr ||
       rows_read == nullptr || finishes_read == nullptr ||
       errors_read == nullptr || expected_fields == 0) {
@@ -314,6 +361,13 @@ bool pq_drain_worker_result_frames(PQ_worker_info *worker,
             .fetch_add(v_value, std::memory_order_relaxed);
         pq_global_stats.worker_execute_iterator_threaded_smoke_value_id_v_sum
             .fetch_add(id_v_value, std::memory_order_relaxed);
+      }
+      if (materialize_table != nullptr &&
+          pq_materialize_worker_result_smoke_row(materialize_table,
+                                                 decoded_fields)) {
+        pq_global_stats.worker_execute_iterator_threaded_smoke_mat_errors
+            .fetch_add(1, std::memory_order_relaxed);
+        return true;
       }
       ++*rows_read;
     } else if (header->type ==
@@ -3218,7 +3272,8 @@ bool Gather_operator::run_worker_execute_iterator_threaded_precheck_smoke(
                                                            : 0;
     failed = pq_drain_worker_result_frames(worker, expected_fields, 128,
                                            &rows_read, &finishes_read,
-                                           &errors_read, true);
+                                           &errors_read, true,
+                                           source_tab->table());
     if (!failed) {
       pq_global_stats.worker_execute_iterator_threaded_smoke_drained_rows
           .fetch_add(rows_read, std::memory_order_relaxed);
