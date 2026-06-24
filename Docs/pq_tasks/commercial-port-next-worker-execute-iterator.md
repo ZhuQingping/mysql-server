@@ -549,6 +549,57 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --tmpdir=/tmp/pq-worker-qep-table-bind-tmpdir
 ```
 
+## Worker Range Scan Clone Helper
+
+本次小步平移商用实现中的 `CopyRangeScanAccessPath()` 主体，先让当前仓库具备
+worker-local range scan clone helper：
+
+- 支持 `INDEX_RANGE_SCAN`、`INDEX_MERGE`、`ROWID_INTERSECTION`、
+  `ROWID_UNION` 的递归复制；
+- `INDEX_RANGE_SCAN` 的 `KEY_PART::field` 会重指向 worker `TABLE` 的
+  `key_info` 字段；
+- `QUICK_RANGE`、children array、CPK child 均分配在 worker THD 的
+  `pq_mem_root`，缺失时回退到 `mem_root`；
+- 新增 `pq_clone_range_scan_preflight()` 作为 smoke-only 诊断入口；
+- 当前只在 `run_worker_execute_iterator_smoke()` 中发现
+  `source_tab->range_scan()` 时调用，并且结果不阻断既有 smoke。
+- 本步诊断入口只验证 plain `INDEX_RANGE_SCAN` 的字段重绑定；递归
+  `INDEX_MERGE` / `ROWID_INTERSECTION` / `ROWID_UNION` clone helper 已实现，
+  但要等后续专门 range/index-merge 用例覆盖后再作为验收门。
+
+当前边界：
+
+- 不把 cloned range scan 挂到 worker `QEP_TAB`；
+- 不传入 `NewPQblockScanAccessPath()` 或 `PQblockScanIterator`；
+- 不打开 production `ExecuteIteratorQuery()`；
+- 如果 TABLE/Field 重绑定尚未满足要求，只记录
+  `Parallel_worker_range_scan_clone_unsupported`。
+
+新增诊断：
+
+- `Parallel_worker_range_scan_clone_attempts`
+- `Parallel_worker_range_scan_clone_success`
+- `Parallel_worker_range_scan_clone_unsupported`
+
+后续依赖：
+
+- 完成 worker `TABLE::pq_copy()` / Field / record / bitmap ownership 迁移后，
+  再把 range clone 从诊断提升为 `pq_dup_tabs()` 的真实复制步骤；
+- 届时新增专门 range query MTR，断言 clone success，而不是只依赖
+  fullscan execute smoke。
+
+验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-range-clone-vardir \
+  --tmpdir=/tmp/pq-worker-range-clone-tmpdir
+```
+
 ## Restricted Worker Plan Ownership Helper
 
 本次小步不改变执行语义，只把 `run_worker_execute_iterator_smoke()` 里散落的

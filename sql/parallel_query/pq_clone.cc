@@ -27,13 +27,124 @@
 #include <vector>
 
 #include "sql/parallel_query/sql_parallel.h"
+#include "sql/range_optimizer/range_optimizer.h"
 #include "sql/sql_class.h"
 #include "sql/sql_executor.h"
 #include "sql/sql_lex.h"
 #include "sql/sql_optimizer.h"
 
-AccessPath *CopyRangeScanAccessPath(THD *, AccessPath *, TABLE *) {
-  return nullptr;
+AccessPath *CopyRangeScanAccessPath(THD *thd, AccessPath *orig_path,
+                                    TABLE *table) {
+  if (thd == nullptr || orig_path == nullptr || table == nullptr) {
+    return nullptr;
+  }
+  MEM_ROOT *const mem_root =
+      thd->pq_mem_root != nullptr ? thd->pq_mem_root : thd->mem_root;
+  if (mem_root == nullptr) return nullptr;
+
+  assert(orig_path->type != AccessPath::INDEX_SKIP_SCAN);
+  assert(orig_path->type != AccessPath::GROUP_INDEX_SKIP_SCAN);
+
+  AccessPath *path = new (mem_root) AccessPath;
+  if (path == nullptr) return nullptr;
+  *path = *orig_path;
+  path->iterator = nullptr;
+
+  switch (path->type) {
+    case AccessPath::INDEX_RANGE_SCAN: {
+      const unsigned num_used_key_parts =
+          path->index_range_scan().num_used_key_parts;
+      const unsigned num_ranges = path->index_range_scan().num_ranges;
+      if (orig_path->index_range_scan().used_key_part == nullptr ||
+          orig_path->index_range_scan().ranges == nullptr) {
+        return nullptr;
+      }
+
+      path->index_range_scan().used_key_part = static_cast<KEY_PART *>(
+          mem_root->Alloc(sizeof(KEY_PART) * num_used_key_parts));
+      if (path->index_range_scan().used_key_part == nullptr) return nullptr;
+      memcpy(path->index_range_scan().used_key_part,
+             orig_path->index_range_scan().used_key_part,
+             sizeof(KEY_PART) * num_used_key_parts);
+      for (unsigned i = 0; i < num_used_key_parts; ++i) {
+        const uint16 key = path->index_range_scan().used_key_part[i].key;
+        const uint16 part = path->index_range_scan().used_key_part[i].part;
+        assert(part == i);
+        if (key >= table->s->keys ||
+            part >= table->key_info[key].user_defined_key_parts) {
+          return nullptr;
+        }
+        path->index_range_scan().used_key_part[i].field =
+            table->key_info[key].key_part[part].field;
+      }
+
+      path->index_range_scan().ranges = static_cast<QUICK_RANGE **>(
+          mem_root->Alloc(sizeof(QUICK_RANGE *) * num_ranges));
+      if (path->index_range_scan().ranges == nullptr) return nullptr;
+      for (unsigned i = 0; i < num_ranges; ++i) {
+        QUICK_RANGE *orig_range = orig_path->index_range_scan().ranges[i];
+        if (orig_range == nullptr) return nullptr;
+        path->index_range_scan().ranges[i] = new (mem_root) QUICK_RANGE(
+            mem_root, orig_range->min_key, orig_range->min_length,
+            orig_range->min_keypart_map, orig_range->max_key,
+            orig_range->max_length, orig_range->max_keypart_map,
+            orig_range->flag, orig_range->rkey_func_flag);
+        if (path->index_range_scan().ranges[i] == nullptr) return nullptr;
+      }
+      break;
+    }
+    case AccessPath::INDEX_MERGE:
+      path->index_merge().children =
+          new (mem_root) Mem_root_array<AccessPath *>(mem_root);
+      if (path->index_merge().children == nullptr) return nullptr;
+      for (AccessPath *child : *orig_path->index_merge().children) {
+        AccessPath *const cloned_child =
+            CopyRangeScanAccessPath(thd, child, table);
+        if (cloned_child == nullptr ||
+            path->index_merge().children->push_back(cloned_child)) {
+          return nullptr;
+        }
+      }
+      path->index_merge().table = table;
+      break;
+    case AccessPath::ROWID_INTERSECTION:
+      path->rowid_intersection().children =
+          new (mem_root) Mem_root_array<AccessPath *>(mem_root);
+      if (path->rowid_intersection().children == nullptr) return nullptr;
+      for (AccessPath *child : *orig_path->rowid_intersection().children) {
+        AccessPath *const cloned_child =
+            CopyRangeScanAccessPath(thd, child, table);
+        if (cloned_child == nullptr ||
+            path->rowid_intersection().children->push_back(cloned_child)) {
+          return nullptr;
+        }
+      }
+      if (path->rowid_intersection().cpk_child != nullptr) {
+        path->rowid_intersection().cpk_child = CopyRangeScanAccessPath(
+            thd, orig_path->rowid_intersection().cpk_child, table);
+        if (path->rowid_intersection().cpk_child == nullptr) return nullptr;
+      }
+      path->rowid_intersection().table = table;
+      break;
+    case AccessPath::ROWID_UNION:
+      path->rowid_union().children =
+          new (mem_root) Mem_root_array<AccessPath *>(mem_root);
+      if (path->rowid_union().children == nullptr) return nullptr;
+      for (AccessPath *child : *orig_path->rowid_union().children) {
+        AccessPath *const cloned_child =
+            CopyRangeScanAccessPath(thd, child, table);
+        if (cloned_child == nullptr ||
+            path->rowid_union().children->push_back(cloned_child)) {
+          return nullptr;
+        }
+      }
+      path->rowid_union().table = table;
+      break;
+    default:
+      assert(false);
+      return nullptr;
+  }
+  return path;
 }
 
 ORDER *pq_dup_order(THD *, Query_block *, ORDER *) { return nullptr; }
@@ -168,6 +279,62 @@ bool pq_bind_qep_tab_table_preflight(JOIN *worker_join, TABLE *worker_table,
   }
 
   pq_global_stats.worker_qep_tab_table_bind_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
+
+bool pq_clone_range_scan_preflight(THD *worker_thd, TABLE *worker_table,
+                                   QEP_TAB *leader_tab) {
+  pq_global_stats.worker_range_scan_clone_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (worker_thd == nullptr || worker_table == nullptr || leader_tab == nullptr ||
+      leader_tab->table() == nullptr || leader_tab->range_scan() == nullptr ||
+      leader_tab->range_scan()->type != AccessPath::INDEX_RANGE_SCAN) {
+    pq_global_stats.worker_range_scan_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  AccessPath *const cloned_range =
+      CopyRangeScanAccessPath(worker_thd, leader_tab->range_scan(), worker_table);
+  if (cloned_range == nullptr ||
+      cloned_range == leader_tab->range_scan() ||
+      cloned_range->type != leader_tab->range_scan()->type ||
+      cloned_range->index_range_scan().used_key_part ==
+          leader_tab->range_scan()->index_range_scan().used_key_part ||
+      cloned_range->index_range_scan().ranges ==
+          leader_tab->range_scan()->index_range_scan().ranges ||
+      cloned_range->index_range_scan().num_used_key_parts !=
+          leader_tab->range_scan()->index_range_scan().num_used_key_parts ||
+      cloned_range->index_range_scan().num_ranges !=
+          leader_tab->range_scan()->index_range_scan().num_ranges) {
+    pq_global_stats.worker_range_scan_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  for (unsigned i = 0; i < cloned_range->index_range_scan().num_used_key_parts;
+       ++i) {
+    if (cloned_range->index_range_scan().used_key_part[i].field == nullptr ||
+        cloned_range->index_range_scan().used_key_part[i].field->table !=
+            worker_table) {
+      pq_global_stats.worker_range_scan_clone_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+  }
+  for (unsigned i = 0; i < cloned_range->index_range_scan().num_ranges; ++i) {
+    if (cloned_range->index_range_scan().ranges[i] == nullptr ||
+        cloned_range->index_range_scan().ranges[i] ==
+            leader_tab->range_scan()->index_range_scan().ranges[i]) {
+      pq_global_stats.worker_range_scan_clone_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+  }
+
+  pq_global_stats.worker_range_scan_clone_success.fetch_add(
       1, std::memory_order_relaxed);
   return false;
 }

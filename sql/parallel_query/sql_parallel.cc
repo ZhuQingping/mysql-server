@@ -2526,6 +2526,12 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     return false;
   }
 
+  if (source_tab->range_scan() != nullptr) {
+    (void)pq_clone_range_scan_preflight(worker_thd,
+                                        worker->m_open_ctx.worker_table,
+                                        source_tab);
+  }
+
   AccessPath *const worker_block_scan = NewPQblockScanAccessPath(
       worker_thd, worker->m_open_ctx.worker_table, this, DIV_TAB,
       /*qep_tab=*/nullptr,
