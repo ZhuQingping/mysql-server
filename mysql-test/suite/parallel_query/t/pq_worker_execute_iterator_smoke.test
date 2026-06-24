@@ -62,6 +62,15 @@ SET @qep_tab_table_bind_success_before = (
 SET @qep_tab_table_bind_unsupported_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_table_bind_unsupported');
+SET @qep_tab_table_attach_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_table_attach_attempts');
+SET @qep_tab_table_attach_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_table_attach_success');
+SET @qep_tab_table_attach_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_table_attach_unsupported');
 SET @table_ref_clone_attempts_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_worker_table_ref_clone_attempts');
@@ -212,6 +221,18 @@ SELECT
     WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_table_bind_unsupported') -
      @qep_tab_table_bind_unsupported_before) = 0
        AS worker_qep_tab_table_bind_not_unsupported,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_table_attach_attempts') -
+     @qep_tab_table_attach_attempts_before) >= 1
+       AS worker_qep_tab_table_attach_attempted,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_table_attach_success') -
+     @qep_tab_table_attach_success_before) >= 1
+       AS worker_qep_tab_table_attach_success,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_table_attach_unsupported') -
+     @qep_tab_table_attach_unsupported_before) = 0
+       AS worker_qep_tab_table_attach_not_unsupported,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME = 'Parallel_worker_table_ref_clone_attempts') -
      @table_ref_clone_attempts_before) >= 1

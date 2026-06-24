@@ -676,6 +676,45 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --tmpdir=/tmp/pq-worker-table-scalar-tmpdir
 ```
 
+## Worker QEP_TAB Scoped Table Attach Smoke
+
+本次小步把前面已经验证过的 worker `QEP_TAB` skeleton、worker TABLE
+open、TABLE scalar clone 和 table bind 合同串起来，但仍只在
+`pq_worker_execute_iterator_smoke` 中短作用域使用：
+
+- 新增 `pq_attach_qep_tab_table_smoke()` / `pq_detach_qep_tab_table_smoke()`；
+- attach 前复用 table-bind 同等级校验：worker TABLE、handler、record
+  buffer、`Table_ref`、read/write bitmap 必须与 leader 安全对应且不共享；
+- attach 后用 worker `QEP_TAB` 构造 `PQ_BLOCK_SCAN` access path 和直接
+  `PQblockScanIterator`；
+- iterator 构造 / Init / Read smoke 结束后立即 detach，`JOIN::destroy()` 和
+  worker TABLE close 前不保留 `QEP_TAB -> TABLE` 持久引用。
+
+新增诊断：
+
+- `Parallel_worker_qep_tab_table_attach_attempts`
+- `Parallel_worker_qep_tab_table_attach_success`
+- `Parallel_worker_qep_tab_table_attach_unsupported`
+
+当前边界：
+
+- 不打开 `ExecuteIteratorQuery()`；
+- 不把 attach 状态带入默认生产路径；
+- 不迁移 condition/ref/range/access path 持久 clone；
+- 不修改 optimizer / executor / handler / InnoDB 主路径。
+
+验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-qep-tab-attach-vardir \
+  --tmpdir=/tmp/pq-worker-qep-tab-attach-tmpdir
+```
+
 ## Worker POSITION Scalar Clone Smoke
 
 本次小步继续平移商用 `POSITION::pq_copy()` 的前置合同，但只做

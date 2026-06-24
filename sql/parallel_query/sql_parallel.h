@@ -240,6 +240,9 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_qep_tab_table_bind_attempts{0};  ///< Table binds
   std::atomic<uint64> worker_qep_tab_table_bind_success{0};  ///< Table bind ok
   std::atomic<uint64> worker_qep_tab_table_bind_unsupported{0};  ///< Bind reject
+  std::atomic<uint64> worker_qep_tab_table_attach_attempts{0};  ///< Attach tabs
+  std::atomic<uint64> worker_qep_tab_table_attach_success{0};  ///< Attach ok
+  std::atomic<uint64> worker_qep_tab_table_attach_unsupported{0};  ///< Rejects
   std::atomic<uint64> worker_table_ref_clone_attempts{0};  ///< Table_ref clone
   std::atomic<uint64> worker_table_ref_clone_success{0};  ///< Table_ref ok
   std::atomic<uint64> worker_table_ref_clone_unsupported{0};  ///< Clone reject
@@ -602,6 +605,10 @@ struct PQ_global_stats {
     worker_qep_tab_table_bind_success.store(0, std::memory_order_relaxed);
     worker_qep_tab_table_bind_unsupported.store(0,
                                                 std::memory_order_relaxed);
+    worker_qep_tab_table_attach_attempts.store(0, std::memory_order_relaxed);
+    worker_qep_tab_table_attach_success.store(0, std::memory_order_relaxed);
+    worker_qep_tab_table_attach_unsupported.store(0,
+                                                  std::memory_order_relaxed);
     worker_table_ref_clone_attempts.store(0, std::memory_order_relaxed);
     worker_table_ref_clone_success.store(0, std::memory_order_relaxed);
     worker_table_ref_clone_unsupported.store(0, std::memory_order_relaxed);

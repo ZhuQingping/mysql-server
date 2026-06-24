@@ -396,10 +396,13 @@ bool pq_bind_qep_tab_table_preflight(JOIN *worker_join, TABLE *worker_table,
 
   if (worker_join == nullptr || worker_join->qep_tab == nullptr ||
       worker_table == nullptr || leader_table == nullptr ||
-      worker_table == leader_table || worker_table->file == nullptr ||
-      leader_table->file == nullptr || worker_table->file == leader_table->file ||
+      worker_table == leader_table || worker_table->in_use != worker_join->thd ||
+      worker_table->file == nullptr || leader_table->file == nullptr ||
+      worker_table->file == leader_table->file ||
       worker_table->record[0] == nullptr || leader_table->record[0] == nullptr ||
       worker_table->record[0] == leader_table->record[0] ||
+      (worker_table->record[1] != nullptr &&
+       worker_table->record[1] == leader_table->record[1]) ||
       worker_table->pos_in_table_list == nullptr ||
       worker_join->const_tables >= worker_join->primary_tables ||
       worker_join->const_tables != 0 || worker_join->primary_tables != 1) {
@@ -460,6 +463,103 @@ bool pq_bind_qep_tab_table_preflight(JOIN *worker_join, TABLE *worker_table,
   pq_global_stats.worker_qep_tab_table_bind_success.fetch_add(
       1, std::memory_order_relaxed);
   return false;
+}
+
+bool pq_attach_qep_tab_table_smoke(JOIN *worker_join, TABLE *worker_table,
+                                   TABLE *leader_table,
+                                   PQ_qep_tab_table_attach_state *state) {
+  pq_global_stats.worker_qep_tab_table_attach_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (state == nullptr) {
+    pq_global_stats.worker_qep_tab_table_attach_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+  *state = PQ_qep_tab_table_attach_state{};
+
+  if (worker_join == nullptr || worker_join->qep_tab == nullptr ||
+      worker_table == nullptr || leader_table == nullptr ||
+      worker_table == leader_table || worker_table->in_use != worker_join->thd ||
+      worker_table->file == nullptr || leader_table->file == nullptr ||
+      worker_table->file == leader_table->file ||
+      worker_table->record[0] == nullptr || leader_table->record[0] == nullptr ||
+      worker_table->record[0] == leader_table->record[0] ||
+      (worker_table->record[1] != nullptr &&
+       worker_table->record[1] == leader_table->record[1]) ||
+      worker_table->pos_in_table_list == nullptr ||
+      worker_join->const_tables >= worker_join->primary_tables ||
+      worker_join->const_tables != 0 || worker_join->primary_tables != 1) {
+    pq_global_stats.worker_qep_tab_table_attach_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  QEP_TAB *const tab = &worker_join->qep_tab[worker_join->const_tables];
+  Table_ref *const worker_ref = worker_table->pos_in_table_list;
+  Table_ref *const leader_ref = leader_table->pos_in_table_list;
+
+  const bool failed =
+      tab->join() != worker_join || tab->idx() != 0 ||
+      tab->table() != nullptr || tab->table_ref != nullptr ||
+      tab->condition() != nullptr || tab->range_scan() != nullptr ||
+      worker_table->s == nullptr || leader_table->s == nullptr ||
+      leader_ref == nullptr || worker_ref == leader_ref ||
+      worker_ref->table != worker_table || leader_ref->table != leader_table ||
+      worker_table->reginfo.qep_tab != nullptr ||
+      !pq_lex_cstring_eq(worker_table->s->db, leader_table->s->db) ||
+      !pq_lex_cstring_eq(worker_table->s->table_name,
+                         leader_table->s->table_name) ||
+      !pq_cstring_eq(worker_ref->alias, leader_ref->alias) ||
+      !bitmap_cmp(worker_table->read_set, leader_table->read_set) ||
+      !bitmap_cmp(worker_table->write_set, leader_table->write_set);
+
+  if (failed) {
+    pq_global_stats.worker_qep_tab_table_attach_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  state->tab = tab;
+  state->worker_table = worker_table;
+  state->worker_ref = worker_ref;
+  state->saved_ref_query_block = worker_ref->query_block;
+  state->saved_worker_qep_tab = worker_table->reginfo.qep_tab;
+
+  worker_ref->query_block = worker_join->query_block;
+  tab->table_ref = worker_ref;
+  tab->set_table(worker_table);
+  state->attached = true;
+
+  if (tab->table() != worker_table || tab->table_ref != worker_ref ||
+      worker_table->reginfo.qep_tab != tab ||
+      worker_ref->query_block != worker_join->query_block ||
+      tab->condition() != nullptr || tab->range_scan() != nullptr) {
+    pq_detach_qep_tab_table_smoke(state);
+    pq_global_stats.worker_qep_tab_table_attach_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  pq_global_stats.worker_qep_tab_table_attach_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
+
+void pq_detach_qep_tab_table_smoke(PQ_qep_tab_table_attach_state *state) {
+  if (state == nullptr || !state->attached) return;
+
+  if (state->tab != nullptr) {
+    state->tab->set_table(nullptr);
+    state->tab->table_ref = nullptr;
+  }
+  if (state->worker_table != nullptr) {
+    state->worker_table->reginfo.qep_tab = state->saved_worker_qep_tab;
+  }
+  if (state->worker_ref != nullptr) {
+    state->worker_ref->query_block = state->saved_ref_query_block;
+  }
+  state->attached = false;
 }
 
 bool pq_clone_table_ref_preflight(THD *worker_thd, Table_ref *leader_ref) {

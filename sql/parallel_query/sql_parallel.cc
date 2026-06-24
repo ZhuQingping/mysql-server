@@ -56,6 +56,7 @@
 #include "my_dbug.h"
 #include "mysql/psi/mysql_thread.h"
 #include "mysqld_error.h"         // ER_QUERY_INTERRUPTED
+#include "scope_guard.h"          // create_scope_guard
 #include "sql/debug_sync.h"       // DEBUG_SYNC
 #include "sql/field.h"            // Field
 #include "sql/item.h"             // Item_int
@@ -2568,6 +2569,22 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     return false;
   }
 
+  PQ_qep_tab_table_attach_state qep_tab_attach;
+  if (pq_attach_qep_tab_table_smoke(worker_join,
+                                    worker->m_open_ctx.worker_table,
+                                    source_tab->table(), &qep_tab_attach)) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_plan.cleanup(true, true);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+  QEP_TAB *const worker_qep_tab = qep_tab_attach.tab;
+  auto detach_qep_tab = create_scope_guard(
+      [&]() { pq_detach_qep_tab_table_smoke(&qep_tab_attach); });
+
   if (source_tab->range_scan() != nullptr) {
     (void)pq_clone_range_scan_preflight(worker_thd,
                                         worker->m_open_ctx.worker_table,
@@ -2576,11 +2593,12 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
 
   AccessPath *const worker_block_scan = NewPQblockScanAccessPath(
       worker_thd, worker->m_open_ctx.worker_table, this, DIV_TAB,
-      /*qep_tab=*/nullptr,
+      worker_qep_tab,
       /*need_rowid=*/false);
   if (worker_block_scan == nullptr) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
         1, std::memory_order_relaxed);
+    pq_detach_qep_tab_table_smoke(&qep_tab_attach);
     worker_plan.cleanup(true, true);
     end_execute_ctx();
     leader_thd->store_globals();
@@ -2595,6 +2613,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     if (iterator == nullptr) {
       pq_global_stats.worker_execute_iterator_smoke_blocked_iterator.fetch_add(
           1, std::memory_order_relaxed);
+      pq_detach_qep_tab_table_smoke(&qep_tab_attach);
       worker_plan.cleanup(true, true);
       end_execute_ctx();
       leader_thd->store_globals();
@@ -2609,10 +2628,11 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   ha_rows examined_rows = 0;
   PQblockScanIterator read_iterator(
       worker_thd, worker->m_open_ctx.worker_table, 1.0, &examined_rows, DIV_TAB,
-      this, /*tab=*/nullptr, /*need_rowid=*/false, /*handler=*/nullptr);
+      this, worker_qep_tab, /*need_rowid=*/false, /*handler=*/nullptr);
   if (read_iterator.Init()) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_init.fetch_add(
         1, std::memory_order_relaxed);
+    pq_detach_qep_tab_table_smoke(&qep_tab_attach);
     worker_plan.cleanup(true, true);
     end_execute_ctx();
     leader_thd->store_globals();
@@ -2625,6 +2645,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     pq_global_stats.worker_execute_iterator_smoke_blocked_read.fetch_add(
         1, std::memory_order_relaxed);
     read_iterator.End();
+    pq_detach_qep_tab_table_smoke(&qep_tab_attach);
     worker_plan.cleanup(true, true);
     end_execute_ctx();
     leader_thd->store_globals();
@@ -2634,6 +2655,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   pq_global_stats.worker_execute_iterator_smoke_read_success.fetch_add(
       1, std::memory_order_relaxed);
   read_iterator.End();
+  pq_detach_qep_tab_table_smoke(&qep_tab_attach);
 
   if (!worker_plan.bind_result()) {
     worker_plan.cleanup(true, true);

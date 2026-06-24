@@ -50,6 +50,21 @@ bool pq_dup_tabs_skeleton_preflight(JOIN *worker_join, JOIN *leader_join);
 bool pq_bind_qep_tab_table_preflight(JOIN *worker_join, TABLE *worker_table,
                                      TABLE *leader_table);
 
+struct PQ_qep_tab_table_attach_state {
+  QEP_TAB *tab{nullptr};
+  TABLE *worker_table{nullptr};
+  Table_ref *worker_ref{nullptr};
+  Query_block *saved_ref_query_block{nullptr};
+  QEP_TAB *saved_worker_qep_tab{nullptr};
+  bool attached{false};
+};
+
+bool pq_attach_qep_tab_table_smoke(JOIN *worker_join, TABLE *worker_table,
+                                   TABLE *leader_table,
+                                   PQ_qep_tab_table_attach_state *state);
+
+void pq_detach_qep_tab_table_smoke(PQ_qep_tab_table_attach_state *state);
+
 bool pq_clone_table_ref_preflight(THD *worker_thd, Table_ref *leader_ref);
 
 bool pq_clone_table_scalar_preflight(THD *worker_thd, TABLE *worker_table,
