@@ -468,6 +468,7 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_iterator_constructed{0};
   std::atomic<uint64> worker_execute_iterator_smoke_root_attached{0};
   std::atomic<uint64> worker_execute_iterator_smoke_root_iterator_constructed{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_root_owned{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_root_init{0};
   std::atomic<uint64> worker_execute_iterator_smoke_root_init_success{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_root_read{0};
@@ -936,6 +937,8 @@ struct PQ_global_stats {
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_root_iterator_constructed.store(
         0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_root_owned.store(0,
+                                                  std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_root_init.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_root_init_success.store(

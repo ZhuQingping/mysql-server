@@ -892,8 +892,11 @@ class Query_expression {
     The typical case would be that we notice that the query block can return
     at most one row (a so-called const table), and want to run it during
     optimization.
-   */
+  */
   bool force_create_iterators(THD *thd);
+
+  bool create_pq_worker_root_iterator_smoke(THD *thd, JOIN *join,
+                                            bool eligible_for_batch_mode);
 
   /// See optimize().
   bool unfinished_materialization() const {

@@ -1203,6 +1203,34 @@ bool Query_expression::force_create_iterators(THD *thd) {
   return false;
 }
 
+bool Query_expression::create_pq_worker_root_iterator_smoke(
+    THD *thd, JOIN *join, bool eligible_for_batch_mode) {
+  if (thd == nullptr || thd->lex == nullptr || !thd->pq_is_worker ||
+      join == nullptr || !is_simple() || first_query_block() == nullptr ||
+      first_query_block()->join != join ||
+      m_root_iterator != nullptr || m_root_access_path != nullptr ||
+      join->root_access_path() == nullptr ||
+      join->root_access_path()->type != AccessPath::PQ_BLOCK_SCAN) {
+    return true;
+  }
+
+  m_root_access_path = join->root_access_path();
+  m_root_iterator = CreateIteratorFromAccessPath(thd, m_root_access_path, join,
+                                                 eligible_for_batch_mode);
+  if (m_root_iterator == nullptr) {
+    m_root_access_path = nullptr;
+    return true;
+  }
+
+  if (thd->lex->using_hypergraph_optimizer() &&
+      finalize_full_text_functions(thd, this)) {
+    clear_root_access_path();
+    return true;
+  }
+
+  return false;
+}
+
 /**
   Helper method: create a materialized access path, estimate its cost and
   move it to the best place, cf. doc for MoveCompositeIteratorsFromTablePath

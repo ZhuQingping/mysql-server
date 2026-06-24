@@ -192,12 +192,15 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   - `3a1907cccf1` Add PQ worker iterator init smoke；
   - `dea81de92e5` Add PQ worker iterator read smoke。
 - 当前已证明 debug-only smoke 能用 worker THD + worker TABLE 构造
-  `PQ_BLOCK_SCAN -> PQblockScanIterator`，完成 `Init()`，并在局部 EXECUTE
-  context 下完成一次单行 `Read()` 后 `End()`；
-- 仍不接 `Query_result_mq`，不调用 `ExecuteIteratorQuery()`，不打开用户可见
-  PQ gate；
-- 下一步：只读评估 worker result ownership / `Query_result_mq` 绑定合同，
-  避免直接跳到完整 `ExecuteIteratorQuery()`。
+  `PQ_BLOCK_SCAN -> PQblockScanIterator`，完成 root iterator `Init()/Read()`，
+  并通过 worker-owned `Query_result_mq` 发送/解码 ROW + FINISH smoke frame；
+- D1.6d 已将 worker output fields 推进到 `Query_block::fields` /
+  `base_ref_items` worker-owned `Item_field`；
+- 当前最新本地批次已将 worker root iterator 迁入
+  `Query_expression::m_root_access_path` / `m_root_iterator` ownership smoke，
+  仍不调用 `ExecuteIteratorQuery()`，不打开用户可见 PQ gate；
+- 下一步：推进 `ExecuteIteratorQuery()` 前置合同，重点是 worker result
+  metadata/data/EOF/error 语义、`join_free()` cleanup 和错误/KILL 收口。
 
 ## Batch A 审计结果
 
@@ -1623,12 +1626,70 @@ Completion Report - Batch D1.6d:
 
 Next blocker:
 
-- QueryExpression root iterator ownership is still not migrated. The current
-  worker root iterator is still created locally and destroyed before
-  `ExecuteIteratorQuery()`；
-- Next source batch should add a narrow `Query_expression` root iterator
-  ownership wrapper and migrate the smoke to use QueryExpression-owned root
-  iterator before attempting full `ExecuteIteratorQuery()`。
+#### Batch D1.6e - QueryExpression-owned worker root iterator smoke
+
+Status: completed locally；Code/Docs/Test Review accepted with minor notes。
+
+目标：
+
+- 将 worker root iterator 从 local `CreateIteratorFromAccessPath()` scope 推进到
+  worker `Query_expression::m_root_access_path` /
+  `Query_expression::m_root_iterator` ownership；
+- 只允许 worker THD、simple query、空 QueryExpression root state、且
+  `JOIN::root_access_path()` 为 `AccessPath::PQ_BLOCK_SCAN` 的 smoke 场景；
+- 仍不调用 `force_create_iterators()`，不调用 `ExecuteIteratorQuery()`，不打开
+  用户可见 PQ gate。
+
+Completion Report - Batch D1.6e:
+
+- changed files:
+  - `sql/sql_lex.h`
+  - `sql/sql_union.cc`
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_worker_execute_iterator_smoke.test`
+  - `mysql-test/suite/parallel_query/r/pq_worker_execute_iterator_smoke.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+  - `Docs/pq_tasks/commercial-port-next-query-expression-root-iterator.md`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added `Query_expression::create_pq_worker_root_iterator_smoke()` as a
+    guarded smoke-only bridge toward the commercial root iterator wrapper；
+  - helper rejects non-worker THD, null `thd->lex`, non-simple query, join
+    mismatch, pre-existing QueryExpression root state, null root path, and
+    non-`PQ_BLOCK_SCAN` root path；
+  - caller tracks `query_expression_root_owned` and calls
+    `clear_root_access_path()` only when this smoke successfully created the
+    QueryExpression-owned root；
+  - cleanup order is root clear, JOIN root restore, worker QEP_TAB/TABLE detach,
+    worker plan cleanup；
+  - new status
+    `Parallel_worker_execute_iterator_smoke_root_owned` proves the smoke used
+    QueryExpression-owned root iterator state。
+- validation:
+  - `git diff --check && cmake --build build-ninja --target mysqld -j 16`
+    passed；
+  - `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+    pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats
+    pq_commercial_worker_result_adapter --parallel=1
+    --vardir=/tmp/pq-worker-root-owned-vardir5
+    --tmpdir=/tmp/pq-worker-root-owned-tmpdir5` passed, all 5 tests
+    successful。
+- review:
+  - first independent review returned `NEEDS_FIX` for unconditional
+    `clear_root_access_path()` and broad helper guards；
+  - fixed by tracking ownership and adding worker/PQ_BLOCK_SCAN guards；
+  - re-review returned `ACCEPT_WITH_MINOR`，no Critical or Important findings；
+  - remaining minor: public smoke-only `Query_expression` API should be treated
+    as temporary until replaced by the real commercial wrapper path。
+
+Next blocker:
+
+- `ExecuteIteratorQuery()` is still not called in worker smoke；
+- next source batch should define and verify the smallest
+  `ExecuteIteratorQuery()` preflight contract: worker result metadata/data/EOF
+  ownership, `join_free()` cleanup ordering, and error/KILL propagation。
 
 ### Batch E1 - Commercial MTR migration
 

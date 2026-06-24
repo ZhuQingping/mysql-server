@@ -256,3 +256,41 @@ context。因此本阶段将 smoke 切换为 root iterator 唯一 row-read 路�
 - 仍不调用 `ExecuteIteratorQuery()`；
 - 仍不声明真实 SELECT 输出正确性；正式路径还需要完整 worker Item clone /
   refix / replace-base-item。
+
+## QueryExpression-owned root iterator smoke 实现记录
+
+本阶段 supersede 前文 local-only / forbidden `sql/sql_lex.h`、`sql/sql_union.cc`
+的早期约束。原因是 worker root `Read()`、result binding、ROW/EOF smoke 已经
+证明局部 iterator 可以工作，下一步进入 `ExecuteIteratorQuery()` 前必须验证
+worker `Query_expression` 自身持有 root iterator 的 ownership 合同。
+
+当前实现边界：
+
+- 新增 `Query_expression::create_pq_worker_root_iterator_smoke()`，只允许
+  worker THD 调用；
+- helper 只接受 simple query、`first_query_block()->join == join`、
+  空 `m_root_access_path` / `m_root_iterator`、且 `JOIN::root_access_path()`
+  为 `AccessPath::PQ_BLOCK_SCAN` 的 smoke 场景；
+- helper 将 worker `JOIN::root_access_path()` 复制到
+  `Query_expression::m_root_access_path`，再创建
+  `Query_expression::m_root_iterator`；
+- caller 必须跟踪是否成功创建并拥有该 root，只有拥有时才调用
+  `clear_root_access_path()`；
+- cleanup 顺序保持为：先 `clear_root_access_path()` 销毁 QueryExpression-owned
+  iterator，再恢复 `JOIN::root_access_path()`，再进入 worker QEP_TAB/TABLE
+  detach 和 worker plan cleanup；
+- 仍不调用 `force_create_iterators()`；
+- 仍不调用 `ExecuteIteratorQuery()`；
+- 默认用户可见 PQ gate 不变。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_root_owned`
+
+Review 修正：
+
+- Review Agent 指出 unconditional `clear_root_access_path()` 可能清掉非本 smoke
+  创建的既有 QueryExpression root；已改为 `query_expression_root_owned` 成功后
+  才清理；
+- Review Agent 要求 helper 限定 worker THD 和 `PQ_BLOCK_SCAN` root path；已补
+  `thd->pq_is_worker`、`thd->lex` 和 `AccessPath::PQ_BLOCK_SCAN` guard。

@@ -2728,24 +2728,33 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
       .fetch_add(1, std::memory_order_relaxed);
 
   bool root_iterator_constructed = false;
+  bool query_expression_root_owned = false;
   {
     AccessPath *const saved_root_access_path = worker_join->root_access_path();
     worker_join->set_root_access_path(worker_block_scan);
     pq_global_stats.worker_execute_iterator_smoke_root_attached.fetch_add(
         1, std::memory_order_relaxed);
     auto restore_root_access_path = create_scope_guard([&]() {
+      if (query_expression_root_owned &&
+          worker_join->query_expression() != nullptr) {
+        worker_join->query_expression()->clear_root_access_path();
+      }
       worker_join->set_root_access_path(saved_root_access_path);
     });
 
-    auto iterator = CreateIteratorFromAccessPath(
-        worker_thd, worker_join->root_access_path(), worker_join,
-        /*eligible_for_batch_mode=*/false);
-    if (iterator == nullptr) {
+    if (worker_join->query_expression() == nullptr ||
+        worker_join->query_expression()->create_pq_worker_root_iterator_smoke(
+          worker_thd, worker_join, /*eligible_for_batch_mode=*/false)) {
       pq_global_stats.worker_execute_iterator_smoke_blocked_iterator.fetch_add(
           1, std::memory_order_relaxed);
     } else {
+      query_expression_root_owned = true;
+      RowIterator *const iterator =
+          worker_join->query_expression()->root_iterator();
       pq_global_stats.worker_execute_iterator_smoke_root_iterator_constructed
           .fetch_add(1, std::memory_order_relaxed);
+      pq_global_stats.worker_execute_iterator_smoke_root_owned.fetch_add(
+          1, std::memory_order_relaxed);
       if (iterator->Init()) {
         pq_global_stats.worker_execute_iterator_smoke_blocked_root_init
             .fetch_add(1, std::memory_order_relaxed);
