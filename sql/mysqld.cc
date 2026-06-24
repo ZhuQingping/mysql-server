@@ -10472,6 +10472,12 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_output_fields_cloned,
     worker_execute_iterator_smoke_output_fields_cloned)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_result_contract_ready,
+    worker_execute_iterator_smoke_result_contract_ready)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_blocked_result_contract,
+    worker_execute_iterator_smoke_blocked_result_contract)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_blocked_result_send,
     worker_execute_iterator_smoke_blocked_result_send)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
@@ -12828,6 +12834,12 @@ SHOW_VAR status_vars[] = {
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_output_fields_cloned",
      (char *)&show_pq_worker_execute_iterator_smoke_output_fields_cloned,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xrc_ready",
+     (char *)&show_pq_worker_execute_iterator_smoke_result_contract_ready,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xrc_blocked",
+     (char *)&show_pq_worker_execute_iterator_smoke_blocked_result_contract,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_blocked_result_send",
      (char *)&show_pq_worker_execute_iterator_smoke_blocked_result_send,

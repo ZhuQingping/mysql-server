@@ -460,6 +460,8 @@ bool pq_run_query_result_mq_send_data_smoke(THD *thd, uint32 *rows_read,
 
   const ha_rows sent_rows_before = thd->get_sent_row_count();
   bool failed = fields[0] == nullptr || fields[1] == nullptr ||
+                result.start_execution(thd) ||
+                result.send_result_set_metadata(thd, fields, 0) ||
                 result.send_data(thd, fields) || result.send_eof(thd) ||
                 pq_send_worker_result_frame(
                     &handle, PQ_worker_result_message_type::ERROR, 0,
@@ -534,6 +536,8 @@ bool pq_run_query_result_mq_adapter_smoke(THD *thd, uint32 *rows_read,
 
   const ha_rows sent_rows_before = thd->get_sent_row_count();
   bool failed = fields[0] == nullptr || fields[1] == nullptr ||
+                result.start_execution(thd) ||
+                result.send_result_set_metadata(thd, fields, 0) ||
                 result.send_data(thd, fields) || result.send_eof(thd);
   thd->set_sent_row_count(sent_rows_before);
 
@@ -606,6 +610,8 @@ bool pq_run_query_result_mq_wiring_smoke(THD *thd, uint32 *rows_read,
   const ha_rows sent_rows_before = thd->get_sent_row_count();
   bool failed = row1[0] == nullptr || row1[1] == nullptr ||
                 row2[0] == nullptr || row2[1] == nullptr ||
+                result.start_execution(thd) ||
+                result.send_result_set_metadata(thd, row1, 0) ||
                 result.send_data(thd, row1) ||
                 result.send_data(thd, row2) || result.send_eof(thd);
   thd->set_sent_row_count(sent_rows_before);
@@ -962,14 +968,29 @@ Query_result_mq::Query_result_mq(JOIN *join, MQueue_handle *msg_handler,
     : Query_result(), m_join(join), m_handler(msg_handler),
       m_stable_output(stab_output) {}
 
+bool Query_result_mq::start_execution(THD *) {
+  m_started = true;
+  m_metadata_sent = false;
+  m_finished = false;
+  return m_handler == nullptr;
+}
+
 bool Query_result_mq::send_result_set_metadata(
-    THD *, const mem_root_deque<Item *> &, uint) {
+    THD *, const mem_root_deque<Item *> &fields, uint) {
+  if (!m_started || m_handler == nullptr || fields.empty() ||
+      fields.size() > UINT32_MAX) {
+    return true;
+  }
+  send_fields = const_cast<mem_root_deque<Item *> *>(&fields);
+  send_fields_size = static_cast<uint>(fields.size());
+  m_metadata_sent = true;
   return false;
 }
 
 bool Query_result_mq::send_data(THD *thd, const mem_root_deque<Item *> &items) {
-  if (thd == nullptr || m_handler == nullptr || items.empty() ||
-      items.size() > UINT32_MAX) {
+  if (thd == nullptr || !result_contract_ready() || items.empty() ||
+      items.size() > UINT32_MAX ||
+      (send_fields_size != 0 && items.size() != send_fields_size)) {
     return true;
   }
 
@@ -1014,7 +1035,9 @@ bool Query_result_mq::send_data(THD *thd, const mem_root_deque<Item *> &items) {
 }
 
 bool Query_result_mq::send_eof(THD *thd) {
-  if (m_handler == nullptr) return true;
+  if (!m_started || !m_metadata_sent || m_handler == nullptr || m_finished) {
+    return true;
+  }
   if (thd != nullptr && thd->is_error()) {
     static constexpr uchar error_payload[] = "worker-error";
     (void)pq_send_worker_result_frame(
@@ -1022,9 +1045,11 @@ bool Query_result_mq::send_eof(THD *thd) {
         error_payload, static_cast<uint32>(sizeof(error_payload) - 1));
     return true;
   }
-  return pq_send_worker_result_frame(m_handler,
-                                     PQ_worker_result_message_type::FINISH, 0,
-                                     nullptr, 0, nullptr, 0);
+  const bool failed = pq_send_worker_result_frame(
+      m_handler, PQ_worker_result_message_type::FINISH, 0, nullptr, 0, nullptr,
+      0);
+  if (!failed) m_finished = true;
+  return failed;
 }
 
 void Query_result_mq::cleanup() {
@@ -1035,4 +1060,7 @@ void Query_result_mq::cleanup() {
   mq_fields_data = nullptr;
   mq_fields_null_array = nullptr;
   mq_fields_null_flag = nullptr;
+  m_started = false;
+  m_metadata_sent = false;
+  m_finished = false;
 }

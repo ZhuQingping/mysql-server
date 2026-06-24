@@ -146,12 +146,16 @@ class Query_result_mq : public Query_result {
 
   Query_result_mq(JOIN *join, MQueue_handle *msg_handler,
                   bool stab_output = false);
+  bool start_execution(THD *thd) override;
   bool send_result_set_metadata(THD *thd, const mem_root_deque<Item *> &,
                                 uint flags) override;
   bool send_data(THD *thd, const mem_root_deque<Item *> &) override;
   bool send_eof(THD *thd MY_ATTRIBUTE((unused))) override;
   void cleanup() override;
   MQueue_handle *get_mq_handler() { return m_handler; }
+  bool result_contract_ready() const {
+    return m_started && m_metadata_sent && !m_finished;
+  }
 
   TABLE *m_table{nullptr};
   Temp_table_param *m_param{nullptr};
@@ -165,6 +169,9 @@ class Query_result_mq : public Query_result {
   bool *mq_fields_null_array{nullptr};
   char *mq_fields_null_flag{nullptr};
   bool m_stable_output;
+  bool m_started{false};
+  bool m_metadata_sent{false};
+  bool m_finished{false};
 };
 
 #endif  // QUERY_RESULT_MQ_INCLUDED

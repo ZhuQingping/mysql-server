@@ -291,8 +291,19 @@ class PQ_worker_execute_smoke_plan {
     }
 
     const ha_rows sent_rows_before = m_worker_thd->get_sent_row_count();
-    bool failed = m_mq_result->send_data(m_worker_thd, *fields) ||
-                  m_mq_result->send_eof(m_worker_thd);
+    bool failed = m_mq_result->start_execution(m_worker_thd) ||
+                  m_mq_result->send_result_set_metadata(m_worker_thd, *fields,
+                                                        0);
+    if (!failed && m_mq_result->result_contract_ready()) {
+      pq_global_stats.worker_execute_iterator_smoke_result_contract_ready
+          .fetch_add(1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_result_contract
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+    failed = failed || !m_mq_result->result_contract_ready() ||
+             m_mq_result->send_data(m_worker_thd, *fields) ||
+             m_mq_result->send_eof(m_worker_thd);
     m_worker_thd->set_sent_row_count(sent_rows_before);
 
     uint32 rows_read = 0;
@@ -470,6 +481,7 @@ class PQ_worker_execute_smoke_plan {
         m_worker_join->query_block == nullptr) {
       return;
     }
+    if (m_mq_result != nullptr) m_mq_result->cleanup();
     m_worker_join->query_expression()->set_query_result(
         m_original_expression_result);
     m_worker_join->query_block->set_query_result(m_original_block_result);
@@ -3147,6 +3159,8 @@ bool pq_run_query_result_mq_probe_task(PQ_worker_info *worker) {
   const ha_rows sent_rows_before = worker_thd->get_sent_row_count();
   const bool failed = row1[0] == nullptr || row1[1] == nullptr ||
                       row2[0] == nullptr || row2[1] == nullptr ||
+                      result.start_execution(worker_thd) ||
+                      result.send_result_set_metadata(worker_thd, row1, 0) ||
                       result.send_data(worker_thd, row1) ||
                       result.send_data(worker_thd, row2) ||
                       result.send_eof(worker_thd);

@@ -497,6 +497,8 @@ struct PQ_global_stats {
       worker_execute_iterator_smoke_result_bound_before_root_read{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_output_fields{0};
   std::atomic<uint64> worker_execute_iterator_smoke_output_fields_cloned{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_result_contract_ready{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_result_contract{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_result_send{0};
   std::atomic<uint64> worker_execute_iterator_smoke_result_row_sent{0};
   std::atomic<uint64> worker_execute_iterator_smoke_result_eof_sent{0};
@@ -992,6 +994,10 @@ struct PQ_global_stats {
     worker_execute_iterator_smoke_blocked_output_fields.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_output_fields_cloned.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_result_contract_ready.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_result_contract.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_result_send.store(
         0, std::memory_order_relaxed);

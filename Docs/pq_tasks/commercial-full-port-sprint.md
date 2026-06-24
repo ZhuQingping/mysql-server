@@ -1814,6 +1814,66 @@ Next blocker:
   result metadata/data/EOF and `join_free()` cleanup ordering are production
   equivalent。
 
+#### Batch D1.6h - Query_result_mq execute-order contract
+
+Status: completed locally；Code / Docs / Test Review accepted。
+
+目标：
+
+- 对齐 `ExecuteIteratorQuery()` 调用 `Query_result` 的最小顺序：
+  `start_execution()` -> `send_result_set_metadata()` -> `send_data()` ->
+  `send_eof()` -> `cleanup()`；
+- 不调用 `ExecuteIteratorQuery()`，不修改 `sql/sql_union.cc`，不打开用户可见
+  PQ gate；
+- 让 worker execute smoke 可观测 result contract ready/blocker 状态，作为后续
+  full-execute smoke 的前置。
+
+Completion Report - Batch D1.6h:
+
+- changed files:
+  - `sql/parallel_query/query_result_mq.h`
+  - `sql/parallel_query/query_result_mq.cc`
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_worker_execute_iterator_smoke.test`
+  - `mysql-test/suite/parallel_query/r/pq_worker_execute_iterator_smoke.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+- implementation:
+  - added `Query_result_mq::start_execution()` and internal started /
+    metadata-sent / finished state；
+  - `send_result_set_metadata()` now records the field list size and is required
+    before `send_data()`；
+  - `send_data()` rejects calls before the result contract is ready or after
+    EOF；
+  - `send_eof()` requires metadata and marks the result finished after FINISH；
+  - `cleanup()` resets the result contract state and is called explicitly from
+    worker plan result restore；
+  - existing local worker-result smokes were updated to use the same
+    start/metadata/data/eof order；
+  - added `Parallel_worker_execute_iterator_smoke_xrc_ready` and
+    `Parallel_worker_execute_iterator_smoke_xrc_blocked` status variables；
+  - `pq_worker_execute_iterator_smoke` asserts result contract ready grows,
+    result contract blocked remains zero, `blocked_execute` still grows, and
+    `success` remains zero。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr
+    --suite=parallel_query pq_worker_execute_iterator_smoke
+    pq_commercial_worker_result pq_commercial_worker_result_adapter pq_stats
+    --parallel=1 --vardir=/tmp/pq-worker-result-contract-vardir4
+    --tmpdir=/tmp/pq-worker-result-contract-tmpdir4`，all 5 tests successful。
+
+Next blocker:
+
+- full `ExecuteIteratorQuery()` smoke still needs an exclusive execution mode
+  that does not first run manual `Init()/Read()` or
+  `send_current_row_result()`；
+- full execute also still needs MQ drain/backpressure and
+  `join_free()`/worker table cleanup ordering reviewed before opening。
+
 ### Batch E1 - Commercial MTR migration
 
 Status: started
