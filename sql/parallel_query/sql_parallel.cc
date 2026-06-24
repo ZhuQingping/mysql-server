@@ -3480,29 +3480,33 @@ class PQ_limited_mq_row_sink final : public PQ_row_sink {
 class PQ_worker_result_mq_row_sink final : public PQ_row_sink {
  public:
   PQ_worker_result_mq_row_sink(THD *worker_thd, MQueue_handle *handle,
-                               uint32 max_rows)
+                               uint32 max_rows, uint32 field_count)
       : m_worker_thd(worker_thd),
         m_result(nullptr, handle, false),
         m_max_rows(max_rows),
-        m_id_item(0),
-        m_value_item(0),
-        m_metadata(worker_thd != nullptr ? worker_thd->mem_root : nullptr),
-        m_row(worker_thd != nullptr ? worker_thd->mem_root : nullptr) {
-    m_metadata.push_back(&m_id_item);
-    m_metadata.push_back(&m_value_item);
-    m_row.push_back(&m_id_item);
-    m_row.push_back(&m_value_item);
+        m_field_count(field_count),
+        m_metadata(worker_thd != nullptr ? worker_thd->mem_root : nullptr) {
+    for (uint32 i = 0; i < m_field_count; ++i) {
+      m_metadata.push_back(new (worker_thd->mem_root) Item_int(0));
+    }
   }
 
   bool send_row(TABLE *source_table) override {
     if (should_abort() || source_table == nullptr || source_table->s == nullptr ||
-        source_table->s->fields < 2 || source_table->field == nullptr ||
-        m_worker_thd == nullptr) {
+        source_table->field == nullptr || m_worker_thd == nullptr ||
+        m_field_count == 0 || m_field_count > source_table->s->fields ||
+        m_metadata.size() != m_field_count) {
       m_failed = true;
       return true;
     }
 
     if (!m_started) {
+      for (uint32 i = 0; i < m_field_count; ++i) {
+        if (m_metadata[i] == nullptr) {
+          m_failed = true;
+          return true;
+        }
+      }
       if (m_result.start_execution(m_worker_thd) ||
           m_result.send_result_set_metadata(m_worker_thd, m_metadata, 0)) {
         m_failed = true;
@@ -3511,17 +3515,8 @@ class PQ_worker_result_mq_row_sink final : public PQ_row_sink {
       m_started = true;
     }
 
-    Field *id_field = source_table->field[0];
-    Field *value_field = source_table->field[1];
-    if (id_field == nullptr || value_field == nullptr ||
-        id_field->is_null() || value_field->is_null()) {
-      m_failed = true;
-      return true;
-    }
-
-    m_id_item.value = id_field->val_int();
-    m_value_item.value = value_field->val_int();
-    m_failed = m_result.send_data(m_worker_thd, m_row);
+    m_failed = m_result.send_table_row(m_worker_thd, source_table,
+                                       m_field_count);
     if (!m_failed) ++m_rows_sent;
     return m_failed;
   }
@@ -3529,6 +3524,12 @@ class PQ_worker_result_mq_row_sink final : public PQ_row_sink {
   bool send_eof() {
     if (m_failed) return true;
     if (!m_started) {
+      for (uint32 i = 0; i < m_field_count; ++i) {
+        if (m_metadata[i] == nullptr) {
+          m_failed = true;
+          return true;
+        }
+      }
       if (m_result.start_execution(m_worker_thd) ||
           m_result.send_result_set_metadata(m_worker_thd, m_metadata, 0)) {
         m_failed = true;
@@ -3554,11 +3555,9 @@ class PQ_worker_result_mq_row_sink final : public PQ_row_sink {
   THD *m_worker_thd;
   Query_result_mq m_result;
   uint32 m_max_rows;
+  uint32 m_field_count;
   uint32 m_rows_sent{0};
-  Item_int m_id_item;
-  Item_int m_value_item;
   mem_root_deque<Item *> m_metadata;
-  mem_root_deque<Item *> m_row;
   bool m_started{false};
   bool m_failed{false};
 };
@@ -3780,9 +3779,13 @@ bool pq_run_callback_pqwr_producer_task(PQ_worker_info *worker,
         1, std::memory_order_relaxed);
   }
 
+  const uint32 field_count =
+      worker->m_open_ctx.worker_table != nullptr
+          ? worker->m_open_ctx.worker_table->s->fields
+          : 0;
   PQ_worker_result_mq_row_sink row_sink(worker->m_worker_thd,
                                         worker->m_mq_handle,
-                                        worker->m_task_max_rows);
+                                        worker->m_task_max_rows, field_count);
   if (!failed) {
     failed = worker->m_open_ctx.worker_handler
                  ->pq_worker_scan_callback_produce(worker->m_worker_ctx,

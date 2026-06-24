@@ -63,6 +63,17 @@ namespace {
 
 constexpr uint64 kPQReadWaitTimeoutUs = 1000;
 
+bool pq_all_table_fields_read(const TABLE *table) {
+  if (table == nullptr || table->s == nullptr || table->read_set == nullptr) {
+    return false;
+  }
+
+  for (uint i = 0; i < table->s->fields; ++i) {
+    if (!bitmap_is_set(table->read_set, i)) return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 PQTableScanIterator::PQTableScanIterator(THD *thd, MEM_ROOT *mem_root,
@@ -648,7 +659,7 @@ bool PQTableScanIterator::should_enter_threaded_pqwr_record_gather_path(
          m_join->pq_eligible && thd()->variables.parallel_query &&
          requested_dop == 2 && table() != nullptr && table()->s != nullptr &&
          table()->s->blob_fields == 0 && table()->s->fields >= 2 &&
-         table()->s->reclength > 0;
+         table()->s->reclength > 0 && pq_all_table_fields_read(table());
 }
 
 int PQTableScanIterator::Read() {

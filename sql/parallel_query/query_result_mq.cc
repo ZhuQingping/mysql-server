@@ -1034,6 +1034,57 @@ bool Query_result_mq::send_data(THD *thd, const mem_root_deque<Item *> &items) {
   return false;
 }
 
+bool Query_result_mq::send_table_row(THD *thd, TABLE *table,
+                                     uint32 field_count) {
+  if (thd == nullptr || table == nullptr || table->s == nullptr ||
+      table->field == nullptr || !result_contract_ready() ||
+      field_count == 0 || field_count > table->s->fields ||
+      (send_fields_size != 0 && field_count != send_fields_size)) {
+    return true;
+  }
+
+  const uint32 null_bitmap_len = pq_worker_result_null_bitmap_len(field_count);
+  std::vector<uchar> null_bitmap(null_bitmap_len, 0);
+  std::vector<uchar> payload;
+  String tmp1;
+  String tmp2;
+
+  for (uint32 i = 0; i < field_count; ++i) {
+    Field *field = table->field[i];
+    if (field == nullptr) return true;
+
+    if (field->is_null()) {
+      pq_worker_result_set_null_bit(&null_bitmap, i);
+      pq_worker_result_append_uint32(&payload, 0);
+      continue;
+    }
+
+    tmp1.length(0);
+    tmp2.length(0);
+    String *value = field->val_str(&tmp1, &tmp2);
+    if (value == nullptr || value->length() > UINT32_MAX) return true;
+
+    const auto value_len = static_cast<uint32>(value->length());
+    const uint64 next_size =
+        static_cast<uint64>(payload.size()) + sizeof(uint32) + value_len;
+    if (next_size > UINT32_MAX) return true;
+
+    pq_worker_result_append_uint32(&payload, value_len);
+    const char *value_ptr = value->ptr();
+    payload.insert(payload.end(), value_ptr, value_ptr + value_len);
+  }
+
+  if (pq_send_worker_result_frame(
+          m_handler, PQ_worker_result_message_type::ROW, field_count,
+          null_bitmap.data(), null_bitmap_len, payload.data(),
+          static_cast<uint32>(payload.size()))) {
+    return true;
+  }
+
+  thd->inc_sent_row_count(1);
+  return false;
+}
+
 bool Query_result_mq::send_eof(THD *thd) {
   if (!m_started || !m_metadata_sent || m_handler == nullptr || m_finished) {
     return true;

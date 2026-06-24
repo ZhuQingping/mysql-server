@@ -149,14 +149,14 @@ bool pq_materialize_worker_result_smoke_row(TABLE *table, const void *raw_data,
   if (id_value != nullptr) *id_value = 0;
   if (v_value != nullptr) *v_value = 0;
   if (table == nullptr || table->s == nullptr || table->field == nullptr ||
-      table->record[0] == nullptr || table->s->fields < 2 ||
+      table->record[0] == nullptr || table->s->fields == 0 ||
       table->s->reclength == 0 || id_value == nullptr || v_value == nullptr) {
     return true;
   }
 
   std::vector<PQ_worker_result_decoded_field> fields;
   if (pq_decode_worker_result_row(raw_data, raw_len, &fields) ||
-      fields.size() != 2) {
+      fields.empty() || fields.size() > table->s->fields) {
     return true;
   }
 
@@ -169,17 +169,32 @@ bool pq_materialize_worker_result_smoke_row(TABLE *table, const void *raw_data,
   restore_record(table, s->default_values);
   for (uint32 i = 0; i < fields.size(); ++i) {
     Field *field = table->field[i];
-    if (field == nullptr || fields[i].is_null || fields[i].value == nullptr ||
-        field->store(fields[i].value, fields[i].value_len,
-                     &my_charset_bin) != TYPE_OK) {
+    if (field == nullptr) {
       failed = true;
       break;
     }
+    if (fields[i].is_null) {
+      field->set_null();
+      continue;
+    }
+    if (fields[i].value == nullptr ||
+        field->store(fields[i].value, fields[i].value_len,
+                     field->charset()) != TYPE_OK) {
+      failed = true;
+      break;
+    }
+    field->set_notnull();
   }
 
   if (!failed) {
-    *id_value = static_cast<uint64>(table->field[0]->val_int());
-    *v_value = static_cast<uint64>(table->field[1]->val_int());
+    if (fields.size() >= 1 && table->field[0] != nullptr &&
+        !table->field[0]->is_null()) {
+      *id_value = static_cast<uint64>(table->field[0]->val_int());
+    }
+    if (fields.size() >= 2 && table->field[1] != nullptr &&
+        !table->field[1]->is_null()) {
+      *v_value = static_cast<uint64>(table->field[1]->val_int());
+    }
     table->set_found_row();
   }
 

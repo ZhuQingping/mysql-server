@@ -2337,3 +2337,53 @@ Notes:
 - commit: `48c26181885` Add threaded PQWR record gather smoke；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6q - PQWR multi-field NULL materialization
+
+Status: completed, reviewed, ready to commit.
+
+目标：
+
+- 将 PQWR worker-result path 从两列 INT smoke 扩展到多字段 typed
+  materialization；
+- 支持 worker TABLE 前 N 个字段序列化为 `PQWR` frame，并在 leader
+  `table->record[0]` 上按 frame 字段数写回；
+- 支持 NULL bitmap，不再要求所有字段非 NULL；
+- 保持 debug-only gate，不扩大普通 `parallel_query=ON` 默认路径。
+
+Implementation:
+
+- `Query_result_mq` 新增 `send_table_row(THD*, TABLE*, uint32)`，直接从
+  worker TABLE fields 序列化 `PQWR` ROW frame；
+- `pq_materialize_worker_result_smoke_row()` 放宽为
+  `1 <= field_count <= table->s->fields`，按字段写入并处理 NULL；
+- `PQ_worker_result_mq_row_sink` 改为使用 dummy metadata Items +
+  `send_table_row()`，避免为每个数据字段构造 per-row Items；
+- `pq_read_threaded_pqwr_record_gather` MTR 扩展覆盖 nullable INT、
+  VARCHAR、CHAR、DECIMAL、DATE。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_read_threaded_pqwr_record_gather`
+  `pq_read_threaded_pqwr_worker_error`
+  `pq_leader_pqwr_record_gather_smoke`
+  `pq_commercial_worker_result_adapter`
+  `pq_read_threaded_row_image_datatypes`。
+
+Review:
+
+- initial Review Agent requested a fail-closed guard for projection subsets
+  because current positional `PQWR` frames have no column-id map；
+- fix applied: `pq_read_threaded_pqwr_record_gather_path` now requires all
+  table fields to be present in `read_set`；
+- MTR now verifies subset projection over a wide table does not launch PQWR
+  workers, then verifies all-column multi-field/NULL PQWR materialization；
+- final Review Agent accepted with no remaining findings。
+
+Notes:
+
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。

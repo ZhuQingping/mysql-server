@@ -150,6 +150,7 @@ class Query_result_mq : public Query_result {
   bool send_result_set_metadata(THD *thd, const mem_root_deque<Item *> &,
                                 uint flags) override;
   bool send_data(THD *thd, const mem_root_deque<Item *> &) override;
+  bool send_table_row(THD *thd, TABLE *table, uint32 field_count);
   bool send_eof(THD *thd MY_ATTRIBUTE((unused))) override;
   void cleanup() override;
   MQueue_handle *get_mq_handler() { return m_handler; }
