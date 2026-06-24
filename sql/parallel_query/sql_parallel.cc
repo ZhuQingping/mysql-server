@@ -1094,6 +1094,56 @@ void PQ_worker_manager::cleanup(PQ_worker_info **workers, uint32 n_workers,
   }
 }
 
+bool MQ_record_gather::mq_scan_init(Gather_operator *gather) {
+  if (m_exchange != nullptr || m_thd == nullptr || m_table == nullptr ||
+      gather == nullptr || !gather->is_initialized() ||
+      gather->get_exchange() == nullptr) {
+    return true;
+  }
+
+  m_exchange = gather->get_exchange();
+  return false;
+}
+
+bool MQ_record_gather::mq_scan_next_worker_result(uint64 *id_value,
+                                                  uint64 *v_value, bool *eof,
+                                                  bool *row) {
+  if (id_value != nullptr) *id_value = 0;
+  if (v_value != nullptr) *v_value = 0;
+  if (eof != nullptr) *eof = false;
+  if (row != nullptr) *row = false;
+  if (m_exchange == nullptr || id_value == nullptr || v_value == nullptr ||
+      eof == nullptr || row == nullptr) {
+    return true;
+  }
+
+  Exchange_nosort::Materialize_status status =
+      Exchange_nosort::Materialize_status::ERROR;
+  if (m_exchange->materialize_next_worker_result_status(
+          m_table, &status, id_value, v_value)) {
+    return true;
+  }
+
+  switch (status) {
+    case Exchange_nosort::Materialize_status::ROW:
+      *row = true;
+      return false;
+    case Exchange_nosort::Materialize_status::EOF_REACHED:
+      *eof = true;
+      return false;
+    case Exchange_nosort::Materialize_status::WOULD_BLOCK:
+      return false;
+    case Exchange_nosort::Materialize_status::ERROR:
+      return true;
+  }
+
+  return true;
+}
+
+void MQ_record_gather::mq_scan_end() {
+  m_exchange = nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // Gather_operator: init / destroy
 // ---------------------------------------------------------------------------
@@ -1476,17 +1526,87 @@ bool Gather_operator::run_exchange_row_image_smoke(THD *leader_thd
       finishes_read, std::memory_order_relaxed);
 
   DBUG_EXECUTE_IF("pq_exchange_worker_result_smoke", {
-    Exchange_nosort worker_result_exchange(2, PQ_MQ_DEFAULT_RING_SIZE);
+    Gather_operator worker_result_gather(2);
+    MQ_record_gather record_gather(leader_thd, table);
     uint32 worker_result_rows = 0;
     uint32 worker_result_finishes = 0;
-    if (worker_result_exchange.init() ||
-        worker_result_exchange.run_synthetic_worker_result_smoke(
-            leader_thd, table, &worker_result_rows, &worker_result_finishes)) {
-      worker_result_exchange.cleanup();
+    uint64 id_value = 0;
+    uint64 v_value = 0;
+    bool eof = false;
+    bool row = false;
+    if (worker_result_gather.init() ||
+        record_gather.mq_scan_init(&worker_result_gather)) {
       if (initialized_here) destroy();
       return true;
     }
-    worker_result_exchange.cleanup();
+
+    const ha_rows sent_rows_before = leader_thd->get_sent_row_count();
+    Query_result_mq finish_only(nullptr,
+                                record_gather.exchange()->get_mq_handle(0),
+                                false);
+    mem_root_deque<Item *> finish_fields(leader_thd->mem_root);
+    finish_fields.push_back(new (leader_thd->mem_root) Item_int(7));
+    finish_fields.push_back(new (leader_thd->mem_root) Item_int(42));
+    if (finish_fields[0] == nullptr || finish_fields[1] == nullptr ||
+        finish_only.start_execution(leader_thd) ||
+        finish_only.send_result_set_metadata(leader_thd, finish_fields, 0) ||
+        finish_only.send_eof(leader_thd)) {
+      leader_thd->set_sent_row_count(sent_rows_before);
+      if (initialized_here) destroy();
+      return true;
+    }
+    leader_thd->set_sent_row_count(sent_rows_before);
+
+    if (record_gather.mq_scan_next_worker_result(&id_value, &v_value, &eof,
+                                                 &row) ||
+        eof || row) {
+      if (initialized_here) destroy();
+      return true;
+    }
+
+    Query_result_mq row_result(nullptr,
+                               record_gather.exchange()->get_mq_handle(1),
+                               false);
+    mem_root_deque<Item *> row_fields(leader_thd->mem_root);
+    row_fields.push_back(new (leader_thd->mem_root) Item_int(7));
+    row_fields.push_back(new (leader_thd->mem_root) Item_int(42));
+    if (row_fields[0] == nullptr || row_fields[1] == nullptr ||
+        row_result.start_execution(leader_thd) ||
+        row_result.send_result_set_metadata(leader_thd, row_fields, 0) ||
+        row_result.send_data(leader_thd, row_fields) ||
+        row_result.send_eof(leader_thd)) {
+      leader_thd->set_sent_row_count(sent_rows_before);
+      if (initialized_here) destroy();
+      return true;
+    }
+    leader_thd->set_sent_row_count(sent_rows_before);
+
+    for (;;) {
+      id_value = 0;
+      v_value = 0;
+      eof = false;
+      row = false;
+      if (record_gather.mq_scan_next_worker_result(&id_value, &v_value, &eof,
+                                                   &row)) {
+        if (initialized_here) destroy();
+        return true;
+      }
+      if (row) {
+        if (id_value != 7 || v_value != 42) {
+          if (initialized_here) destroy();
+          return true;
+        }
+        ++worker_result_rows;
+        continue;
+      }
+      if (eof) {
+        worker_result_finishes = 2;
+        break;
+      }
+      if (initialized_here) destroy();
+      return true;
+    }
+
     pq_global_stats.worker_result_smoke_rows.fetch_add(
         worker_result_rows, std::memory_order_relaxed);
     pq_global_stats.worker_result_smoke_finishes.fetch_add(

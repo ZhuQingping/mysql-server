@@ -2185,3 +2185,42 @@ Notes:
 
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6n - Minimal MQ_record_gather facade
+
+Status: completed locally; awaiting review/commit.
+
+目标：
+
+- 引入商用同名 `MQ_record_gather` 的最小 debug-only facade；
+- facade 非拥有地绑定当前 `Gather_operator` 持有的 `Exchange_nosort`；
+- 通过 `mq_scan_next_worker_result()` 消费 `Query_result_mq` / `PQWR` row；
+- 不迁移 `Filesort`、`Exchange_sort`、`QEP_TAB::split_table()`、
+  `Field_raw_data` 全协议或 visible 执行路径。
+
+Implementation:
+
+- added `MQ_record_gather` declaration/implementation in
+  `sql/parallel_query/sql_parallel.*`；
+- `mq_scan_init(Gather_operator*)` only validates initialized gather and stores
+  a non-owning exchange pointer；
+- `mq_scan_end()` only clears the local pointer, leaving Exchange ownership to
+  `Gather_operator::destroy()`；
+- `pq_exchange_worker_result_smoke` now writes with `Query_result_mq` but reads
+  through `MQ_record_gather::mq_scan_next_worker_result()`；
+- the smoke explicitly covers read-done queue skipping by consuming queue0
+  FINISH before sending queue1 ROW/FINISH。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_commercial_worker_result_adapter`
+  `pq_worker_execute_threaded_call_smoke`
+  `pq_stats`。
+
+Notes:
+
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。

@@ -122,6 +122,34 @@ bool pq_check_stable_sort(JOIN *join);
 bool check_pq_running_threads(uint dop, ulong timeout_ms);
 void EstimatePQGatherOperatorCost(AccessPath *path, THD *thd);
 
+/**
+  Minimal leader-side record gather facade.
+
+  Commercial PQ routes worker SQL projection rows through
+  MQ_record_gather -> Exchange_nosort -> TABLE::record[0]. This 8.0.46 port
+  starts with a debug-only facade for Query_result_mq/PQWR rows; it does not
+  support Filesort, ORDER BY, QEP_TAB ownership, or the commercial Field_raw_data
+  protocol yet.
+*/
+class MQ_record_gather {
+ public:
+  MQ_record_gather() = default;
+  MQ_record_gather(THD *thd, TABLE *table) : m_thd(thd), m_table(table) {}
+  ~MQ_record_gather() { mq_scan_end(); }
+
+  bool mq_scan_init(Gather_operator *gather);
+  bool mq_scan_next_worker_result(uint64 *id_value, uint64 *v_value,
+                                  bool *eof, bool *row);
+  void mq_scan_end();
+
+  Exchange_nosort *exchange() const { return m_exchange; }
+
+ private:
+  THD *m_thd{nullptr};
+  TABLE *m_table{nullptr};
+  Exchange_nosort *m_exchange{nullptr};
+};
+
 // ---------------------------------------------------------------------------
 // PQ_execution_state: per-statement execution state contract
 // ---------------------------------------------------------------------------

@@ -455,25 +455,6 @@ class Exchange_nosort : public Exchange {
                                      uint32 *finishes_read);
 
   /**
-    Run a controlled Query_result_mq worker-result materialization smoke.
-
-    The helper sends a FINISH on queue 0, then a ROW and FINISH on queue 1,
-    and verifies the PQWR Exchange adapter skips the already read-done queue
-    while materializing the second queue's row.
-
-    @param thd               THD used to allocate synthetic Item_int values
-    @param table             Leader TABLE whose record[0] receives the row
-    @param[out] rows_read    Number of PQWR ROW frames materialized
-    @param[out] finishes_read Number of worker queues observed as finished
-
-    @retval false  Smoke pass completed
-    @retval true   Smoke pass failed
-  */
-  bool run_synthetic_worker_result_smoke(THD *thd, TABLE *table,
-                                         uint32 *rows_read,
-                                         uint32 *finishes_read);
-
-  /**
     Run a controlled synthetic partial GROUP BY message smoke.
 
     The helper sends one typed PARTIAL_GROUP payload and one FINISH per worker,
