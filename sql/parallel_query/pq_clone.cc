@@ -250,6 +250,73 @@ static bool pq_position_scalar_fields_equal(const POSITION *left,
          left->sjm_scan_need_tables == right->sjm_scan_need_tables;
 }
 
+static void pq_copy_qep_tab_scalar_fields(QEP_TAB *dst, QEP_TAB *src) {
+  dst->set_reversed_access(src->reversed_access());
+  dst->using_dynamic_range = src->using_dynamic_range;
+  dst->set_type(src->type());
+  dst->set_index(src->index());
+  dst->keys().merge(src->keys());
+  dst->set_prefix_tables(src->prefix_tables(),
+                         src->prefix_tables() & ~src->added_tables());
+  dst->set_first_inner(src->first_inner());
+  dst->set_last_inner(src->last_inner());
+  dst->set_first_upper(src->first_upper());
+  dst->set_first_sj_inner(src->first_sj_inner());
+  dst->set_last_sj_inner(src->last_sj_inner());
+  dst->set_skip_records_in_range(src->skip_records_in_range());
+  dst->firstmatch_return = src->firstmatch_return;
+  dst->match_tab = src->match_tab;
+  dst->loosescan_key_len = src->loosescan_key_len;
+  dst->op_type = src->op_type;
+  dst->materialize_table = src->materialize_table;
+  dst->needs_duplicate_removal = src->needs_duplicate_removal;
+}
+
+static bool pq_qep_tab_scalar_fields_equal(QEP_TAB *left, QEP_TAB *right) {
+  return left->reversed_access() == right->reversed_access() &&
+         left->using_dynamic_range == right->using_dynamic_range &&
+         left->type() == right->type() && left->index() == right->index() &&
+         left->keys() == right->keys() &&
+         left->prefix_tables() == right->prefix_tables() &&
+         left->added_tables() == right->added_tables() &&
+         left->first_inner() == right->first_inner() &&
+         left->last_inner() == right->last_inner() &&
+         left->first_upper() == right->first_upper() &&
+         left->first_sj_inner() == right->first_sj_inner() &&
+         left->last_sj_inner() == right->last_sj_inner() &&
+         left->skip_records_in_range() == right->skip_records_in_range() &&
+         left->firstmatch_return == right->firstmatch_return &&
+         left->match_tab == right->match_tab &&
+         left->loosescan_key_len == right->loosescan_key_len &&
+         left->op_type == right->op_type &&
+         left->materialize_table == right->materialize_table &&
+         left->needs_duplicate_removal == right->needs_duplicate_removal &&
+         left->table() == nullptr && left->table_ref == nullptr &&
+         left->condition() == nullptr && left->range_scan() == nullptr &&
+         left->position() == nullptr;
+}
+
+static void pq_reset_qep_tab_scalar_smoke_fields(QEP_TAB *tab) {
+  tab->set_reversed_access(false);
+  tab->using_dynamic_range = false;
+  tab->set_type(JT_UNKNOWN);
+  tab->set_index(0);
+  tab->keys().clear_all();
+  tab->set_prefix_tables(0, 0);
+  tab->set_first_inner(NO_PLAN_IDX);
+  tab->set_last_inner(NO_PLAN_IDX);
+  tab->set_first_upper(NO_PLAN_IDX);
+  tab->set_first_sj_inner(NO_PLAN_IDX);
+  tab->set_last_sj_inner(NO_PLAN_IDX);
+  tab->set_skip_records_in_range(false);
+  tab->firstmatch_return = NO_PLAN_IDX;
+  tab->match_tab = NO_PLAN_IDX;
+  tab->loosescan_key_len = 0;
+  tab->op_type = QEP_TAB::OT_NONE;
+  tab->materialize_table = QEP_TAB::NO_SETUP;
+  tab->needs_duplicate_removal = false;
+}
+
 bool pq_dup_tabs_skeleton_preflight(JOIN *worker_join, JOIN *leader_join) {
   pq_global_stats.worker_qep_tab_skeleton_attempts.fetch_add(
       1, std::memory_order_relaxed);
@@ -432,6 +499,45 @@ bool pq_clone_position_scalar_preflight(QEP_TAB *leader_tab) {
   }
 
   pq_global_stats.worker_position_clone_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
+
+bool pq_clone_qep_tab_scalar_preflight(JOIN *worker_join, QEP_TAB *leader_tab) {
+  pq_global_stats.worker_qep_tab_scalar_clone_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (worker_join == nullptr || worker_join->qep_tab == nullptr ||
+      leader_tab == nullptr || leader_tab->idx() < 0 ||
+      leader_tab->idx() >= static_cast<plan_idx>(worker_join->tables)) {
+    pq_global_stats.worker_qep_tab_scalar_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  QEP_TAB *const cloned_tab = &worker_join->qep_tab[leader_tab->idx()];
+  if (cloned_tab->table() != nullptr || cloned_tab->table_ref != nullptr ||
+      cloned_tab->condition() != nullptr || cloned_tab->range_scan() != nullptr ||
+      cloned_tab->position() != nullptr) {
+    pq_global_stats.worker_qep_tab_scalar_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  pq_copy_qep_tab_scalar_fields(cloned_tab, leader_tab);
+  const bool failed =
+      !pq_qep_tab_scalar_fields_equal(cloned_tab, leader_tab);
+  pq_reset_qep_tab_scalar_smoke_fields(cloned_tab);
+
+  if (failed || cloned_tab->table() != nullptr ||
+      cloned_tab->table_ref != nullptr || cloned_tab->condition() != nullptr ||
+      cloned_tab->range_scan() != nullptr || cloned_tab->position() != nullptr) {
+    pq_global_stats.worker_qep_tab_scalar_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  pq_global_stats.worker_qep_tab_scalar_clone_success.fetch_add(
       1, std::memory_order_relaxed);
   return false;
 }

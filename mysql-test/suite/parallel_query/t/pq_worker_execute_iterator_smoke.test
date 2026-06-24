@@ -80,6 +80,15 @@ SET @position_clone_success_before = (
 SET @position_clone_unsupported_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_worker_position_clone_unsupported');
+SET @qep_tab_scalar_clone_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_scalar_clone_attempts');
+SET @qep_tab_scalar_clone_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_scalar_clone_success');
+SET @qep_tab_scalar_clone_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_scalar_clone_unsupported');
 SET @worker_table_opened_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -219,8 +228,20 @@ SELECT
      @position_clone_unsupported_before) = 0
        AS worker_position_clone_not_unsupported,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_scalar_clone_attempts') -
+     @qep_tab_scalar_clone_attempts_before) >= 1
+       AS worker_qep_tab_scalar_clone_attempted,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_scalar_clone_success') -
+     @qep_tab_scalar_clone_success_before) >= 1
+       AS worker_qep_tab_scalar_clone_success,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_scalar_clone_unsupported') -
+     @qep_tab_scalar_clone_unsupported_before) = 0
+       AS worker_qep_tab_scalar_clone_not_unsupported,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
-          'Parallel_worker_execute_iterator_smoke_worker_table_opened') -
+    'Parallel_worker_execute_iterator_smoke_worker_table_opened') -
      @worker_table_opened_before) >= 1 AS worker_execute_worker_table_opened,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =

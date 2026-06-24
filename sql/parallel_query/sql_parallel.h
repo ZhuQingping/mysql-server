@@ -246,6 +246,9 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_position_clone_attempts{0};  ///< Position clone
   std::atomic<uint64> worker_position_clone_success{0};  ///< Position clone ok
   std::atomic<uint64> worker_position_clone_unsupported{0};  ///< Pos rejects
+  std::atomic<uint64> worker_qep_tab_scalar_clone_attempts{0};  ///< QEP scalar
+  std::atomic<uint64> worker_qep_tab_scalar_clone_success{0};  ///< QEP scalar ok
+  std::atomic<uint64> worker_qep_tab_scalar_clone_unsupported{0};  ///< QEP reject
   std::atomic<uint64> worker_range_scan_clone_attempts{0};  ///< Range clones
   std::atomic<uint64> worker_range_scan_clone_success{0};  ///< Range clone ok
   std::atomic<uint64> worker_range_scan_clone_unsupported{0};  ///< Clone reject
@@ -602,6 +605,10 @@ struct PQ_global_stats {
     worker_position_clone_attempts.store(0, std::memory_order_relaxed);
     worker_position_clone_success.store(0, std::memory_order_relaxed);
     worker_position_clone_unsupported.store(0, std::memory_order_relaxed);
+    worker_qep_tab_scalar_clone_attempts.store(0, std::memory_order_relaxed);
+    worker_qep_tab_scalar_clone_success.store(0, std::memory_order_relaxed);
+    worker_qep_tab_scalar_clone_unsupported.store(0,
+                                                  std::memory_order_relaxed);
     worker_range_scan_clone_attempts.store(0, std::memory_order_relaxed);
     worker_range_scan_clone_success.store(0, std::memory_order_relaxed);
     worker_range_scan_clone_unsupported.store(0, std::memory_order_relaxed);

@@ -675,6 +675,46 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --tmpdir=/tmp/pq-worker-position-clone-tmpdir
 ```
 
+## Worker QEP_TAB Scalar Clone Smoke
+
+本次小步对齐商用 `QEP_TAB::pq_copy()` 的 scalar 前半段，但仍只做
+smoke-only preflight，不形成完整 `QEP_TAB::pq_copy()`：
+
+- 新增 `pq_clone_qep_tab_scalar_preflight()`；
+- 在 worker-owned skeleton `QEP_TAB` 上临时复制并校验
+  `reversed_access`、`using_dynamic_range`、access type/index、keys、
+  prefix/added tables、semi-join 边界、loosescan/firstmatch 标量、
+  `op_type`、`materialize_table`、`needs_duplicate_removal`；
+- preflight 结束后恢复 skeleton `QEP_TAB` 为空，后续
+  `pq_bind_qep_tab_table_preflight()` 仍然验证空 tab bind；
+- 当前分支尚未引入商用 `pq_div_tab` / `pq_cut_tab` QEP_TAB 成员，也没有把
+  `JOIN_TAB::join_cache_flags` 搬到 worker `QEP_TAB`，这些字段不在本小步范围。
+
+新增诊断：
+
+- `Parallel_worker_qep_tab_scalar_clone_attempts`
+- `Parallel_worker_qep_tab_scalar_clone_success`
+- `Parallel_worker_qep_tab_scalar_clone_unsupported`
+
+当前边界：
+
+- 不迁移完整 `QEP_TAB::pq_copy()`；
+- 不迁移 `TABLE::pq_copy()`、condition clone、range scan attach、ref/keyuse；
+- 不把 cloned scalar state 持久接入生产 worker plan；
+- 不修改 optimizer / executor / handler / InnoDB 主路径。
+
+验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-qep-tab-scalar-vardir \
+  --tmpdir=/tmp/pq-worker-qep-tab-scalar-tmpdir
+```
+
 ## Restricted Worker Plan Ownership Helper
 
 本次小步不改变执行语义，只把 `run_worker_execute_iterator_smoke()` 里散落的
