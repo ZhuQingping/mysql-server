@@ -1,0 +1,72 @@
+CREATE TABLE pq_leader_pqwr_t (
+id INT NOT NULL,
+v INT NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO pq_leader_pqwr_t VALUES (1,10),(2,20);
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+SET @stream_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_attempts');
+SET @stream_selected_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_selected');
+SET @stream_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_rows');
+SET @queries_executed_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed');
+SET @rows_scanned_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_rows_scanned');
+SET @queries_fallback_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_fallback');
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_leader_pqwr_record_gather_smoke";
+SELECT id, v FROM pq_leader_pqwr_t;
+id	v
+7	42
+SET SESSION debug=@old_debug;
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_attempts') -
+@stream_attempts_before) AS stream_attempt_delta;
+stream_attempt_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_selected') -
+@stream_selected_before) AS stream_selected_delta;
+stream_selected_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_leader_row_stream_smoke_rows') -
+@stream_rows_before) AS stream_rows_delta;
+stream_rows_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed') -
+@queries_executed_before) AS queries_executed_delta;
+queries_executed_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_rows_scanned') -
+@rows_scanned_before) AS rows_scanned_delta;
+rows_scanned_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_fallback') -
+@queries_fallback_before) AS queries_fallback_delta;
+queries_fallback_delta
+0
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+DROP TABLE pq_leader_pqwr_t;

@@ -2228,3 +2228,55 @@ Notes:
 - commit: `4c54338aadb` Add minimal MQ record gather facade；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6o - PQTableScanIterator PQWR record_gather gate
+
+Status: completed, reviewed, ready to commit.
+
+目标：
+
+- 在 `PQTableScanIterator` 真实 `TABLE_SCAN` 入口下增加一个 debug-only
+  controlled gate；
+- 验证 `PQTableScanIterator::Read()` 可以通过
+  `MQ_record_gather -> Exchange_nosort -> table->record[0]` 消费
+  `Query_result_mq` 产生的 `PQWR` worker-result row；
+- 不扩大普通 `parallel_query=ON` 默认路径，不改 optimizer eligibility、
+  worker clone、InnoDB range/ref/ICP 或 ORDER BY 路径。
+
+Implementation:
+
+- `PQTableScanIterator` 新增 `m_record_gather` 和
+  `m_use_worker_result_record_gather`；
+- 新 DBUG gate `pq_leader_pqwr_record_gather_smoke` 在 `Init()` 中：
+  `pq_leader_scan_init(EXECUTE)` -> `Gather_operator::init()` ->
+  `MQ_record_gather::mq_scan_init()` -> `Query_result_mq` 写入一行
+  `PQWR` row + FINISH；
+- `Read()` 在该 gate 下调用
+  `MQ_record_gather::mq_scan_next_worker_result()`，并复用原有
+  ROW/EOF/WOULD_BLOCK/KILL/cleanup 处理；
+- `cleanup_pq_resources()` 先释放 facade，再销毁 `Gather_operator`，
+  避免 facade 持有已销毁 Exchange 指针；
+- 新增 MTR `pq_leader_pqwr_record_gather_smoke` 覆盖 visible SELECT
+  返回 `7,42`、executed/rows/fallback 计数。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_leader_pqwr_record_gather_smoke`
+  `pq_leader_row_stream_row_values`
+  `pq_commercial_worker_result_adapter`。
+
+Review:
+
+- independent Review Agent accepted with no Critical findings；
+- Required fix was packaging-only: ensure the new MTR `.test/.result` files
+  are staged with the source change；
+- Minor note: local `id_value` / `v_value` are only facade decode outputs; SQL
+  result already verifies the materialized `7,42` row。
+
+Notes:
+
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。

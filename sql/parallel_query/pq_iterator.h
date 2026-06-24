@@ -71,6 +71,7 @@ struct TABLE;
 class JOIN;
 struct MEM_ROOT;
 class Gather_operator;
+class MQ_record_gather;
 class PQ_Leader_context;
 
 /**
@@ -190,7 +191,9 @@ class PQTableScanIterator final : public TableRowIterator {
       m_parallel_scan_delegate;  ///< DBUG-only ParallelScanIterator bridge
   PQ_Leader_context *m_leader_ctx{nullptr};  ///< Handler leader context
   Gather_operator *m_gather{nullptr};        ///< Worker lifecycle owner
+  MQ_record_gather *m_record_gather{nullptr};  ///< Leader-side MQ gather facade
   Runtime_state m_runtime_state{Runtime_state::SAFE_FALLBACK};
+  bool m_use_worker_result_record_gather{false};
   bool m_fallback_counted{false};  ///< Count per query iterator, not per Init()
   bool m_executed_counted{false};  ///< Count real PQ execution at first row
 };

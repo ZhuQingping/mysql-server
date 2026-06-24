@@ -48,6 +48,7 @@
 #include "sql/parallel_query/pq_clone.h"  // pq_clone_activation_probe
 #include "sql/parallel_query/pq_group_aggregate_iterator.h"
 #include "sql/parallel_query/pq_iterators.h"
+#include "sql/parallel_query/query_result_mq.h"
 #include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
 #include "sql/sql_class.h"    // THD::variables, THD::pq_is_worker
 #include "sql/sql_lex.h"      // LEX::is_explain
@@ -227,6 +228,57 @@ bool PQTableScanIterator::Init() {
     }
 
     pq_global_stats.leader_row_stream_error_smoke_selected.fetch_add(
+        1, std::memory_order_relaxed);
+    mark_pq_started();
+    return false;
+  });
+
+  DBUG_EXECUTE_IF("pq_leader_pqwr_record_gather_smoke", {
+    pq_global_stats.leader_row_stream_smoke_attempts.fetch_add(
+        1, std::memory_order_relaxed);
+    uint execute_dop = 0;
+    int execute_error = table()->file->pq_leader_scan_init(
+        thd(), &m_leader_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+        false);
+    if (execute_error == HA_ERR_UNSUPPORTED) {
+      m_leader_ctx = nullptr;
+      return init_serial_fallback();
+    }
+    if (execute_error != 0) {
+      cleanup_pq_resources(true);
+      PrintError(execute_error);
+      return true;
+    }
+
+    m_gather = new Gather_operator(1);
+    m_record_gather = new MQ_record_gather(thd(), table());
+    if (m_gather == nullptr || m_record_gather == nullptr ||
+        m_gather->init() || m_record_gather->mq_scan_init(m_gather)) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+
+    const ha_rows sent_rows_before = thd()->get_sent_row_count();
+    Query_result_mq result(nullptr, m_record_gather->exchange()->get_mq_handle(0),
+                           false);
+    mem_root_deque<Item *> fields(thd()->mem_root);
+    fields.push_back(new (thd()->mem_root) Item_int(7));
+    fields.push_back(new (thd()->mem_root) Item_int(42));
+    const bool send_failed =
+        fields[0] == nullptr || fields[1] == nullptr ||
+        result.start_execution(thd()) ||
+        result.send_result_set_metadata(thd(), fields, 0) ||
+        result.send_data(thd(), fields) || result.send_eof(thd());
+    thd()->set_sent_row_count(sent_rows_before);
+    if (send_failed) {
+      cleanup_pq_resources(true);
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+
+    m_use_worker_result_record_gather = true;
+    pq_global_stats.leader_row_stream_smoke_selected.fetch_add(
         1, std::memory_order_relaxed);
     mark_pq_started();
     return false;
@@ -502,6 +554,13 @@ bool PQTableScanIterator::Init() {
 }
 
 void PQTableScanIterator::cleanup_pq_resources(bool abort_workers) {
+  if (m_record_gather != nullptr) {
+    m_record_gather->mq_scan_end();
+    delete m_record_gather;
+    m_record_gather = nullptr;
+  }
+  m_use_worker_result_record_gather = false;
+
   if (m_gather != nullptr) {
     if (abort_workers && m_gather->is_initialized()) {
       m_gather->abort_workers(thd());
@@ -585,7 +644,27 @@ int PQTableScanIterator::Read() {
 
     Exchange_nosort::Materialize_status status =
         Exchange_nosort::Materialize_status::ERROR;
-    if (exchange->materialize_next_record_image_status(table(), &status)) {
+    if (m_use_worker_result_record_gather) {
+      uint64 id_value = 0;
+      uint64 v_value = 0;
+      bool eof = false;
+      bool row = false;
+      if (m_record_gather == nullptr ||
+          m_record_gather->mq_scan_next_worker_result(&id_value, &v_value, &eof,
+                                                      &row)) {
+        cleanup_pq_resources(true);
+        PrintError(HA_ERR_INTERNAL_ERROR);
+        return 1;
+      }
+      if (row) {
+        status = Exchange_nosort::Materialize_status::ROW;
+      } else if (eof) {
+        status = Exchange_nosort::Materialize_status::EOF_REACHED;
+      } else {
+        status = Exchange_nosort::Materialize_status::WOULD_BLOCK;
+      }
+    } else if (exchange->materialize_next_record_image_status(table(),
+                                                              &status)) {
       cleanup_pq_resources(true);
       PrintError(HA_ERR_INTERNAL_ERROR);
       return 1;
@@ -601,6 +680,10 @@ int PQTableScanIterator::Read() {
       }
       pq_global_stats.rows_scanned.fetch_add(1, std::memory_order_relaxed);
       DBUG_EXECUTE_IF("pq_leader_row_stream_smoke", {
+        pq_global_stats.leader_row_stream_smoke_rows.fetch_add(
+            1, std::memory_order_relaxed);
+      });
+      DBUG_EXECUTE_IF("pq_leader_pqwr_record_gather_smoke", {
         pq_global_stats.leader_row_stream_smoke_rows.fetch_add(
             1, std::memory_order_relaxed);
       });
