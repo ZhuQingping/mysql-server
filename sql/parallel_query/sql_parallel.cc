@@ -228,6 +228,12 @@ class PQ_worker_execute_smoke_plan {
       return false;
     }
 
+    if (pq_dup_tabs_skeleton_preflight(m_worker_join, leader_join)) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_readinfo.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
     pq_global_stats.worker_execute_iterator_smoke_plan_constructed.fetch_add(
         1, std::memory_order_relaxed);
     m_constructed = true;

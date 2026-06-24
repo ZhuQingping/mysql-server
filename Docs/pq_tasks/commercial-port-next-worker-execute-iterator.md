@@ -473,6 +473,40 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --tmpdir=/tmp/pq-worker-join-shape-tmpdir
 ```
 
+## Worker QEP_TAB Skeleton Smoke
+
+本次小步迁移商用 `pq_dup_tabs()` 的第一段形状，但保持为显式 smoke-only
+preflight，不接入 `pq_make_join()` 默认主路径，也不复制任何可执行对象。
+
+实现边界：
+
+- 新增 `pq_dup_tabs_skeleton_preflight(worker_join, leader_join)`；
+- 仅在 `run_worker_execute_iterator_smoke()` 的 worker plan helper 中显式调用；
+- 分配 worker-owned `QEP_shared[]` 和 `QEP_TAB[]`；
+- 只设置每个 `QEP_TAB` 的 `QEP_shared`、`join` 和 `idx`；
+- 明确校验 `table()`、`table_ref`、`condition()`、`range_scan()` 均为空；
+- 不复制 `TABLE`、handler、AccessPath、condition、ref、filesort、tmp table；
+- `JOIN::destroy()` 能清理 skeleton，不访问真实 table/handler；
+- 现有 worker execute smoke 仍稳定停在 execute gate，`success` 仍为 0。
+
+新增诊断：
+
+- `Parallel_worker_qep_tab_skeleton_attempts`
+- `Parallel_worker_qep_tab_skeleton_success`
+- `Parallel_worker_qep_tab_skeleton_unsupported`
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-qep-skeleton-vardir \
+  --tmpdir=/tmp/pq-worker-qep-skeleton-tmpdir
+```
+
 ## Restricted Worker Plan Ownership Helper
 
 本次小步不改变执行语义，只把 `run_worker_execute_iterator_smoke()` 里散落的

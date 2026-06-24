@@ -44,6 +44,15 @@ SET @join_shape_success_before = (
 SET @join_shape_unsupported_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_worker_join_shape_unsupported');
+SET @qep_tab_skeleton_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_skeleton_attempts');
+SET @qep_tab_skeleton_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_skeleton_success');
+SET @qep_tab_skeleton_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_skeleton_unsupported');
 SET @worker_table_opened_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -136,6 +145,16 @@ SELECT
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME = 'Parallel_worker_join_shape_unsupported') -
      @join_shape_unsupported_before) = 0 AS worker_join_shape_not_unsupported,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_skeleton_attempts') -
+     @qep_tab_skeleton_attempts_before) >= 1 AS worker_qep_tab_skeleton_attempted,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_skeleton_success') -
+     @qep_tab_skeleton_success_before) >= 1 AS worker_qep_tab_skeleton_success,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_qep_tab_skeleton_unsupported') -
+     @qep_tab_skeleton_unsupported_before) = 0
+       AS worker_qep_tab_skeleton_not_unsupported,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_worker_table_opened') -

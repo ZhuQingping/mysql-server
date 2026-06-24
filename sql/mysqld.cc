@@ -9722,6 +9722,12 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_join_shape_success,
                                 worker_join_shape_success)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_join_shape_unsupported,
                                 worker_join_shape_unsupported)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_qep_tab_skeleton_attempts,
+                                worker_qep_tab_skeleton_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_qep_tab_skeleton_success,
+                                worker_qep_tab_skeleton_success)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_qep_tab_skeleton_unsupported,
+                                worker_qep_tab_skeleton_unsupported)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_group_contract_attempts,
                                 saved_order_group_contract_attempts)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(saved_order_group_contract_unsupported,
@@ -11863,6 +11869,15 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_worker_join_shape_success, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_join_shape_unsupported",
      (char *)&show_pq_worker_join_shape_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_qep_tab_skeleton_attempts",
+     (char *)&show_pq_worker_qep_tab_skeleton_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_qep_tab_skeleton_success",
+     (char *)&show_pq_worker_qep_tab_skeleton_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_qep_tab_skeleton_unsupported",
+     (char *)&show_pq_worker_qep_tab_skeleton_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_saved_order_group_contract_attempts",
      (char *)&show_pq_saved_order_group_contract_attempts, SHOW_FUNC,

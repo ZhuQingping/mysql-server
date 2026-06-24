@@ -44,6 +44,8 @@ bool pq_dup_tabs(JOIN *pq_join, JOIN *join, bool gather);
 
 JOIN *pq_make_join(THD *thd, JOIN *join);
 
+bool pq_dup_tabs_skeleton_preflight(JOIN *worker_join, JOIN *leader_join);
+
 /**
   Run the M11-A clone contract preflight.
 

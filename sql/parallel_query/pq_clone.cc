@@ -27,6 +27,7 @@
 
 #include "sql/parallel_query/sql_parallel.h"
 #include "sql/sql_class.h"
+#include "sql/sql_executor.h"
 #include "sql/sql_lex.h"
 #include "sql/sql_optimizer.h"
 
@@ -37,6 +38,51 @@ AccessPath *CopyRangeScanAccessPath(THD *, AccessPath *, TABLE *) {
 ORDER *pq_dup_order(THD *, Query_block *, ORDER *) { return nullptr; }
 
 bool pq_dup_tabs(JOIN *, JOIN *, bool) { return true; }
+
+bool pq_dup_tabs_skeleton_preflight(JOIN *worker_join, JOIN *leader_join) {
+  pq_global_stats.worker_qep_tab_skeleton_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (worker_join == nullptr || leader_join == nullptr ||
+      worker_join->qep_tab != nullptr || leader_join->qep_tab == nullptr ||
+      worker_join->tables == 0 || worker_join->tables != leader_join->tables) {
+    pq_global_stats.worker_qep_tab_skeleton_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  QEP_shared *const qs =
+      new (worker_join->thd->mem_root) QEP_shared[worker_join->tables + 1];
+  QEP_TAB *const qep_tab =
+      new (worker_join->thd->mem_root) QEP_TAB[worker_join->tables + 1];
+  if (qs == nullptr || qep_tab == nullptr) {
+    pq_global_stats.worker_qep_tab_skeleton_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  worker_join->qep_tab = qep_tab;
+  for (uint i = 0; i < worker_join->tables; ++i) {
+    qep_tab[i].set_qs(&qs[i]);
+    qep_tab[i].set_join(worker_join);
+    qep_tab[i].set_idx(i);
+  }
+
+  for (uint i = 0; i < worker_join->tables; ++i) {
+    QEP_TAB *const tab = &worker_join->qep_tab[i];
+    if (tab->join() != worker_join || tab->idx() != static_cast<plan_idx>(i) ||
+        tab->table() != nullptr || tab->table_ref != nullptr ||
+        tab->condition() != nullptr || tab->range_scan() != nullptr) {
+      pq_global_stats.worker_qep_tab_skeleton_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+  }
+
+  pq_global_stats.worker_qep_tab_skeleton_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
 
 namespace {
 
