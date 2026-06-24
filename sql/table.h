@@ -3510,6 +3510,8 @@ class Table_ref {
 
   bool is_derived_unfinished_materialization() const;
 
+  [[nodiscard]] bool pq_copy(THD *thd, Table_ref *tbl_list);
+
  private:
   /**
     The members below must be kept aligned so that (1 << m_tableno) == m_map.

@@ -600,6 +600,43 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --tmpdir=/tmp/pq-worker-range-clone-tmpdir
 ```
 
+## Worker Table_ref Clone Helper
+
+本次小步平移商用实现中的 `Table_ref::pq_copy()`，为后续
+`pq_set_table_ref()` / 完整 `pq_dup_tabs()` 打基础：
+
+- 在 `Table_ref` 上新增 `pq_copy(THD*, Table_ref*)` 成员声明；
+- 实现复制 `effective_algorithm`、`tableno`、derived column names；
+- 对 `table_name`、`alias`、`db` 执行 worker THD `mem_root` 上的独立字符串复制；
+- 新增 `pq_clone_table_ref_preflight()`，在 worker execute smoke 中独立验证
+  cloned `Table_ref` 的 table number、db/table name、alias；
+- 当前不把 cloned `Table_ref` 接入 worker `QEP_TAB` 或生产执行路径。
+
+新增诊断：
+
+- `Parallel_worker_table_ref_clone_attempts`
+- `Parallel_worker_table_ref_clone_success`
+- `Parallel_worker_table_ref_clone_unsupported`
+
+当前边界：
+
+- 不迁移 `pq_set_table_ref()`；
+- 不迁移 `TABLE::pq_copy()`、`QEP_TAB::pq_copy()`、`Index_lookup::pq_copy()`；
+- 不修改 optimizer / executor / handler / InnoDB 主路径；
+- worker `QEP_TAB` 仍使用前一小步的临时 bind smoke，不持久引用新 clone。
+
+验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-table-ref-clone-vardir \
+  --tmpdir=/tmp/pq-worker-table-ref-clone-tmpdir
+```
+
 ## Restricted Worker Plan Ownership Helper
 
 本次小步不改变执行语义，只把 `run_worker_execute_iterator_smoke()` 里散落的

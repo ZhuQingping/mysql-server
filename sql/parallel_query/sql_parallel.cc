@@ -2502,6 +2502,16 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   THD *worker_thd = worker_plan.worker_thd();
   JOIN *worker_join = worker_plan.worker_join();
 
+  if (pq_clone_table_ref_preflight(worker_thd, source_tab->table_ref)) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
+        1, std::memory_order_relaxed);
+    worker_plan.cleanup(false, true);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+
   if (pq_open_worker_table(&worker->m_open_ctx)) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_worker_open.fetch_add(
         1, std::memory_order_relaxed);

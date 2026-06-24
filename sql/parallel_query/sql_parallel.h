@@ -240,6 +240,9 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_qep_tab_table_bind_attempts{0};  ///< Table binds
   std::atomic<uint64> worker_qep_tab_table_bind_success{0};  ///< Table bind ok
   std::atomic<uint64> worker_qep_tab_table_bind_unsupported{0};  ///< Bind reject
+  std::atomic<uint64> worker_table_ref_clone_attempts{0};  ///< Table_ref clone
+  std::atomic<uint64> worker_table_ref_clone_success{0};  ///< Table_ref ok
+  std::atomic<uint64> worker_table_ref_clone_unsupported{0};  ///< Clone reject
   std::atomic<uint64> worker_range_scan_clone_attempts{0};  ///< Range clones
   std::atomic<uint64> worker_range_scan_clone_success{0};  ///< Range clone ok
   std::atomic<uint64> worker_range_scan_clone_unsupported{0};  ///< Clone reject
@@ -590,6 +593,9 @@ struct PQ_global_stats {
     worker_qep_tab_table_bind_success.store(0, std::memory_order_relaxed);
     worker_qep_tab_table_bind_unsupported.store(0,
                                                 std::memory_order_relaxed);
+    worker_table_ref_clone_attempts.store(0, std::memory_order_relaxed);
+    worker_table_ref_clone_success.store(0, std::memory_order_relaxed);
+    worker_table_ref_clone_unsupported.store(0, std::memory_order_relaxed);
     worker_range_scan_clone_attempts.store(0, std::memory_order_relaxed);
     worker_range_scan_clone_success.store(0, std::memory_order_relaxed);
     worker_range_scan_clone_unsupported.store(0, std::memory_order_relaxed);

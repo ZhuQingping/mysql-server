@@ -33,6 +33,36 @@
 #include "sql/sql_lex.h"
 #include "sql/sql_optimizer.h"
 
+bool Table_ref::pq_copy(THD *thd, Table_ref *tbl_list) {
+  if (thd == nullptr || tbl_list == nullptr) return true;
+
+  effective_algorithm = tbl_list->effective_algorithm;
+  set_tableno(tbl_list->tableno());
+  set_derived_column_names(tbl_list->derived_column_names());
+
+  if (table_name == nullptr && tbl_list->table_name_length != 0) {
+    table_name = strmake_root(thd->mem_root, tbl_list->table_name,
+                              tbl_list->table_name_length);
+    if (table_name == nullptr) return true;
+    table_name_length = tbl_list->table_name_length;
+  }
+
+  if (alias == nullptr && tbl_list->alias != nullptr) {
+    is_alias = true;
+    alias =
+        strmake_root(thd->mem_root, tbl_list->alias, strlen(tbl_list->alias));
+    if (alias == nullptr) return true;
+  }
+
+  if (db == nullptr && tbl_list->db_length != 0) {
+    db = strmake_root(thd->mem_root, tbl_list->db, tbl_list->db_length);
+    if (db == nullptr) return true;
+    db_length = tbl_list->db_length;
+  }
+
+  return false;
+}
+
 AccessPath *CopyRangeScanAccessPath(THD *thd, AccessPath *orig_path,
                                     TABLE *table) {
   if (thd == nullptr || orig_path == nullptr || table == nullptr) {
@@ -279,6 +309,49 @@ bool pq_bind_qep_tab_table_preflight(JOIN *worker_join, TABLE *worker_table,
   }
 
   pq_global_stats.worker_qep_tab_table_bind_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
+
+bool pq_clone_table_ref_preflight(THD *worker_thd, Table_ref *leader_ref) {
+  pq_global_stats.worker_table_ref_clone_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (worker_thd == nullptr || worker_thd->mem_root == nullptr ||
+      leader_ref == nullptr) {
+    pq_global_stats.worker_table_ref_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  Table_ref *const cloned_ref = new (worker_thd->mem_root) Table_ref();
+  if (cloned_ref == nullptr || cloned_ref->pq_copy(worker_thd, leader_ref)) {
+    pq_global_stats.worker_table_ref_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  const bool failed =
+      cloned_ref->tableno() != leader_ref->tableno() ||
+      !pq_cstring_eq(cloned_ref->alias, leader_ref->alias) ||
+      cloned_ref->table_name_length != leader_ref->table_name_length ||
+      cloned_ref->db_length != leader_ref->db_length ||
+      (leader_ref->table_name_length != 0 &&
+       (cloned_ref->table_name == nullptr ||
+        cloned_ref->table_name == leader_ref->table_name ||
+        memcmp(cloned_ref->table_name, leader_ref->table_name,
+               leader_ref->table_name_length) != 0)) ||
+      (leader_ref->db_length != 0 &&
+       (cloned_ref->db == nullptr || cloned_ref->db == leader_ref->db ||
+        memcmp(cloned_ref->db, leader_ref->db, leader_ref->db_length) != 0));
+
+  if (failed) {
+    pq_global_stats.worker_table_ref_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  pq_global_stats.worker_table_ref_clone_success.fetch_add(
       1, std::memory_order_relaxed);
   return false;
 }
