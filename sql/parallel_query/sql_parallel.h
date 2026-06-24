@@ -456,6 +456,7 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_result_smoke_finishes{0};  ///< FINISH frames
   std::atomic<uint64> worker_result_smoke_errors{0};  ///< ERROR frames
   std::atomic<uint64> worker_result_smoke_workers{0};  ///< Smoke workers
+  std::atomic<uint64> worker_result_smoke_prewait_drains{0};  ///< Drained before wait
   std::atomic<uint64> worker_execute_iterator_smoke_attempts{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_clone{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_readinfo{0};
@@ -936,6 +937,7 @@ struct PQ_global_stats {
     worker_result_smoke_finishes.store(0, std::memory_order_relaxed);
     worker_result_smoke_errors.store(0, std::memory_order_relaxed);
     worker_result_smoke_workers.store(0, std::memory_order_relaxed);
+    worker_result_smoke_prewait_drains.store(0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_attempts.store(0,
                                                  std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_clone.store(
@@ -1829,8 +1831,8 @@ class Gather_operator {
 
     This starts one debug/smoke worker thread. The worker uses only its worker
     THD, per-worker MQueue_handle, local Query_result_mq, and controlled Item
-    values to send PQWR ROW/FINISH frames. The leader waits for the worker and
-    decodes those frames. It does not open worker TABLEs, call handler/InnoDB,
+    values to send PQWR ROW/FINISH frames. The leader drains those frames before
+    waiting for the worker. It does not open worker TABLEs, call handler/InnoDB,
     attach cloned JOIN, or return decoded data as user SQL result.
 
     @retval false  Smoke pass completed

@@ -1924,6 +1924,50 @@ Next blocker:
 - 真正调用 `ExecuteIteratorQuery()` 需要把 smoke 放入 real worker thread，或先实现
   leader 并发 drain；不能在同线程 producer-only 路径直接调用。
 
+#### Batch D1.6j - Query_result_mq pre-wait leader drain
+
+Status: completed locally；awaiting code review。
+
+目标：
+
+- 先不把 `ExecuteIteratorQuery()` 放入 worker task；
+- 将已有 threaded `Query_result_mq` probe 从“先 wait worker、后 drain MQ”
+  调整为“worker 运行期间 leader 先 drain PQWR frames、再 wait worker”；
+- 证明 leader 侧已经具备与商用 worker execute 路径一致的 pre-wait consumer
+  时序，为后续 worker-thread `ExecuteIteratorQuery()` smoke 解除同线程
+  no-consumer blocker。
+
+Completion Report - Batch D1.6j:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_commercial_worker_result.test`
+  - `mysql-test/suite/parallel_query/r/pq_commercial_worker_result.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+- implementation:
+  - `run_query_result_mq_threaded_probe_smoke()` now drains the worker
+    `Query_result_mq` PQWR ROW/FINISH frames before `wait_for_workers()`；
+  - added bounded receiver-latch wait on `MQ_WOULD_BLOCK`；
+  - added `Parallel_worker_result_smoke_prewait_drains` status counter；
+  - MTR asserts the pre-wait drain counter grows by one。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr
+    --suite=parallel_query pq_commercial_worker_result
+    pq_commercial_worker_result_adapter pq_worker_execute_iterator_smoke
+    pq_stats --parallel=1 --vardir=/tmp/pq-prewait-drain-vardir
+    --tmpdir=/tmp/pq-prewait-drain-tmpdir`，all 5 tests successful。
+
+Next blocker:
+
+- 新增 `PQ_worker_task::EXECUTE_ITERATOR_SMOKE`，在线程内复用/拆分
+  `PQ_worker_execute_smoke_plan`，由 leader 使用同一 PQWR pre-wait drain
+  解析 ROW/FINISH/ERROR，成功后再递增 `xiq_*`。
+
 ### Batch E1 - Commercial MTR migration
 
 Status: started

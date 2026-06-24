@@ -2570,14 +2570,31 @@ bool Gather_operator::run_query_result_mq_threaded_probe_smoke(
   pq_global_stats.worker_result_smoke_workers.fetch_add(
       1, std::memory_order_relaxed);
 
-  bool failed = wait_for_workers(leader_thd) != 0;
+  bool failed = false;
   uint32 rows_read = 0;
   uint32 finishes_read = 0;
+  bool drained_before_wait = false;
 
-  for (uint32 i = 0; !failed && i < 3; ++i) {
+  for (uint32 i = 0; !failed && finishes_read == 0 && i < 128; ++i) {
     void *raw_data = nullptr;
     uint32 raw_len = 0;
-    if (worker->m_mq_handle->receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+    const MQ_RESULT receive_result =
+        worker->m_mq_handle->receive(&raw_data, &raw_len);
+    if (receive_result == MQ_WOULD_BLOCK) {
+      if (worker->is_terminal()) {
+        failed = true;
+        break;
+      }
+      PQ_mq_event *receiver = worker->m_mq_handle->get_receiver();
+      if (receiver == nullptr) {
+        failed = true;
+        break;
+      }
+      receiver->wait_latch(10000);
+      receiver->reset_latch();
+      continue;
+    }
+    if (receive_result != MQ_SUCCESS) {
       failed = true;
       break;
     }
@@ -2625,11 +2642,21 @@ bool Gather_operator::run_query_result_mq_threaded_probe_smoke(
       failed = decoded_null_bitmap != nullptr || decoded_payload != nullptr ||
                header->field_count != 0 || header->null_bitmap_len != 0 ||
                header->payload_len != 0;
-      if (!failed) ++finishes_read;
+      if (!failed) {
+        ++finishes_read;
+        drained_before_wait = true;
+      }
     } else {
       failed = true;
     }
   }
+
+  failed = failed || rows_read != 2 || finishes_read != 1;
+  if (!failed && drained_before_wait) {
+    pq_global_stats.worker_result_smoke_prewait_drains.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  failed = failed || wait_for_workers(leader_thd) != 0;
 
   if (failed) abort_workers(leader_thd);
   worker->m_task = PQ_worker_task::NOOP;
