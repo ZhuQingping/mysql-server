@@ -1,6 +1,6 @@
 # Parallel Query 商用全量迁移冲刺
 
-Last synced: 2026-06-23
+Last synced: 2026-06-24
 
 ## 目标
 
@@ -162,6 +162,14 @@ Status: pending
 5. 单独 commit；
 6. 更新本文档状态。
 
+开发阶段执行约束：
+
+- 每个可独立验收的小任务必须单独 commit，禁止把多个迁移点积累成一个大提交；
+- 开发期只运行当前功能相关的 build/MTR 目标验证；
+- 完整 `parallel_query` suite、`mysqld --verbose --help` 和更大范围回归放到阶段
+  收尾或开发结束后统一执行；
+- 若小任务只改文档，可运行 `git diff --check` 后提交，不强制编译。
+
 最终验收命令：
 
 ```bash
@@ -175,8 +183,12 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
 ## 当前状态
 
 - Batch A 四个并行 Explorer 已返回；
-- 尚未改源码；
-- 下一步：完成 Batch A review 后进入 Batch B/B0 compile-surface 迁移。
+- 已进入 worker 执行链路小步迁移：typed pull bridge、Record_buffer 诊断、
+  worker ExecuteIterator smoke gate、readinfo gate 和 production readinfo
+  fail-closed 风险收敛均已独立提交；
+- 最新提交：`c15da6be890` Keep PQ worker readinfo production gate closed；
+- 下一步：继续沿商用 worker plan / ExecuteIterator 主路径推进最小可验证切口，
+  不重复已有 synthetic MQ、typed pull bridge 或 readinfo smoke。
 
 ## Batch A 审计结果
 

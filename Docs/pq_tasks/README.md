@@ -4,7 +4,7 @@
 
 ## Current Summary
 
-- Last synced: 2026-06-23
+- Last synced: 2026-06-24
 - Active update: 商用 Parallel Query 全量迁移冲刺已启动，权威任务板为
   [commercial-full-port-sprint.md](commercial-full-port-sprint.md)。当前目标
   已从 F6b 小步 contract/smoke 推进切换为：以
@@ -14,6 +14,9 @@
   临时 skip，并必须记录原因。已并行启动 SQL/PQ 模块、SQL 主干 hook、
   InnoDB/handler、MTR 测试套四个只读 Explorer；编码集成由主控串行合并，
   每个批次完成后启动独立 review Agent 并运行 build/MTR 验证。
+- Execution policy update: 后续每个可独立验收的小任务必须单独 commit，避免
+  后续形成大 commit；开发阶段只跑当前功能相关的 build/MTR 目标验证，完整
+  `parallel_query` suite 和更大范围回归留到阶段收尾或开发结束后统一执行。
 - Superseded history below: 下方 F6b/M11 小步状态只保留为历史记录，不再作为
   当前任务依据；任何“当前进入 F6b”“仍不打开 ORDER BY/ref/ICP”等旧表述均被
   [commercial-full-port-sprint.md](commercial-full-port-sprint.md) 覆盖。新的
@@ -65,6 +68,14 @@
   不作为当前状态来源。
 - Current phase: Phase 0-9 已提交完成；PQ V1 风险收敛、V2-0 到 V2-12C-1 已推进出一个 MySQL 8.0.46 上的保守 PQ 适配基座，覆盖 worker lifecycle、read view、KILL、DOP2/DOP4 row stream、基础聚合和部分 GROUP BY partial aggregation；当前目标已切换为平移 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 商用 Parallel Query 实现。M1-M10 已完成当前支持子集和测试收口；M11 Post-M10 Commercial Main Architecture Restart 已启动，M11-A0/B0 design accepted；M11-A1-A5 plan clone/resolver contract 与 preflight 已完成；M11-B1/B2 PQWR leader decode adapter、M11-B3a/B3b/B3c worker-result wiring probes 已完成；M11-D0-D6 已完成并提交；M11-E0/E1/E2/E3 已完成并提交；M11-E4 user-visible ORDER BY gate design 已提交；M11-E5a real `Exchange_sort` worker-frame materialization design 已提交；M11-E5b-0 ORDER BY frame contract helper 已提交；M11-E5b-1 controlled frame K-way merge smoke 已提交；M11-E5b-2 merge-path empty-worker/ERROR edge smoke 已提交；M11-E5b-3 debug-only row materialization smoke 已提交；M11-E5c user-visible ORDER BY gate design 已提交；M11-E5d Filesort State Contract design 已提交；M11-E5d-0 read-only helper inventory 已提交；M11-E5d-S0 saved ORDER/GROUP helper design 已通过 review；M11-E5d-S1 saved state contract shape 已提交；M11-E5d-S2 leader save/restore smoke 已提交；M11-E5d-S3 clone-copy contract 已提交；M11-E5d-1 fail-closed Filesort contract shape 已提交；M11-E5d-2 design 已提交；M11-E5d-2a owned ORDER chain copy smoke 已提交；M11-E5d-2b optimized flag contract smoke 已提交；M11-E5d-2c restore-to-sidecar contract smoke 已提交；M11-E5d-2d clone-copy contract smoke 已提交；M11-E5d-3 post-sidecar Filesort boundary design 已提交；M11-E5d-3a restored ORDER Filesort contract 已提交；M11-E5d-3b Filesort constructor risk design 已提交；M11-E5d-3c debug-only Filesort construction smoke 已提交；M11-E5d-4 Sort_param / Exchange_sort initialization boundary design 已提交；M11-E5d-4a debug-only Sort_param init smoke 已提交；M11-E5d-4b Exchange_sort real-state adapter boundary design 已提交；M11-E5d-4b-1 debug-only Exchange_sort scalar sort-state adapter shape 已提交；M11-E5d-4c optimizer-side Filesort/Sort_param scalar handoff design 已提交；M11-E5d-4c-1 debug-only optimizer-to-Exchange_sort scalar handoff 已提交；M11-E5d-5 real `Exchange_sort` init / MQ / Read boundary design 已提交；M11-E5d-5a `Exchange_sort` real-init state owner shape 已提交；M11-E5d-5b sort-key buffer / record-group allocation smoke 已提交；M11-E5d-5c controlled ORDER BY MQ-to-record-group loader 已提交；M11-E5d-5d debug-only ordered leader Read shadow path 已提交；M11-E5d-5e-1 eligibility contract 已提交；M11-E5d-5e-2 execution preflight blocker 已提交；M11-E5d-5f runtime prerequisite diagnostics 已提交；M11-E5g-0 worker ORDER BY frame producer and streaming heap read boundary design 已提交；M11-E5g-1 DBUG-only worker ORDER BY `PQOF` producer smoke 已提交；M11-E5g-2 streaming `Exchange_sort` heap-read state-machine smoke 已完成本地实现和验证，等待 final review。
 - Latest commits:
+  - Worker row pull contract: `34e1428fdd2` Document PQ worker row pull contract
+  - Worker typed pull bridge: `02237ec1d0f` Add PQ typed worker pull bridge
+  - Worker Record_buffer diagnostic: `a5343dfc10f` Add PQ worker Record_buffer diagnostic
+  - Commercial clustered range guard: `72eefafb3d4` Add PQ commercial clustered range test
+  - Worker ExecuteIterator smoke plan: `7dfec0ec0f6` Plan PQ worker execute iterator smoke
+  - Worker ExecuteIterator smoke gate: `206a5a9b48a` Add PQ worker execute iterator smoke gate
+  - Worker readinfo smoke gate: `062e8fdfb7c` Advance PQ worker execute smoke to execute gate
+  - Worker readinfo production risk closure: `c15da6be890` Keep PQ worker readinfo production gate closed
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
   - V2-2: `a123cdabe7c` Add PQ V2-2 handler context bridge

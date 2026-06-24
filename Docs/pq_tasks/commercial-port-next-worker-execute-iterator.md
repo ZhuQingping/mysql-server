@@ -2,7 +2,7 @@
 
 ## 状态
 
-Readinfo smoke contract in progress / review pending.
+Readinfo production risk closure completed.
 
 本任务书承接：
 
@@ -228,3 +228,18 @@ readinfo 构建。
   `run_worker_execute_iterator_smoke()` 使用；
 - smoke 仍能推进到 execute gate；
 - 生产调用在真实 QEP_TAB / AccessPath 构建迁移前不会得到假阳性 success。
+
+提交与验证：
+
+- `062e8fdfb7c` Advance PQ worker execute smoke to execute gate；
+- `c15da6be890` Keep PQ worker readinfo production gate closed；
+- 开发期验证已限定为相关目标：`git diff --check`、`mysqld` build、
+  `pq_worker_execute_iterator_smoke` / `pq_worker_typed_pull_next_smoke` /
+  `pq_commercial_worker_result_adapter` / `pq_stats`。
+
+## 后续执行策略
+
+- 每个新增迁移切口单独 commit；
+- 开发阶段只跑该切口相关 MTR，完整 suite 留到阶段收尾；
+- 下一步必须推进 worker plan / ExecuteIterator 主路径的新事实，不再重复
+  synthetic `Query_result_mq`、typed pull bridge 或 readinfo smoke。
