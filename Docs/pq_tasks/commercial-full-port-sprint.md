@@ -1478,7 +1478,7 @@ Completion Report - Batch D1.6b-budget:
 
 ### Batch E1 - Commercial MTR migration
 
-Status: pending
+Status: started
 
 目标：
 
@@ -1486,3 +1486,19 @@ Status: pending
 - 先迁 include/opt，再迁 `.test`/result；
 - 只有 dstore/audit plugin/replica topology/TPCH data/hash-spill/restart-debug
   等本地不可构造或大风险项允许暂时 skip。
+
+Current E1 baseline:
+
+- detailed taskbook: [commercial-port-e1-test-migration.md](commercial-port-e1-test-migration.md)；
+- current branch has 92 `parallel_query/t/*.test`；the latest full MTR reports
+  93/93 including `shutdown_report`；
+- commercial branch has 98 `parallel_query/t/*.test`；
+- same-name overlap is only `pq_not_support`；
+- do not bulk-copy all commercial tests into the active suite；migrate by
+  adapted scenario batches so full suite stays green。
+
+Next action:
+
+- E1-A1 fullscan edge commercial-name mapping；
+- then E1-A2 kill / worker-error mapping；
+- then E1-B1 ORDER / prepare / correlated-subquery deferred boundary。
