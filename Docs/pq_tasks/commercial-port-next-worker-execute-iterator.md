@@ -715,6 +715,46 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --tmpdir=/tmp/pq-worker-qep-tab-attach-tmpdir
 ```
 
+## Next Cut: Worker Root AccessPath / Iterator Contract
+
+当前 worker smoke 已经证明：
+
+- worker-owned `JOIN` shell 可创建和清理；
+- worker `QEP_TAB` skeleton 可创建；
+- worker TABLE 可独立打开；
+- `Table_ref`、`TABLE` scalar、`POSITION` scalar、`QEP_TAB` scalar 前置合同
+  可观测；
+- worker `QEP_TAB` 可短作用域 attach 到 worker TABLE；
+- `PQ_BLOCK_SCAN` access path 和 `PQblockScanIterator` 可用 worker
+  `QEP_TAB` 构造，并能在 smoke 中 Init/Read；
+- `Query_result_mq` 可挂到 worker `Query_expression` / `Query_block`。
+
+但距离真正调用
+`worker_join->query_expression()->ExecuteIteratorQuery(worker_thd)` 仍缺
+一个关键合同：worker `Query_expression` 的 root access path / root
+iterator 不是从 cloned worker plan 中产生的。商用仓提供
+`Query_expression::create_iterator_from_accesspath()` 并在 worker plan 中调用；
+当前 8.0.46 分支只有 `force_create_iterators()`，且要求
+`m_root_access_path` 已经正确设置。
+
+下一小步应先做 root access path clone probe，而不是直接调用
+`ExecuteIteratorQuery()`：
+
+- 在 debug/smoke 路径中构造 worker `PQ_BLOCK_SCAN` root access path；
+- 验证 worker `JOIN::root_access_path()` 和
+  `Query_expression::root_access_path()` 的预期来源；
+- 如果需要新增 `Query_expression::create_iterator_from_accesspath()`，必须作为
+  单独 reviewed commit，并保持只服务 smoke / cloned worker plan；
+- 仍不打开默认用户路径，不执行 worker `ExecuteIteratorQuery()`。
+
+后续 hard stop：
+
+- 如果必须修改 optimizer hook、默认 `Query_expression::optimize()` 或
+  production `ExecuteIteratorQuery()` 才能前进，先停止并生成设计任务书；
+- 如果 root iterator 需要 condition/ref/range/ORDER/GROUP 持久 clone，拆成
+  独立子任务；
+- worker started 后仍不允许 silent serial fallback。
+
 ## Worker POSITION Scalar Clone Smoke
 
 本次小步继续平移商用 `POSITION::pq_copy()` 的前置合同，但只做
