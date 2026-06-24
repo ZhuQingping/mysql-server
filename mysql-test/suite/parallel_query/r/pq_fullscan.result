@@ -1,0 +1,38 @@
+DROP TABLE IF EXISTS pq_fullscan_t;
+CREATE TABLE pq_fullscan_t (
+id INT PRIMARY KEY,
+val INT,
+pad CHAR(8)
+) ENGINE=InnoDB;
+INSERT INTO pq_fullscan_t VALUES
+(1,10,'a'),(2,20,'b'),(3,30,'c'),(4,40,'d');
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SELECT id, val, pad FROM pq_fullscan_t;
+id	val	pad
+1	10	a
+2	20	b
+3	30	c
+4	40	d
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS workers_delta;
+executed_delta	workers_delta
+1	2
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+DROP TABLE pq_fullscan_t;

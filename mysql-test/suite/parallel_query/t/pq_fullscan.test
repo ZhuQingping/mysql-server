@@ -1,0 +1,46 @@
+# Adapted commercial pq_fullscan coverage for the current DOP2 fullscan gate.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS pq_fullscan_t;
+--enable_warnings
+
+CREATE TABLE pq_fullscan_t (
+  id INT PRIMARY KEY,
+  val INT,
+  pad CHAR(8)
+) ENGINE=InnoDB;
+
+INSERT INTO pq_fullscan_t VALUES
+  (1,10,'a'),(2,20,'b'),(3,30,'c'),(4,40,'d');
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+--sorted_result
+SELECT id, val, pad FROM pq_fullscan_t;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE pq_fullscan_t;

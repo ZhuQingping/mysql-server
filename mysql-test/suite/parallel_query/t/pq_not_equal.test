@@ -1,0 +1,50 @@
+# Adapted commercial pq_not_equal coverage for non-indexed predicate fullscan.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS actor;
+--enable_warnings
+
+CREATE TABLE actor (
+  actor_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  first_name VARCHAR(45) NOT NULL,
+  last_name VARCHAR(45) NOT NULL,
+  is_active BIT(1) NOT NULL,
+  PRIMARY KEY(actor_id)
+) ENGINE=InnoDB;
+
+INSERT INTO actor(first_name, last_name, is_active) VALUES
+  ('Victor','Otero',true),
+  ('Gonzalo','Crhystens',false),
+  ('Abraham','Vega',true);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+--sorted_result
+SELECT actor_id, first_name FROM actor WHERE first_name != 'Victor';
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE actor;

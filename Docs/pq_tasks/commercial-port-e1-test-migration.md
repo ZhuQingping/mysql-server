@@ -136,7 +136,8 @@ git diff --check
 cmake --build build-ninja --target mysqld -j 16
 cd build-ninja/mysql-test
 TMPDIR=/tmp ./mtr --suite=parallel_query pq_commercial_fullscan \
-  pq_commercial_fullscan_edges --parallel=1 \
+  pq_commercial_fullscan_edges pq_fullscan pq_blob pq_not_equal \
+  pq_aggr_no_record --parallel=1 \
   --vardir=/tmp/pq-e1a1-target-vardir --tmpdir=/tmp/pq-e1a1-target-tmpdir
 TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   --vardir=/tmp/pq-e1a1-full-vardir --tmpdir=/tmp/pq-e1a1-full-tmpdir
@@ -150,6 +151,27 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
   external kill 测试映射到商用 `pq_worker_error`、`pq_kill`、`pq_kill_query`
   的可迁移子集；
 - 保留不可构造 debug injection 为 deferred。
+
+### E1-A3：found_rows / read-view / record-visible edge mapping
+
+目标：
+
+- 将商用 `pq_found_rows`、`pq_read_view`、`pq_rec_visible`、
+  `pq_read_record_crash` 拆成当前可稳定运行的 adapted 测试；
+- 优先验证 SQL 结果、read-view 一致性和不崩溃边界；
+- 不依赖商用 debug injection、不引入 replica/audit/dstore 环境。
+
+验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query <new-e1a3-tests> --parallel=1 \
+  --vardir=/tmp/pq-e1a3-target-vardir --tmpdir=/tmp/pq-e1a3-target-tmpdir
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pq-e1a3-full-vardir --tmpdir=/tmp/pq-e1a3-full-tmpdir
+```
 
 ### E1-B1：ORDER / prepare / subquery deferred boundary
 
@@ -170,4 +192,61 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## 状态
 
-Status: E1 planning baseline completed. 下一步进入 E1-A1。
+Status: E1 planning baseline completed. E1-A1 completed.
+
+## E1-A1 Completion Report
+
+Changed files:
+
+- `mysql-test/suite/parallel_query/t/pq_fullscan.test`
+- `mysql-test/suite/parallel_query/r/pq_fullscan.result`
+- `mysql-test/suite/parallel_query/t/pq_blob.test`
+- `mysql-test/suite/parallel_query/r/pq_blob.result`
+- `mysql-test/suite/parallel_query/t/pq_not_equal.test`
+- `mysql-test/suite/parallel_query/r/pq_not_equal.result`
+- `mysql-test/suite/parallel_query/t/pq_aggr_no_record.test`
+- `mysql-test/suite/parallel_query/r/pq_aggr_no_record.result`
+- `Docs/pq_tasks/commercial-port-e1-test-migration.md`
+
+Implementation:
+
+- added four commercial-name adapted tests from the fullscan edge bucket；
+- kept the current `pq_commercial_fullscan*` guard tests intact；
+- `pq_fullscan` verifies the visible DOP2 fullscan gate increments execution
+  and worker counters；
+- `pq_blob` preserves the current safe fallback for TEXT/BLOB tables；
+- `pq_not_equal` covers a simple non-indexed not-equal predicate；
+- `pq_aggr_no_record` covers the commercial empty/non-empty aggregate shape。
+- review hardening added execution/worker counter assertions to `pq_not_equal`
+  and no-counter-change assertions to `pq_aggr_no_record`；the latter is a
+  commercial SQL-shape result guard because MySQL optimizes the COUNT range
+  shape without selecting the PQ row stream；
+- `pq_blob` is intentionally fallback-only in E1-A1；the commercial BLOB-prefix
+  PK/index shape is deferred until the BLOB row-stream path is opened。
+
+Validation:
+
+- `git diff --check` passed；
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+  pq_fullscan pq_blob pq_not_equal pq_aggr_no_record --parallel=1
+  --vardir=/tmp/pq-e1a1-target-vardir
+  --tmpdir=/tmp/pq-e1a1-target-tmpdir` passed, all 5 tests successful；
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+  --parallel=1 --vardir=/tmp/pq-e1a1-full-vardir
+  --tmpdir=/tmp/pq-e1a1-full-tmpdir` passed, all 97 tests successful；
+- after review hardening, `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr
+  --suite=parallel_query pq_fullscan pq_blob pq_not_equal pq_aggr_no_record
+  --parallel=1 --vardir=/tmp/pq-e1a1-target3-vardir
+  --tmpdir=/tmp/pq-e1a1-target3-tmpdir` passed, all 5 tests successful；
+- after review hardening, `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr
+  --suite=parallel_query --parallel=1
+  --vardir=/tmp/pq-e1a1-full2-vardir
+  --tmpdir=/tmp/pq-e1a1-full2-tmpdir` passed, all 97 tests successful。
+
+Review:
+
+- first Docs-Test Review requested explicit landing steps for remaining E1-A
+  items and clearer include/opt wording；both were fixed；
+- Code-Docs-Test Review accepted the E1-A1 direction and requested stronger
+  counter assertions for `pq_not_equal` / `pq_aggr_no_record` plus doc cleanup；
+- review hardening was applied and revalidated with targeted and full MTR。

@@ -1,0 +1,45 @@
+DROP TABLE IF EXISTS records_in_range_test;
+CREATE TABLE records_in_range_test (
+c1 VARCHAR(16),
+c2 VARCHAR(64),
+PRIMARY KEY(c1)
+) ENGINE=InnoDB;
+INSERT INTO records_in_range_test VALUES
+('ccc','v'),('kkk01','v'),('mmm','v'),('xxx','v');
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SELECT COUNT(*) FROM records_in_range_test WHERE c1 < 'ccc';
+COUNT(*)
+0
+SELECT COUNT(*) FROM records_in_range_test WHERE c1 < 'xxx';
+COUNT(*)
+3
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+AS fallback_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS workers_delta;
+executed_delta	fallback_delta	workers_delta
+0	0	0
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+DROP TABLE records_in_range_test;

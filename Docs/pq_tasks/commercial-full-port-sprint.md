@@ -1483,7 +1483,8 @@ Status: started
 目标：
 
 - 尽量全量迁入商用 `parallel_query` 测试套；
-- 先迁 include/opt，再迁 `.test`/result；
+- include/opt 随对应 `.test` 一起裁剪迁移，不单独复制未启用的
+  include/opt；
 - 只有 dstore/audit plugin/replica topology/TPCH data/hash-spill/restart-debug
   等本地不可构造或大风险项允许暂时 skip。
 
