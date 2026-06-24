@@ -4,7 +4,7 @@ Last synced: 2026-06-24
 
 ## 状态
 
-Root iterator local Read coding in progress.
+Root iterator result-bound Read coding in progress.
 
 ## 背景
 
@@ -223,3 +223,18 @@ context。因此本阶段将 smoke 切换为 root iterator 唯一 row-read 路�
 
 - `Parallel_worker_execute_iterator_smoke_blocked_root_read`
 - `Parallel_worker_execute_iterator_smoke_root_read_ok`
+
+## Result-bound Read 实现记录
+
+本阶段继续把 worker result 合同前移到 root iterator `Read()` 之前：
+
+- 在 factory root iterator `Init()/Read()` 前绑定 worker-owned
+  `Query_result_mq`；
+- root iterator `Read()` 在 worker query expression / query block result 已经
+  指向 `Query_result_mq` 的状态下运行；
+- 新增 `Parallel_worker_execute_iterator_smoke_result_bound_before_read`，
+  MTR 断言该 counter 与 root read success 同时增加；
+- cleanup 仍通过 `PQ_worker_execute_smoke_plan::cleanup()` 统一恢复原始 result，
+  且恢复发生在 worker JOIN destroy 之前；
+- 仍不调用 `ExecuteIteratorQuery()`，也不发送 Query_result_mq data frame；
+- 默认用户可见 PQ gate 不变。

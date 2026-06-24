@@ -2625,6 +2625,17 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
         1, std::memory_order_relaxed);
   }
 
+  if (!worker_plan.bind_result()) {
+    detach_qep_tab.reset();
+    worker_plan.cleanup(true, true);
+    end_execute_ctx();
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+  pq_global_stats.worker_execute_iterator_smoke_result_bound_before_root_read
+      .fetch_add(1, std::memory_order_relaxed);
+
   bool root_iterator_constructed = false;
   {
     AccessPath *const saved_root_access_path = worker_join->root_access_path();
@@ -2670,14 +2681,6 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     return false;
   }
   detach_qep_tab.reset();
-
-  if (!worker_plan.bind_result()) {
-    worker_plan.cleanup(true, true);
-    end_execute_ctx();
-    leader_thd->store_globals();
-    if (initialized_here) destroy();
-    return false;
-  }
 
   if (!pq_worker_join_ownership_preflight(worker_join, join)) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_ownership.fetch_add(

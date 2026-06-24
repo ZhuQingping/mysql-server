@@ -10439,6 +10439,9 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_result_bound,
     worker_execute_iterator_smoke_result_bound)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_result_bound_before_root_read,
+    worker_execute_iterator_smoke_result_bound_before_root_read)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_result_restored,
     worker_execute_iterator_smoke_result_restored)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
@@ -12778,6 +12781,9 @@ SHOW_VAR status_vars[] = {
     {"Parallel_worker_execute_iterator_smoke_result_bound",
      (char *)&show_pq_worker_execute_iterator_smoke_result_bound, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_result_bound_before_read",
+     (char *)&show_pq_worker_execute_iterator_smoke_result_bound_before_root_read,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_result_restored",
      (char *)&show_pq_worker_execute_iterator_smoke_result_restored, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
