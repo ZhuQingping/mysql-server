@@ -186,9 +186,15 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
 - 已进入 worker 执行链路小步迁移：typed pull bridge、Record_buffer 诊断、
   worker ExecuteIterator smoke gate、readinfo gate 和 production readinfo
   fail-closed 风险收敛均已独立提交；
-- 最新提交：`c15da6be890` Keep PQ worker readinfo production gate closed；
-- 下一步：继续沿商用 worker plan / ExecuteIterator 主路径推进最小可验证切口，
-  不重复已有 synthetic MQ、typed pull bridge 或 readinfo smoke。
+- 最新 worker 执行链路提交：
+  - `098d9af3aa5` Add PQ worker iterator construction smoke；
+  - `ad69503c511` Use worker table for PQ iterator smoke。
+- 当前已证明 debug-only smoke 能用 worker THD + worker TABLE 构造
+  `PQ_BLOCK_SCAN -> PQblockScanIterator`，但仍不调用 `Init()` / `Read()` /
+  `ExecuteIteratorQuery()`；
+- 下一步：评估并推进 `PQblockScanIterator::Init()` 最小安全切口。进入
+  `Init()` 前必须确认 worker open context、leader context、range/scan init
+  cleanup 边界；不得直接越过到 `Read()` 或用户可见 PQ gate。
 
 ## Batch A 审计结果
 

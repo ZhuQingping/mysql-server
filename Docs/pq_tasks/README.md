@@ -76,6 +76,8 @@
   - Worker ExecuteIterator smoke gate: `206a5a9b48a` Add PQ worker execute iterator smoke gate
   - Worker readinfo smoke gate: `062e8fdfb7c` Advance PQ worker execute smoke to execute gate
   - Worker readinfo production risk closure: `c15da6be890` Keep PQ worker readinfo production gate closed
+  - Worker iterator construction smoke: `098d9af3aa5` Add PQ worker iterator construction smoke
+  - Worker table owned iterator smoke: `ad69503c511` Use worker table for PQ iterator smoke
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
   - V2-2: `a123cdabe7c` Add PQ V2-2 handler context bridge
