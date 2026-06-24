@@ -4,7 +4,7 @@ Last synced: 2026-06-24
 
 ## 状态
 
-Root iterator local Init/destructor-cleanup coding in progress.
+Root iterator local Read coding in progress.
 
 ## 背景
 
@@ -122,7 +122,8 @@ Root iterator local Init/destructor-cleanup coding in progress.
 - helper 不得调用 `ExecuteIteratorQuery()`；
 - root path attach 后必须先恢复，再 cleanup worker plan；
 - iterator 必须在 worker QEP_TAB/TABLE detach 前析构；
-- 本阶段不调用 root iterator `Read()`，避免重复消费当前 worker scan context；
+- root iterator `Read()` 成为本 smoke 的唯一 row-read 路径，不再同时运行
+  hand-written `PQblockScanIterator` Read；
 - 失败路径必须只增加 blocked counter 并 fail-closed；
 - 默认用户可见 PQ gate 不变。
 
@@ -130,6 +131,8 @@ Root iterator local Init/destructor-cleanup coding in progress.
 
 - `Parallel_worker_execute_iterator_smoke_root_init_success`
 - `Parallel_worker_execute_iterator_smoke_blocked_root_init`
+- `Parallel_worker_execute_iterator_smoke_root_read_success`
+- `Parallel_worker_execute_iterator_smoke_blocked_root_read`
 
 公开 status 名必须控制在 PFS 可见长度内。若名称接近 64 字符，应采用短名，
 例如 `Parallel_worker_execute_iterator_smoke_root_read_ok`。
@@ -167,7 +170,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 - worker `JOIN` ownership 和 `join_free()` 语义已明确；
 - review agent 接受触碰 `sql/sql_lex.h` / `sql/sql_union.cc` 的设计。
 
-## 实现记录
+## Init/destructor-cleanup 实现记录
 
 本阶段选择更窄的 Init/destructor-cleanup 切口：
 
@@ -196,3 +199,27 @@ MTR 首轮验证发现：若 root iterator `Init()` 放在手写 Read smoke 之�
 同一个 worker scan context 并导致后续手写 Read/result binding 断言失败。因此
 本阶段固定顺序为：先完成既有 hand-written iterator Read/End，再验证 factory
 root iterator Init/destructor cleanup。
+
+## Read 实现记录
+
+本阶段继续在同一个 factory-created root iterator scope 内推进一次 `Read()`。
+验证中发现 factory root iterator 和 hand-written `PQblockScanIterator` 不能在同
+一个 worker scan context 上顺序各读一次：无论 root Init 放在前面，还是
+hand-written Read 放在前面，都会让另一路径观察到已被占用/关闭的 worker
+context。因此本阶段将 smoke 切换为 root iterator 唯一 row-read 路径。
+
+- factory root iterator `Init()` 成功后调用一次 `Read()`；
+- `Read()` 返回 `0` 视为 root iterator row production smoke 成功；
+- `Read()` 不负责发送 `Query_result_mq`，只验证 root iterator 能把 row 放入
+  worker table record buffer；
+- hand-written `PQblockScanIterator` direct Init/Read counter 在本 smoke 中保持
+  不增加，用于证明不再重复消费同一个 worker scan context；
+- 不写 `Query_expression::m_root_access_path`；
+- 不写 `Query_expression::m_root_iterator`；
+- 不调用 `force_create_iterators()`；
+- 不调用 `ExecuteIteratorQuery()`。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_blocked_root_read`
+- `Parallel_worker_execute_iterator_smoke_root_read_ok`

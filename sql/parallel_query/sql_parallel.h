@@ -470,6 +470,8 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_root_iterator_constructed{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_root_init{0};
   std::atomic<uint64> worker_execute_iterator_smoke_root_init_success{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_root_read{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_root_read_success{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_init{0};
   std::atomic<uint64> worker_execute_iterator_smoke_init_success{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_read{0};
@@ -930,6 +932,10 @@ struct PQ_global_stats {
     worker_execute_iterator_smoke_blocked_root_init.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_root_init_success.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_root_read.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_root_read_success.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_init.store(
         0, std::memory_order_relaxed);
@@ -1763,7 +1769,9 @@ class Gather_operator {
     This records how far the current commercial worker execution contract can
     progress. It may create and immediately destroy a non-executable cloned
     JOIN shell, create a local EXECUTE leader context, open a worker TABLE, and
-    run one PQblockScanIterator Init/Read/End cycle. It may temporarily bind a
+    create a factory root iterator over a worker-owned PQ block scan access path.
+    The probe runs local root iterator Init/Read once, then destroys the iterator
+    before detaching worker QEP_TAB/TABLE state. It may temporarily bind a
     worker-owned Query_result_mq and restore the original result pointers before
     cleanup. It must not start worker threads, send Query_result_mq data, run
     ExecuteIteratorQuery(), or alter user-visible execution.

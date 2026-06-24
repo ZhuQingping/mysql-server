@@ -139,6 +139,14 @@ SET @root_init_success_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
         'Parallel_worker_execute_iterator_smoke_root_init_ok');
+SET @blocked_root_read_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_blocked_root_read');
+SET @root_read_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_root_read_ok');
 SET @blocked_init_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -332,20 +340,28 @@ SELECT
      @root_init_success_before) >= 1 AS worker_execute_root_init_success,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_blocked_root_read') -
+     @blocked_root_read_before) = 0 AS worker_execute_not_blocked_root_read,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_root_read_ok') -
+     @root_read_success_before) >= 1 AS worker_execute_root_read_success,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_blocked_init') -
-     @blocked_init_before) = 0 AS worker_execute_not_blocked_init,
+     @blocked_init_before) = 0 AS worker_execute_direct_not_blocked_init,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_init_success') -
-     @init_success_before) >= 1 AS worker_execute_init_success,
+     @init_success_before) = 0 AS worker_execute_direct_init_not_run,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_blocked_read') -
-     @blocked_read_before) = 0 AS worker_execute_not_blocked_read,
+     @blocked_read_before) = 0 AS worker_execute_direct_not_blocked_read,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_read_success') -
-     @read_success_before) >= 1 AS worker_execute_read_success,
+     @read_success_before) = 0 AS worker_execute_direct_read_not_run,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_blocked_result') -

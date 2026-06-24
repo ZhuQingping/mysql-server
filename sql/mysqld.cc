@@ -10415,6 +10415,12 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_root_init_success,
     worker_execute_iterator_smoke_root_init_success)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_blocked_root_read,
+    worker_execute_iterator_smoke_blocked_root_read)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_root_read_success,
+    worker_execute_iterator_smoke_root_read_success)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_blocked_init,
     worker_execute_iterator_smoke_blocked_init)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
@@ -12801,6 +12807,12 @@ SHOW_VAR status_vars[] = {
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_root_init_ok",
      (char *)&show_pq_worker_execute_iterator_smoke_root_init_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_blocked_root_read",
+     (char *)&show_pq_worker_execute_iterator_smoke_blocked_root_read,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_root_read_ok",
+     (char *)&show_pq_worker_execute_iterator_smoke_root_read_success,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_success",
      (char *)&show_pq_worker_execute_iterator_smoke_success, SHOW_FUNC,
