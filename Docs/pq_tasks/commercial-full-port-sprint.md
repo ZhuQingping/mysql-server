@@ -1285,7 +1285,7 @@ Completion Report - Batch D1.6a:
 
 #### Batch D1.6b-pre - row-stream worker error priority contract
 
-Status: in progress
+Status: completed and committed
 
 目标：
 
@@ -1365,7 +1365,7 @@ Completion Report - Batch D1.6b-pre:
 
 #### Batch D1.6b-kill - row-stream leader kill priority contract
 
-Status: in progress
+Status: completed and committed
 
 目标：
 
@@ -1429,7 +1429,7 @@ Completion Report - Batch D1.6b-kill:
 
 #### Batch D1.6b-budget - threaded row-stream thread budget contract
 
-Status: in progress
+Status: completed and committed
 
 目标：
 
@@ -1496,6 +1496,57 @@ Completion Report - Batch D1.6b-budget:
   - reviewer confirmed default `parallel_max_threads=0` preserves existing
     threaded behavior；
   - reviewer confirmed the MTR covers refused/running/workers deltas。
+
+#### Batch D1.6c-root - worker root iterator result-bound read smoke
+
+Status: completed and committed
+
+目标：
+
+- 将 worker execute smoke 从 direct `PQblockScanIterator` Read 推进到
+  factory-created worker root iterator `Init()/Read()`；
+- 将 worker-owned `Query_result_mq` 绑定前移到 root iterator `Read()` 之前；
+- 仍不调用 `ExecuteIteratorQuery()`，不发送 `Query_result_mq` data frame，
+  不改变默认用户可见 PQ gate。
+
+Completion Report - Batch D1.6c-root:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_worker_execute_iterator_smoke.test`
+  - `mysql-test/suite/parallel_query/r/pq_worker_execute_iterator_smoke.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+  - `Docs/pq_tasks/commercial-port-next-query-expression-root-iterator.md`
+- implementation:
+  - `worker_join->root_access_path()` now temporarily points to the
+    worker-owned `PQ_BLOCK_SCAN` access path；
+  - `CreateIteratorFromAccessPath()` builds the root iterator locally, runs
+    `Init()` and one `Read()`，then destroys the iterator before QEP_TAB/TABLE
+    detach；
+  - old direct hand-written `PQblockScanIterator` Init/Read path is no longer
+    run in the smoke, avoiding double consumption of one worker scan context；
+  - `worker_plan.bind_result()` now happens before root iterator `Read()`；
+  - new status
+    `Parallel_worker_execute_iterator_smoke_result_bound_before_read` proves
+    worker query expression / query block result was bound before the root
+    read path。
+- validation:
+  - `git diff --check && cmake --build build-ninja --target mysqld -j 16`
+    passed；
+  - `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+    pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats
+    --parallel=1 --vardir=/tmp/pq-worker-result-bound-read-vardir
+    --tmpdir=/tmp/pq-worker-result-bound-read-tmpdir` passed, all 4 tests
+    successful。
+- review:
+  - independent Review Agent accepted root iterator Read commit；
+  - independent Review Agent accepted result-bound-before-root-read commit；
+  - no Critical or Important findings remained。
+- commits:
+  - `adbf2c51fe5 Add PQ worker root iterator read smoke`
+  - `1b35cc9802d Bind PQ worker result before root read`
 
 ### Batch E1 - Commercial MTR migration
 
