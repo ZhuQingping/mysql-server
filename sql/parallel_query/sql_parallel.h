@@ -432,6 +432,8 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_attempts{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_clone{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_readinfo{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_worker_open{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_worker_table_opened{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_access_path{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_iterator{0};
   std::atomic<uint64> worker_execute_iterator_smoke_iterator_constructed{0};
@@ -835,6 +837,10 @@ struct PQ_global_stats {
     worker_execute_iterator_smoke_blocked_clone.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_readinfo.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_worker_open.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_worker_table_opened.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_access_path.store(
         0, std::memory_order_relaxed);

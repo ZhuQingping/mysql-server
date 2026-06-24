@@ -283,3 +283,45 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 ```
 
 结果：目标 MTR 5/5 通过。
+
+## Worker Table Owned Iterator Construction Smoke
+
+Review Agent 对上一小步的残余风险是：如果后续越过 iterator construction
+boundary，不能继续借用 leader `TABLE/QEP_TAB`。本次小步先收敛该风险：
+
+- 通过 `pq_create_worker_thd()` 创建 worker THD；
+- 通过 `pq_open_worker_table()` 打开独立 worker `TABLE/handler`；
+- 使用 worker THD 和 worker TABLE 构造 `PQ_BLOCK_SCAN` `AccessPath`；
+- 使用 worker THD 调用 `CreateIteratorFromAccessPath()` 构造
+  `PQblockScanIterator`；
+- 仍不调用 iterator `Init()` / `Read()`；
+- 仍不调用 `ExecuteIteratorQuery()`；
+- 完成后关闭 worker table、销毁 worker THD，并恢复 leader globals。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_blocked_worker_open`
+- `Parallel_worker_execute_iterator_smoke_worker_table_opened`
+
+预期 MTR 行为：
+
+- clone/readinfo/worker-open/access-path/iterator 均不阻断；
+- worker table opened 至少增加 1；
+- iterator constructed 至少增加 1；
+- execute gate 仍阻断；
+- success 仍为 0。
+
+开发期目标验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_worker_typed_pull_next_smoke \
+  pq_commercial_worker_result_adapter pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-open-iterator-smoke-vardir \
+  --tmpdir=/tmp/pq-worker-open-iterator-smoke-tmpdir
+```
+
+结果：目标 MTR 5/5 通过。

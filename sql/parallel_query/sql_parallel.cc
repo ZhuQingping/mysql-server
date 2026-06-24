@@ -2305,10 +2305,51 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     return false;
   }
 
-  JOIN *worker_join = pq_make_join(leader_thd, join);
+  QEP_TAB *const source_tab = pq_first_worker_smoke_qep_tab(join);
+  if (source_tab == nullptr) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  bool initialized_here = false;
+  if (!is_initialized()) {
+    if (init()) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_worker_open
+          .fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+    initialized_here = true;
+  }
+
+  auto *worker = get_worker(0);
+  if (worker == nullptr) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_worker_open.fetch_add(
+        1, std::memory_order_relaxed);
+    if (initialized_here) destroy();
+    return false;
+  }
+
+  worker->m_open_ctx.leader_table = source_tab->table();
+  worker->m_open_ctx.actual_dop = m_dop;
+  worker->m_open_ctx.mq_handle = worker->m_mq_handle;
+
+  THD *worker_thd = pq_create_worker_thd(worker, this);
+  if (worker_thd == nullptr) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_worker_open.fetch_add(
+        1, std::memory_order_relaxed);
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
+    return false;
+  }
+
+  JOIN *worker_join = pq_make_join(worker_thd, join);
   if (worker_join == nullptr) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_clone.fetch_add(
         1, std::memory_order_relaxed);
+    pq_destroy_worker_thd(worker);
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
     return false;
   }
 
@@ -2316,35 +2357,53 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
     pq_global_stats.worker_execute_iterator_smoke_blocked_readinfo.fetch_add(
         1, std::memory_order_relaxed);
     worker_join->destroy();
+    pq_destroy_worker_thd(worker);
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
     return false;
   }
 
-  QEP_TAB *const source_tab = pq_first_worker_smoke_qep_tab(join);
-  if (source_tab == nullptr) {
-    pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
+  if (pq_open_worker_table(&worker->m_open_ctx)) {
+    pq_global_stats.worker_execute_iterator_smoke_blocked_worker_open.fetch_add(
         1, std::memory_order_relaxed);
     worker_join->destroy();
+    pq_destroy_worker_thd(worker);
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
     return false;
   }
+  pq_global_stats.worker_execute_iterator_smoke_worker_table_opened.fetch_add(
+      1, std::memory_order_relaxed);
 
   AccessPath *const worker_block_scan = NewPQblockScanAccessPath(
-      leader_thd, source_tab->table(), this, DIV_TAB, source_tab,
+      worker_thd, worker->m_open_ctx.worker_table, this, DIV_TAB,
+      /*qep_tab=*/nullptr,
       /*need_rowid=*/false);
   if (worker_block_scan == nullptr) {
     pq_global_stats.worker_execute_iterator_smoke_blocked_access_path.fetch_add(
         1, std::memory_order_relaxed);
     worker_join->destroy();
+    pq_close_worker_table(&worker->m_open_ctx, true);
+    pq_destroy_worker_thd(worker);
+    leader_thd->store_globals();
+    if (initialized_here) destroy();
     return false;
   }
 
-  auto iterator =
-      CreateIteratorFromAccessPath(leader_thd, worker_block_scan, worker_join,
-                                   /*eligible_for_batch_mode=*/false);
-  if (iterator == nullptr) {
-    pq_global_stats.worker_execute_iterator_smoke_blocked_iterator.fetch_add(
-        1, std::memory_order_relaxed);
-    worker_join->destroy();
-    return false;
+  {
+    auto iterator =
+        CreateIteratorFromAccessPath(worker_thd, worker_block_scan, worker_join,
+                                     /*eligible_for_batch_mode=*/false);
+    if (iterator == nullptr) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_iterator.fetch_add(
+          1, std::memory_order_relaxed);
+      worker_join->destroy();
+      pq_close_worker_table(&worker->m_open_ctx, true);
+      pq_destroy_worker_thd(worker);
+      leader_thd->store_globals();
+      if (initialized_here) destroy();
+      return false;
+    }
   }
 
   pq_global_stats.worker_execute_iterator_smoke_iterator_constructed.fetch_add(
@@ -2358,6 +2417,10 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
       1, std::memory_order_relaxed);
   worker_join->destroy();
+  pq_close_worker_table(&worker->m_open_ctx, false);
+  pq_destroy_worker_thd(worker);
+  leader_thd->store_globals();
+  if (initialized_here) destroy();
   return false;
 }
 
