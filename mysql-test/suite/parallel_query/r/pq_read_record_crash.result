@@ -1,0 +1,51 @@
+DROP TABLE IF EXISTS BUG2022080501414;
+SET SESSION parallel_query=ON;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SELECT * FROM BUG2022080501414;
+SELECT COUNT(*) AS column_count
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+AND table_name = 'BUG2022080501414';
+column_count
+129
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+AS fallback_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+AS rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS workers_delta;
+executed_delta	fallback_delta	rows_delta	workers_delta
+1	0	128	2
+SELECT COUNT(*) AS row_count FROM BUG2022080501414;
+row_count
+128
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE BUG2022080501414;

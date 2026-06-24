@@ -1,0 +1,81 @@
+# Test: pq_read_record_crash
+# Commercial-name adapted many-column row image smoke for the historical
+# PQ_Ctx::read_record crash shape. The >100-column trigger is preserved; the
+# column width is reduced to fit current utf8mb4/16K InnoDB row-size limits.
+# Sanitizer builds provide stronger coverage.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS BUG2022080501414;
+--enable_warnings
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+
+--let columns=128
+--disable_query_log
+CREATE TABLE BUG2022080501414 (id INT PRIMARY KEY) ENGINE=InnoDB;
+while ($columns)
+{
+  --eval ALTER TABLE BUG2022080501414 ADD COLUMN(column_$columns VARCHAR(8) NOT NULL DEFAULT 'hello!')
+  dec $columns;
+}
+
+--let rows=128
+while ($rows)
+{
+  --eval INSERT INTO BUG2022080501414 (id) VALUES ($rows)
+  dec $rows;
+}
+
+--enable_query_log
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+--disable_result_log
+SELECT * FROM BUG2022080501414;
+--enable_result_log
+
+SELECT COUNT(*) AS column_count
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'BUG2022080501414';
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SELECT COUNT(*) AS row_count FROM BUG2022080501414;
+
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+
+DROP TABLE BUG2022080501414;

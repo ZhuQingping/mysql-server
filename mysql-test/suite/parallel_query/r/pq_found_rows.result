@@ -1,0 +1,57 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (f1 INT PRIMARY KEY) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1),(2),(3),(4);
+SET SESSION parallel_query=ON;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SELECT SQL_CALC_FOUND_ROWS * FROM t1 LIMIT 2;
+f1
+1
+2
+SELECT FOUND_ROWS();
+FOUND_ROWS()
+4
+SELECT * FROM t1 LIMIT 2;
+f1
+1
+2
+SELECT FOUND_ROWS();
+FOUND_ROWS()
+2
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+AS fallback_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+AS rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS workers_delta;
+executed_delta	fallback_delta	rows_delta	workers_delta
+0	0	0	0
+SET SESSION parallel_query_experimental_threaded_dop=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_default_dop=4;
+SET SESSION parallel_cost_threshold=10000;
+DROP TABLE t1;

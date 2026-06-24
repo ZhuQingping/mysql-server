@@ -194,7 +194,7 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 Status: E1 planning baseline completed. E1-A1 completed. E1-A2 full-suite
 follow-up completed after stabilizing existing EXPLAIN row-estimate-only
-assertions.
+assertions. E1-A3 full-suite validation completed.
 
 ## E1-A1 Completion Report
 
@@ -300,3 +300,54 @@ Validation:
 
 Review: first review requested counter hardening for worker-error, external
 kill, and leader-kill paths；the hardening was applied and targeted MTR passed.
+
+## E1-A3 Completion Report
+
+Changed files:
+
+- `mysql-test/suite/parallel_query/t/pq_found_rows.test`
+- `mysql-test/suite/parallel_query/r/pq_found_rows.result`
+- `mysql-test/suite/parallel_query/t/pq_read_view.test`
+- `mysql-test/suite/parallel_query/r/pq_read_view.result`
+- `mysql-test/suite/parallel_query/t/pq_rec_visible.test`
+- `mysql-test/suite/parallel_query/r/pq_rec_visible.result`
+- `mysql-test/suite/parallel_query/t/pq_read_record_crash.test`
+- `mysql-test/suite/parallel_query/r/pq_read_record_crash.result`
+- `Docs/pq_tasks/commercial-port-e1-test-migration.md`
+
+Implementation:
+
+- added four commercial-name adapted tests for the remaining E1-A edge bucket；
+- `pq_found_rows` migrates the simple `SQL_CALC_FOUND_ROWS` / `FOUND_ROWS()`
+  shape and records the current no-PQ-accounting boundary
+  (`executed/fallback/rows/workers = 0/0/0/0`)；the commercial UNION block
+  remains deferred because current UNION PQ support is still a
+  multi-query-block fallback boundary；
+- `pq_read_view` reuses the current no-debug DOP=2 threaded row-stream read-view
+  shape and keeps executed/fallback/rows/workers counter assertions；
+- `pq_rec_visible` migrates the transaction visibility shape and uses a forced
+  clustered scan to assert current DOP=2 row-stream execution
+  (`executed/fallback/rows/workers = 1/0/9/2`)；the commercial ICP bug block
+  remains covered by the dedicated ref/ICP guard suite；
+- `pq_read_record_crash` migrates the wide-table read smoke with 128 generated
+  columns and 128 rows and asserts current DOP=2 row-stream execution
+  (`executed/fallback/rows/workers = 1/0/128/2`)；the commercial trigger is
+  more than 100 columns, so column width is reduced only to fit current
+  utf8mb4/16K InnoDB row-size limits while preserving the many-column row image
+  shape.
+
+Validation:
+
+- `git add -N <new E1-A3 test files> && git diff --check` passed；
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+  pq_found_rows pq_read_view pq_rec_visible pq_read_record_crash --parallel=1
+  --vardir=/tmp/pq-e1a3-final-target-vardir
+  --tmpdir=/tmp/pq-e1a3-final-target-tmpdir` passed, all 5 tests successful；
+- `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+  --parallel=1 --vardir=/tmp/pq-e1a3-final-full-vardir
+  --tmpdir=/tmp/pq-e1a3-final-full-tmpdir` passed, all 104 tests successful.
+
+Review: first review requested explicit PQ path or boundary counter evidence
+for `pq_found_rows`, `pq_rec_visible`, and `pq_read_record_crash`；the review
+hardening was applied. Follow-up review accepted the counter isolation fix for
+`pq_read_record_crash` and reported no Critical or Important issues.
