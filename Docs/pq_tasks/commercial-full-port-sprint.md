@@ -1691,7 +1691,8 @@ Next blocker:
 
 #### Batch D1.6f - ExecuteIteratorQuery preflight counters
 
-Status: completed locally；pending independent review。
+Status: completed and committed as `b0b546579e6`；Code / Docs / Test Review
+accepted。
 
 目标：
 
@@ -1750,6 +1751,68 @@ Next blocker:
 - next source batch should decide whether to migrate the commercial
   `make_pq_worker_plan()` / `pq_make_join_readinfo()` unit optimization path or
   add a narrower smoke-only optimized unit transition before guarded execute。
+
+#### Batch D1.6g - Worker unit execute-ready state
+
+Status: completed locally；Code / Docs / Test Review accepted。
+
+目标：
+
+- 对齐商用 worker plan 的最小 unit 状态顺序：
+  `Query_expression::set_prepared()` 后再设置 `JOIN::set_optimized()` 与
+  `Query_expression::set_optimized()`；
+- 仅在 DBUG/worker execute smoke 的 guarded worker-owned shell 中执行该状态
+  transition；
+- 保持 `ExecuteIteratorQuery()` 仍不调用，用户可见 PQ gate 不扩大；
+- 在 worker plan cleanup 中对已标记 optimized 的 worker unit 做 full
+  cleanup，避免 `Query_expression::destroy()` 的 optimized-but-not-cleaned
+  断言风险。
+
+Completion Report - Batch D1.6g:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.cc`
+  - `mysql-test/suite/parallel_query/t/pq_worker_execute_iterator_smoke.test`
+  - `mysql-test/suite/parallel_query/r/pq_worker_execute_iterator_smoke.result`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added `PQ_worker_execute_smoke_plan::prepare_execute_iterator_unit_state()`；
+  - guards require worker THD/LEX, worker JOIN, worker query block, simple unit,
+    matching `lex->unit`, matching `first_query_block()`, matching
+    `Query_block::join`, not executed, and no unfinished materialization；
+  - after QueryExpression-owned root iterator construction, smoke marks the
+    worker unit prepared/optimized before `preflight_execute_iterator_query()`；
+  - cleanup restores cloned query block ownership before full unit cleanup；
+    when this smoke marked the unit execute-ready, `unit->cleanup(true)` owns
+    worker JOIN cleanup/destruction；the old non-optimized fallback path still
+    calls `JOIN::destroy()` directly；
+  - MTR now expects `xpf_unit_ready` to grow and `xpf_blocked_unit` to stay
+    zero while `blocked_execute` still grows。
+- validation:
+  - first targeted MTR exposed two cleanup-order defects:
+    `unit->cleanup(true)` before `pq_restore()` crashed in
+    `Query_block::pq_restore()`；calling `JOIN::destroy()` after
+    `unit->cleanup(true)` double-destroyed the worker JOIN；
+  - fixed by restoring clone ownership before full unit cleanup and by letting
+    `unit->cleanup(true)` own worker JOIN destruction for the execute-ready
+    path；
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr
+    --suite=parallel_query pq_worker_execute_iterator_smoke
+    pq_clone_diagnostics pq_stats pq_commercial_worker_result_adapter
+    --parallel=1 --vardir=/tmp/pq-worker-unit-ready-vardir4
+    --tmpdir=/tmp/pq-worker-unit-ready-tmpdir4`，all 5 tests successful。
+
+Next blocker:
+
+- `ExecuteIteratorQuery()` remains intentionally blocked after the preflight；
+- the next source batch must either call `ExecuteIteratorQuery()` under a
+  stricter smoke-only contract or migrate the commercial
+  `make_pq_worker_plan()` / `pq_make_join_readinfo()` path far enough that
+  result metadata/data/EOF and `join_free()` cleanup ordering are production
+  equivalent。
 
 ### Batch E1 - Commercial MTR migration
 

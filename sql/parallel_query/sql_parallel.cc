@@ -409,12 +409,40 @@ class PQ_worker_execute_smoke_plan {
     return thd_ready && root_ready && result_ready && fields_ready && unit_ready;
   }
 
+  bool prepare_execute_iterator_unit_state() {
+    Query_expression *const unit =
+        m_worker_join != nullptr ? m_worker_join->query_expression() : nullptr;
+    Query_block *const block =
+        m_worker_join != nullptr ? m_worker_join->query_block : nullptr;
+
+    if (m_worker_thd == nullptr || m_worker_join == nullptr || unit == nullptr ||
+        block == nullptr || m_worker_thd->lex == nullptr ||
+        m_worker_thd->lex->unit != unit || unit->first_query_block() != block ||
+        block->join != m_worker_join || !unit->is_simple() ||
+        unit->is_executed() || unit->unfinished_materialization()) {
+      return false;
+    }
+
+    if (!unit->is_prepared()) unit->set_prepared();
+    if (!m_worker_join->is_optimized()) m_worker_join->set_optimized();
+    if (!unit->is_optimized()) unit->set_optimized();
+
+    m_unit_marked_execute_ready = true;
+    return unit->is_prepared() && unit->is_optimized() &&
+           m_worker_join->is_optimized() && !unit->is_executed();
+  }
+
   void cleanup(bool close_worker_table, bool table_error) {
     restore_result();
 
     if (m_worker_join != nullptr) {
+      Query_expression *const unit = m_worker_join->query_expression();
       m_worker_join->pq_restore();
-      m_worker_join->destroy();
+      if (m_unit_marked_execute_ready && unit != nullptr) {
+        unit->cleanup(true);
+      } else {
+        m_worker_join->destroy();
+      }
       m_worker_join = nullptr;
     }
     if (close_worker_table && m_worker != nullptr) {
@@ -460,6 +488,7 @@ class PQ_worker_execute_smoke_plan {
   Query_result_mq *m_mq_result{nullptr};
   bool m_result_bound{false};
   bool m_constructed{false};
+  bool m_unit_marked_execute_ready{false};
 };
 
 void *pq_worker_thread_entry(void *arg_ptr) {
@@ -2818,6 +2847,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
           .fetch_add(1, std::memory_order_relaxed);
       pq_global_stats.worker_execute_iterator_smoke_root_owned.fetch_add(
           1, std::memory_order_relaxed);
+      (void)worker_plan.prepare_execute_iterator_unit_state();
       (void)worker_plan.preflight_execute_iterator_query();
       if (iterator->Init()) {
         pq_global_stats.worker_execute_iterator_smoke_blocked_root_init
