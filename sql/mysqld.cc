@@ -10493,6 +10493,24 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_blocked_ownership,
     worker_execute_iterator_smoke_blocked_ownership)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_query_called,
+    worker_execute_iterator_smoke_execute_query_called)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_query_success,
+    worker_execute_iterator_smoke_execute_query_success)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_query_rows,
+    worker_execute_iterator_smoke_execute_query_rows)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_query_finishes,
+    worker_execute_iterator_smoke_execute_query_finishes)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_blocked_execute_no_consumer,
+    worker_execute_iterator_smoke_blocked_execute_no_consumer)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_blocked_execute_drain,
+    worker_execute_iterator_smoke_blocked_execute_drain)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_blocked_execute,
     worker_execute_iterator_smoke_blocked_execute)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
@@ -12856,6 +12874,24 @@ SHOW_VAR status_vars[] = {
     {"Parallel_worker_execute_iterator_smoke_blocked_ownership",
      (char *)&show_pq_worker_execute_iterator_smoke_blocked_ownership, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xiq_called",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_query_called,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xiq_success",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_query_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xiq_rows",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_query_rows,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xiq_finishes",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_query_finishes,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_blocked_no_consumer",
+     (char *)&show_pq_worker_execute_iterator_smoke_blocked_execute_no_consumer,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_blocked_drain",
+     (char *)&show_pq_worker_execute_iterator_smoke_blocked_execute_drain,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_blocked_worker_open",
      (char *)&show_pq_worker_execute_iterator_smoke_blocked_worker_open,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},

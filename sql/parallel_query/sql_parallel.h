@@ -504,6 +504,13 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_result_eof_sent{0};
   std::atomic<uint64> worker_execute_iterator_smoke_result_restored{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_ownership{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_execute_query_called{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_execute_query_success{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_execute_query_rows{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_execute_query_finishes{0};
+  std::atomic<uint64>
+      worker_execute_iterator_smoke_blocked_execute_no_consumer{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_blocked_execute_drain{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_execute{0};
   std::atomic<uint64> worker_execute_iterator_smoke_success{0};
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
@@ -1008,6 +1015,18 @@ struct PQ_global_stats {
     worker_execute_iterator_smoke_result_restored.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_ownership.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_query_called.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_query_success.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_query_rows.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_query_finishes.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_execute_no_consumer.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_blocked_execute_drain.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_execute.store(
         0, std::memory_order_relaxed);

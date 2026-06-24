@@ -1874,6 +1874,56 @@ Next blocker:
 - full execute also still needs MQ drain/backpressure and
   `join_free()`/worker table cleanup ordering reviewed before opening。
 
+#### Batch D1.6i - ExecuteIteratorQuery direct-call blocker
+
+Status: completed locally；awaiting final code review。
+
+目标：
+
+- 不直接调用 full `ExecuteIteratorQuery()`；
+- 在 worker root iterator / result / field / unit 合同均 ready 时，明确记录当前
+  direct call 的真实阻断点：同线程 smoke 缺少并发 MQ consumer，不能保证
+  `ExecuteIteratorQuery()` 连续发送所有 rows + EOF 时不阻塞；
+- 保留现有单行 root iterator `Init()/Read()` + `Query_result_mq`
+  ROW/FINISH smoke，用户可见 PQ gate 继续关闭。
+
+Completion Report - Batch D1.6i:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_worker_execute_iterator_smoke.test`
+  - `mysql-test/suite/parallel_query/r/pq_worker_execute_iterator_smoke.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+- implementation:
+  - factored worker result frame drain logic out of the single-row send smoke；
+  - added `record_execute_iterator_query_blocker()` after root iterator
+    ownership is proven；
+  - added SHOW STATUS counters:
+    `Parallel_worker_execute_iterator_smoke_xiq_called`,
+    `Parallel_worker_execute_iterator_smoke_xiq_success`,
+    `Parallel_worker_execute_iterator_smoke_xiq_rows`,
+    `Parallel_worker_execute_iterator_smoke_xiq_finishes`,
+    `Parallel_worker_execute_iterator_smoke_blocked_no_consumer`,
+    `Parallel_worker_execute_iterator_smoke_blocked_drain`；
+  - MTR asserts `xiq_called/success/rows/finishes` remain zero,
+    `blocked_no_consumer` grows, and `blocked_drain` remains zero。
+- validation:
+  - `git diff --check` passed；
+  - `cmake --build build-ninja --target mysqld -j 16` passed；
+  - targeted MTR passed:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr
+    --suite=parallel_query pq_worker_execute_iterator_smoke
+    pq_commercial_worker_result pq_commercial_worker_result_adapter pq_stats
+    --parallel=1 --vardir=/tmp/pq-worker-exec-blocker-vardir2
+    --tmpdir=/tmp/pq-worker-exec-blocker-tmpdir2`，all 5 tests successful。
+
+Next blocker:
+
+- 真正调用 `ExecuteIteratorQuery()` 需要把 smoke 放入 real worker thread，或先实现
+  leader 并发 drain；不能在同线程 producer-only 路径直接调用。
+
 ### Batch E1 - Commercial MTR migration
 
 Status: started

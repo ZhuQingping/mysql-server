@@ -308,41 +308,8 @@ class PQ_worker_execute_smoke_plan {
 
     uint32 rows_read = 0;
     uint32 finishes_read = 0;
-    for (uint32 i = 0; !failed && i < 2; ++i) {
-      void *raw_data = nullptr;
-      uint32 raw_len = 0;
-      if (m_worker->m_mq_handle->receive(&raw_data, &raw_len) != MQ_SUCCESS) {
-        failed = true;
-        break;
-      }
-
-      const PQ_worker_result_frame_header *header = nullptr;
-      const uchar *decoded_null_bitmap = nullptr;
-      const uchar *decoded_payload = nullptr;
-      if (pq_validate_worker_result_frame(raw_data, raw_len, &header,
-                                          &decoded_null_bitmap,
-                                          &decoded_payload)) {
-        failed = true;
-        break;
-      }
-
-      if (header->type ==
-          static_cast<uint16>(PQ_worker_result_message_type::ROW)) {
-        std::vector<PQ_worker_result_decoded_field> decoded_fields;
-        failed = pq_decode_worker_result_row(raw_data, raw_len, &decoded_fields) ||
-                 decoded_fields.empty() ||
-                 decoded_fields.size() != fields->size();
-        if (!failed) ++rows_read;
-      } else if (header->type ==
-                 static_cast<uint16>(PQ_worker_result_message_type::FINISH)) {
-        failed = decoded_null_bitmap != nullptr || decoded_payload != nullptr ||
-                 header->field_count != 0 || header->null_bitmap_len != 0 ||
-                 header->payload_len != 0;
-        if (!failed) ++finishes_read;
-      } else {
-        failed = true;
-      }
-    }
+    failed = drain_worker_result_frames(2, fields->size(), &rows_read,
+                                        &finishes_read);
 
     if (failed || rows_read != 1 || finishes_read != 1) {
       pq_global_stats.worker_execute_iterator_smoke_blocked_result_send.fetch_add(
@@ -354,6 +321,24 @@ class PQ_worker_execute_smoke_plan {
         1, std::memory_order_relaxed);
     pq_global_stats.worker_execute_iterator_smoke_result_eof_sent.fetch_add(
         1, std::memory_order_relaxed);
+    return true;
+  }
+
+  bool record_execute_iterator_query_blocker() {
+    if (!prepare_execute_iterator_unit_state() ||
+        !preflight_execute_iterator_query()) {
+      pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+
+    /*
+      ExecuteIteratorQuery() produces all rows synchronously. Until the smoke
+      runs in a real worker thread, the leader side cannot drain MQ frames
+      concurrently, so the direct call stays intentionally blocked.
+    */
+    pq_global_stats.worker_execute_iterator_smoke_blocked_execute_no_consumer
+        .fetch_add(1, std::memory_order_relaxed);
     return true;
   }
 
@@ -475,6 +460,56 @@ class PQ_worker_execute_smoke_plan {
   JOIN *worker_join() const { return m_worker_join; }
 
  private:
+  bool drain_worker_result_frames(uint32 max_messages, size_t expected_fields,
+                                  uint32 *rows_read,
+                                  uint32 *finishes_read) {
+    if (m_worker == nullptr || m_worker->m_mq_handle == nullptr ||
+        rows_read == nullptr || finishes_read == nullptr) {
+      return true;
+    }
+
+    *rows_read = 0;
+    *finishes_read = 0;
+    for (uint32 i = 0; i < max_messages; ++i) {
+      void *raw_data = nullptr;
+      uint32 raw_len = 0;
+      if (m_worker->m_mq_handle->receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+        return true;
+      }
+
+      const PQ_worker_result_frame_header *header = nullptr;
+      const uchar *decoded_null_bitmap = nullptr;
+      const uchar *decoded_payload = nullptr;
+      if (pq_validate_worker_result_frame(raw_data, raw_len, &header,
+                                          &decoded_null_bitmap,
+                                          &decoded_payload)) {
+        return true;
+      }
+
+      if (header->type ==
+          static_cast<uint16>(PQ_worker_result_message_type::ROW)) {
+        std::vector<PQ_worker_result_decoded_field> decoded_fields;
+        if (pq_decode_worker_result_row(raw_data, raw_len, &decoded_fields) ||
+            decoded_fields.empty() || decoded_fields.size() != expected_fields) {
+          return true;
+        }
+        ++*rows_read;
+      } else if (header->type ==
+                 static_cast<uint16>(PQ_worker_result_message_type::FINISH)) {
+        if (decoded_null_bitmap != nullptr || decoded_payload != nullptr ||
+            header->field_count != 0 || header->null_bitmap_len != 0 ||
+            header->payload_len != 0) {
+          return true;
+        }
+        ++*finishes_read;
+        return false;
+      } else {
+        return true;
+      }
+    }
+    return true;
+  }
+
   void restore_result() {
     if (!m_result_bound || m_worker_join == nullptr ||
         m_worker_join->query_expression() == nullptr ||
@@ -2859,8 +2894,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
           .fetch_add(1, std::memory_order_relaxed);
       pq_global_stats.worker_execute_iterator_smoke_root_owned.fetch_add(
           1, std::memory_order_relaxed);
-      (void)worker_plan.prepare_execute_iterator_unit_state();
-      (void)worker_plan.preflight_execute_iterator_query();
+      (void)worker_plan.record_execute_iterator_query_blocker();
       if (iterator->Init()) {
         pq_global_stats.worker_execute_iterator_smoke_blocked_root_init
             .fetch_add(1, std::memory_order_relaxed);
@@ -2909,10 +2943,9 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   }
 
   /*
-    The current branch has not migrated commercial make_pq_worker_plan() or
-    worker Query_expression ownership. Stop after proving the PQ_BLOCK_SCAN
-    iterator single-row Read and Query_result_mq ownership boundaries before
-    ExecuteIteratorQuery().
+    Keep the user-visible PQ gate closed. ExecuteIteratorQuery() is preflight
+    ready, but it must run in a worker thread before the leader can drain MQ
+    frames concurrently without risking a same-thread producer block.
   */
   pq_global_stats.worker_execute_iterator_smoke_blocked_execute.fetch_add(
       1, std::memory_order_relaxed);
