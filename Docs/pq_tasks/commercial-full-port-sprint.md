@@ -2076,7 +2076,7 @@ Next action:
 
 #### Batch D1.6l - PQWR leader materialization smoke
 
-Status: completed locally; awaiting review/commit.
+Status: completed, reviewed, committed, and pushed.
 
 目标：
 
@@ -2109,6 +2109,17 @@ Validation:
   `pq_commercial_worker_result`
   `pq_commercial_worker_result_adapter`
   `pq_stats`。
+
+Review:
+
+- independent Review Agent accepted；
+- only Minor finding was that the helper is not a general materializer；
+- code comment now explicitly limits it to the current debug-only
+  `SELECT id, v` worker smoke。
+
+Commit:
+
+- `e080e9065da` Add PQWR leader materialization smoke。
 
 Notes:
 
