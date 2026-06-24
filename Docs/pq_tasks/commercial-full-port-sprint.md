@@ -196,11 +196,13 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   并通过 worker-owned `Query_result_mq` 发送/解码 ROW + FINISH smoke frame；
 - D1.6d 已将 worker output fields 推进到 `Query_block::fields` /
   `base_ref_items` worker-owned `Item_field`；
-- 当前最新本地批次已将 worker root iterator 迁入
-  `Query_expression::m_root_access_path` / `m_root_iterator` ownership smoke，
-  仍不调用 `ExecuteIteratorQuery()`，不打开用户可见 PQ gate；
-- 下一步：推进 `ExecuteIteratorQuery()` 前置合同，重点是 worker result
-  metadata/data/EOF/error 语义、`join_free()` cleanup 和错误/KILL 收口。
+- 当前最新本地批次已将 worker `PQWR` 消费链路推进到
+  `PQTableScanIterator::Read()` debug-only gate：leader 通过
+  `MQ_record_gather -> Exchange_nosort -> table->record[0]` 消费
+  `Query_result_mq` worker-result row；
+- 下一步：继续缩小商用 `ParallelScanIterator` 主路径差距，优先把
+  worker-thread producer、leader record gather 和可见 fullscan gate 的
+  生命周期顺序对齐；开发阶段仍只跑相关模块 MTR，不跑全量 MTR。
 
 ## Batch A 审计结果
 
@@ -2231,7 +2233,7 @@ Notes:
 
 #### Batch D1.6o - PQTableScanIterator PQWR record_gather gate
 
-Status: completed, reviewed, ready to commit.
+Status: completed, reviewed, committed, and pushed.
 
 目标：
 
@@ -2278,5 +2280,6 @@ Review:
 
 Notes:
 
+- commit: `b9c521a933a` Add PQTableScanIterator PQWR gather smoke；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
