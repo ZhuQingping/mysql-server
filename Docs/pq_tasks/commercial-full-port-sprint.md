@@ -188,13 +188,13 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   fail-closed 风险收敛均已独立提交；
 - 最新 worker 执行链路提交：
   - `098d9af3aa5` Add PQ worker iterator construction smoke；
-  - `ad69503c511` Use worker table for PQ iterator smoke。
+  - `ad69503c511` Use worker table for PQ iterator smoke；
+  - `3a1907cccf1` Add PQ worker iterator init smoke。
 - 当前已证明 debug-only smoke 能用 worker THD + worker TABLE 构造
-  `PQ_BLOCK_SCAN -> PQblockScanIterator`，但仍不调用 `Init()` / `Read()` /
-  `ExecuteIteratorQuery()`；
-- 下一步：评估并推进 `PQblockScanIterator::Init()` 最小安全切口。进入
-  `Init()` 前必须确认 worker open context、leader context、range/scan init
-  cleanup 边界；不得直接越过到 `Read()` 或用户可见 PQ gate。
+  `PQ_BLOCK_SCAN -> PQblockScanIterator`，并完成 `Init()` 后立即 `End()`；
+  仍不调用 `Read()` / `ExecuteIteratorQuery()`；
+- 下一步：只读评估 `PQblockScanIterator::Read()` 单行 smoke 是否足够安全。
+  若推进，必须保持 debug-only、单独 commit，并继续禁止用户可见 PQ gate。
 
 ## Batch A 审计结果
 
