@@ -48,22 +48,20 @@ JOIN *pq_make_join(THD *thd, JOIN *join);
   Run the M11-A clone contract preflight.
 
   The helper verifies whether the current statement has enough local contract
-  support to call the commercial pq_make_join() path. During M11-A4 it is still
-  diagnostic-only and must return false before creating or storing a cloned
-  JOIN.
+  support to create the first non-executable commercial pq_make_join() shell.
+  It does not prove worker-plan execution.
 
   @retval false  Clone contract is not executable yet.
-  @retval true   Clone contract is complete enough for a later guarded caller.
+  @retval true   A guarded caller may create and immediately destroy a shell.
 */
 bool pq_clone_contract_preflight(THD *thd, JOIN *join);
 
 /**
   Run the M3 commercial clone activation probe.
 
-  This is intentionally a diagnostic-only preflight. It inspects the JOIN
-  boundary and records that the commercial clone contract is not active yet,
-  but it must not call pq_make_join(), store a cloned JOIN, create a
-  Gather_operator, start workers, or call handler/InnoDB.
+  This is intentionally a diagnostic-only probe. It may create and immediately
+  destroy a non-executable cloned JOIN shell, but it must not store a cloned
+  JOIN, create a Gather_operator, start workers, or call handler/InnoDB.
 
   The caller may continue into the existing V2 smoke/fallback iterator path
   after this probe. This helper owns only clone-probe diagnostics.

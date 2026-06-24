@@ -37,7 +37,20 @@ ORDER *pq_dup_order(THD *, Query_block *, ORDER *) { return nullptr; }
 
 bool pq_dup_tabs(JOIN *, JOIN *, bool) { return true; }
 
-JOIN *pq_make_join(THD *, JOIN *) { return nullptr; }
+namespace {
+
+bool pq_clone_shell_supported(THD *thd, JOIN *join) {
+  return thd != nullptr && join != nullptr && join->query_block != nullptr &&
+         join->query_block->table_count() == 1;
+}
+
+}  // namespace
+
+JOIN *pq_make_join(THD *thd, JOIN *join) {
+  if (!pq_clone_shell_supported(thd, join)) return nullptr;
+
+  return new (thd->mem_root) JOIN(thd, join->query_block);
+}
 
 void Query_block::pq_backup() {}
 
@@ -55,22 +68,21 @@ bool pq_clone_contract_preflight(THD *thd, JOIN *join) {
   pq_global_stats.clone_preflight_attempts.fetch_add(
       1, std::memory_order_relaxed);
 
-  if (thd == nullptr || join == nullptr || join->query_block == nullptr ||
-      join->query_block->table_count() != 1) {
+  if (!pq_clone_shell_supported(thd, join)) {
     pq_global_stats.clone_preflight_unsupported.fetch_add(
         1, std::memory_order_relaxed);
     return false;
   }
 
   /*
-    M11-A has only the base Item/JOIN/Query_block shells and conservative
-    resolver lookup helpers. The commercial clone path still lacks executable
-    Item subclass clone/refix/restore coverage and full QEP_TAB/JOIN state
-    cleanup, so the preflight remains fail-closed.
+    M11-A6 proves only that a single-table statement can create the local
+    JOIN shell needed by the commercial clone path. The shell is not an
+    executable worker plan: Item subclass clone/refix/restore, QEP_TAB copy,
+    table clone, Gather_operator, and handler/InnoDB ownership remain closed.
   */
-  pq_global_stats.clone_preflight_unsupported.fetch_add(
+  pq_global_stats.clone_preflight_success.fetch_add(
       1, std::memory_order_relaxed);
-  return false;
+  return true;
 }
 
 bool pq_clone_activation_probe(THD *thd, JOIN *join) {
@@ -85,10 +97,21 @@ bool pq_clone_activation_probe(THD *thd, JOIN *join) {
     return false;
   }
 
+  JOIN *const clone_shell = pq_make_join(thd, join);
+  if (clone_shell == nullptr) {
+    pq_global_stats.clone_probe_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    pq_global_stats.clone_probe_fallback.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  clone_shell->destroy();
+
   /*
-    A4 does not produce an executable cloned JOIN even if the preflight helper
-    is extended later. Keep activation fail-closed until pq_make_join()
-    ownership, restore, and cleanup contracts are proven.
+    The shell construction contract is proven, but activation still remains
+    fail-closed until executable clone ownership, restore, and cleanup are
+    complete. Do not increment clone_probe_success here.
   */
   pq_global_stats.clone_probe_unsupported.fetch_add(
       1, std::memory_order_relaxed);

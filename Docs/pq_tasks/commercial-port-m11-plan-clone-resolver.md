@@ -13,6 +13,8 @@ M11-A4 Clone contract preflight probe completed /
 Code-Docs-Test Review accepted。
 M11-A5 Clone preflight MTR smoke doc-only closure completed /
 Docs-Test Review accepted。
+M11-A6 Single-table cloned JOIN shell preflight completed /
+Code-Docs-Test Review accepted。
 
 ## 目标
 
@@ -24,11 +26,13 @@ preflight probe 和 MTR smoke。
 
 当前仓：
 
-- `sql/parallel_query/pq_clone.cc` 中 `pq_make_join()` 返回 `nullptr`；
+- `sql/parallel_query/pq_clone.cc` 中 `pq_make_join()` 可为单表查询创建
+  non-executable JOIN shell，并由 activation probe 立即 `destroy()`；
 - `pq_dup_tabs()`、`pq_replace_base_item()`、resolver/base-ref helpers
   仍 fail-closed；
-- `pq_clone_activation_probe()` 只记录
-  `Parallel_clone_probe_attempts/fallback/success/unsupported`；
+- `pq_clone_activation_probe()` 记录
+  `Parallel_clone_probe_attempts/fallback/success/unsupported`，并在 preflight
+  成功时验证 shell create/destroy；
 - `pq_clone_diagnostics` 已验证 clone probe 不启动 worker；
 - `Parallel_clone_probe_success` 当前应保持 0。
 
@@ -276,6 +280,52 @@ TMPDIR=/tmp perl build-ninja/mysql-test/mysql-test-run.pl \
 ```
 
 Status: doc-only closure completed / Docs-Test Review accepted。
+
+### M11-A6: Single-table Cloned JOIN Shell Preflight
+
+目标：
+
+- 将 clone preflight 从“单表也 unsupported”推进为“单表可创建本地 JOIN
+  shell”；
+- activation probe 可调用 `pq_make_join()` 创建 shell，并立即 `destroy()`；
+- 仍不存储 cloned JOIN、不创建 `Gather_operator`、不启动 worker、不调用
+  handler/InnoDB；
+- `Parallel_clone_probe_success` 继续保持 0，避免误表示 worker plan 可执行。
+
+Implementation notes:
+
+- 新增 `Parallel_clone_preflight_success`，区分 shell preflight 成功和
+  activation success；
+- `pq_make_join()` 只允许 `thd/join/query_block` 非空且 `table_count()==1`；
+- shell 使用当前 THD mem_root 和当前 Query_block 构造，仅用于验证本地
+  create/destroy contract；
+- `pq_clone_activation_probe()` 在 shell 成功后仍返回 `false`，并继续增长
+  fallback/unsupported，保持现有执行路径进入可见 DOP2 fullscan 或串行回退。
+
+验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pqv_m11a6_target --tmpdir=/tmp/pqt_m11a6_target
+
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  --vardir=/tmp/pqv_m11a6_full --tmpdir=/tmp/pqt_m11a6_full
+```
+
+Status: coding/validation completed / Code-Docs-Test Review accepted。
+
+Review:
+
+- Code-Docs-Test Review returned `ACCEPT`；
+- confirmed shell construction is single-table only and immediately destroyed；
+- confirmed no worker、handler、InnoDB、AccessPath、MQ 或 Exchange path is
+  opened；
+- confirmed `Parallel_clone_probe_success` remains 0 and
+  `Parallel_clone_preflight_success` is the only new positive counter。
 
 Review:
 

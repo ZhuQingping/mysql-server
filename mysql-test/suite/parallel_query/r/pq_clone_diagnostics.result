@@ -18,6 +18,9 @@ WHERE VARIABLE_NAME = 'Parallel_clone_probe_unsupported');
 SET @clone_preflight_attempts_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_clone_preflight_attempts');
+SET @clone_preflight_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_preflight_success');
 SET @clone_preflight_unsupported_before = (
 SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_clone_preflight_unsupported');
@@ -61,11 +64,17 @@ clone_preflight_attempt_delta
 1
 SELECT (
 (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_clone_preflight_success') -
+@clone_preflight_success_before) >= 1 AS clone_preflight_success_delta;
+clone_preflight_success_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_clone_preflight_unsupported') -
-@clone_preflight_unsupported_before) >= 1
+@clone_preflight_unsupported_before)
 AS clone_preflight_unsupported_delta;
 clone_preflight_unsupported_delta
-1
+0
 SELECT (
 (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
 WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
