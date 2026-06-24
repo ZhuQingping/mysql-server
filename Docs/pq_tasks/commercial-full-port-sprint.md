@@ -1531,7 +1531,14 @@ Completion Report - Batch D1.6c-root:
   - new status
     `Parallel_worker_execute_iterator_smoke_result_bound_before_read` proves
     worker query expression / query block result was bound before the root
-    read path。
+    read path；
+  - after root `Read()` succeeds, the smoke creates a restricted worker-owned
+    `Item_field` list from `worker->m_open_ctx.worker_table->field[]` and sends
+    one ROW plus one FINISH frame through the bound `Query_result_mq`；
+  - the smoke immediately decodes the worker `MQueue_handle` ROW/FINISH frames
+    and exposes
+    `Parallel_worker_execute_iterator_smoke_result_row_sent` /
+    `Parallel_worker_execute_iterator_smoke_result_eof_sent`。
 - validation:
   - `git diff --check && cmake --build build-ninja --target mysqld -j 16`
     passed；
@@ -1540,13 +1547,32 @@ Completion Report - Batch D1.6c-root:
     --parallel=1 --vardir=/tmp/pq-worker-result-bound-read-vardir
     --tmpdir=/tmp/pq-worker-result-bound-read-tmpdir` passed, all 4 tests
     successful。
+  - later targeted validation:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+    pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats
+    pq_commercial_worker_result_adapter --parallel=1
+    --vardir=/tmp/pq-worker-result-send-vardir2
+    --tmpdir=/tmp/pq-worker-result-send-tmpdir2` passed, all 5 tests
+    successful。
 - review:
   - independent Review Agent accepted root iterator Read commit；
   - independent Review Agent accepted result-bound-before-root-read commit；
+  - independent Review Agent accepted worker-owned MQ ROW/FINISH smoke；
   - no Critical or Important findings remained。
 - commits:
   - `adbf2c51fe5 Add PQ worker root iterator read smoke`
   - `1b35cc9802d Bind PQ worker result before root read`
+  - `c660519d854 Send PQ worker root read result smoke`
+
+Next blocker:
+
+- Current worker query shell still lacks full Item clone / refix /
+  replace-base-item. The MQ ROW/FINISH smoke intentionally uses a restricted
+  worker-owned `Item_field` adapter and must not be treated as proof that
+  worker `Query_block::fields` are ready for `ExecuteIteratorQuery()`；
+- Next source batch should target worker-owned output item source and
+  QueryExpression root iterator ownership before calling
+  `ExecuteIteratorQuery()`。
 
 ### Batch E1 - Commercial MTR migration
 
