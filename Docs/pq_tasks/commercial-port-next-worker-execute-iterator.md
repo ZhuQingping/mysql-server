@@ -300,6 +300,10 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 - `ExecuteIteratorQuery()` 仍未调用；
 - 真实 worker unit/root iterator 接通需要后续单独设计核心 API 边界。
 
+下一阶段任务书：
+
+- [commercial-port-next-query-expression-root-iterator.md](commercial-port-next-query-expression-root-iterator.md)
+
 ## Worker PQ_BLOCK_SCAN Iterator Construction Smoke
 
 本次小步继续停留在 debug-only smoke 链路，但把阻断点从“readinfo 后直接
