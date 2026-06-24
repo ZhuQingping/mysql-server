@@ -79,6 +79,7 @@
   - Worker iterator construction smoke: `098d9af3aa5` Add PQ worker iterator construction smoke
   - Worker table owned iterator smoke: `ad69503c511` Use worker table for PQ iterator smoke
   - Worker iterator Init/End smoke: `3a1907cccf1` Add PQ worker iterator init smoke
+  - Worker iterator single-row Read smoke: `dea81de92e5` Add PQ worker iterator read smoke
   - Phase 9: `9c7e9aede42` Add PQ phase 9 test suite migration
   - V1 risk convergence: `69ed0ac66e7` Tighten PQ V1 risk boundaries
   - V2-2: `a123cdabe7c` Add PQ V2-2 handler context bridge
