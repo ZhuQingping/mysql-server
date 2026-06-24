@@ -215,6 +215,33 @@ class PQ_worker_execute_smoke_plan {
           .fetch_add(1, std::memory_order_relaxed);
       return false;
     }
+    m_owns_worker_thd = true;
+
+    return create_join(leader_join);
+  }
+
+  bool create_with_borrowed_worker_thd(PQ_worker_info *worker,
+                                       Gather_operator *gather,
+                                       JOIN *leader_join) {
+    m_worker = worker;
+    m_gather = gather;
+    m_worker_thd = worker != nullptr ? worker->m_worker_thd : nullptr;
+    if (worker == nullptr || gather == nullptr || m_worker_thd == nullptr ||
+        !m_worker_thd->pq_is_worker ||
+        m_worker_thd->pq_worker_info != worker ||
+        m_worker_thd->pq_leader != gather || m_worker_thd->lex == nullptr) {
+      pq_global_stats.worker_execute_iterator_threaded_smoke_blocked_setup
+          .fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+    m_owns_worker_thd = false;
+
+    return create_join(leader_join);
+  }
+
+ private:
+  bool create_join(JOIN *leader_join) {
+    if (m_worker_thd == nullptr) return false;
 
     m_worker_join = pq_make_join(m_worker_thd, leader_join);
     if (m_worker_join == nullptr) {
@@ -223,7 +250,8 @@ class PQ_worker_execute_smoke_plan {
       return false;
     }
 
-    if (!pq_make_join_readinfo_smoke_contract(m_worker_join, gather, nullptr)) {
+    if (!pq_make_join_readinfo_smoke_contract(m_worker_join, m_gather,
+                                              nullptr)) {
       pq_global_stats.worker_execute_iterator_smoke_blocked_readinfo.fetch_add(
           1, std::memory_order_relaxed);
       return false;
@@ -241,6 +269,7 @@ class PQ_worker_execute_smoke_plan {
     return true;
   }
 
+ public:
   bool bind_result() {
     auto *mq_result = new (m_worker_thd->mem_root)
         Query_result_mq(m_worker_join, m_worker->m_mq_handle, false);
@@ -444,7 +473,7 @@ class PQ_worker_execute_smoke_plan {
     if (close_worker_table && m_worker != nullptr) {
       pq_close_worker_table(&m_worker->m_open_ctx, table_error);
     }
-    if (m_worker != nullptr && m_worker_thd != nullptr) {
+    if (m_owns_worker_thd && m_worker != nullptr && m_worker_thd != nullptr) {
       pq_destroy_worker_thd(m_worker);
       m_worker_thd = nullptr;
     }
@@ -536,6 +565,7 @@ class PQ_worker_execute_smoke_plan {
   bool m_result_bound{false};
   bool m_constructed{false};
   bool m_unit_marked_execute_ready{false};
+  bool m_owns_worker_thd{false};
 };
 
 void *pq_worker_thread_entry(void *arg_ptr) {
@@ -2983,6 +3013,74 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
   return false;
 }
 
+bool Gather_operator::run_worker_execute_iterator_threaded_precheck_smoke(
+    THD *leader_thd, JOIN *join) {
+  pq_global_stats.worker_execute_iterator_threaded_smoke_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (leader_thd == nullptr || join == nullptr || m_dop != 1 ||
+      !pq_clone_contract_preflight(leader_thd, join)) {
+    pq_global_stats.worker_execute_iterator_threaded_smoke_blocked_setup
+        .fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+
+  QEP_TAB *const source_tab = pq_first_worker_smoke_qep_tab(join);
+  if (source_tab == nullptr || source_tab->table() == nullptr) {
+    pq_global_stats.worker_execute_iterator_threaded_smoke_blocked_setup
+        .fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+
+  bool initialized_here = false;
+  if (!is_initialized()) {
+    if (init()) {
+      pq_global_stats.worker_execute_iterator_threaded_smoke_blocked_setup
+          .fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+    initialized_here = true;
+  }
+
+  auto *worker = get_worker(0);
+  if (worker == nullptr || worker->m_task != PQ_worker_task::NOOP) {
+    pq_global_stats.worker_execute_iterator_threaded_smoke_blocked_setup
+        .fetch_add(1, std::memory_order_relaxed);
+    if (initialized_here) destroy();
+    return false;
+  }
+
+  uint execute_dop = 0;
+  PQ_Leader_context *execute_ctx = nullptr;
+  const int execute_error = source_tab->table()->file->pq_leader_scan_init(
+      leader_thd, &execute_ctx, PQ_leader_scan_mode::EXECUTE, 1, &execute_dop,
+      false);
+  if (execute_error != 0 || execute_ctx == nullptr) {
+    pq_global_stats.worker_execute_iterator_threaded_smoke_blocked_setup
+        .fetch_add(1, std::memory_order_relaxed);
+    if (initialized_here) destroy();
+    return false;
+  }
+
+  worker->m_open_ctx.leader_table = source_tab->table();
+  worker->m_open_ctx.leader_ctx = execute_ctx;
+  worker->m_open_ctx.actual_dop = execute_dop > 0 ? execute_dop : 1;
+  worker->m_open_ctx.mq_handle = worker->m_mq_handle;
+  worker->m_task_leader_join = join;
+  worker->m_task = PQ_worker_task::EXECUTE_ITERATOR_SMOKE;
+
+  bool failed = start_workers(leader_thd);
+  if (!failed) failed = wait_for_workers(leader_thd) != 0;
+
+  worker->m_task = PQ_worker_task::NOOP;
+  worker->m_task_leader_join = nullptr;
+  source_tab->table()->file->pq_leader_scan_end(execute_ctx);
+  leader_thd->store_globals();
+  if (initialized_here) destroy();
+
+  return failed;
+}
+
 class PQ_limited_mq_row_sink final : public PQ_row_sink {
  public:
   PQ_limited_mq_row_sink(Exchange_nosort *exchange, uint32 worker_id,
@@ -3229,6 +3327,137 @@ bool pq_run_query_result_mq_probe_task(PQ_worker_info *worker) {
   return failed;
 }
 
+bool pq_run_worker_execute_iterator_threaded_precheck_task(
+    PQ_worker_info *worker, Gather_operator *gather) {
+  if (worker == nullptr || gather == nullptr ||
+      worker->m_task_leader_join == nullptr ||
+      worker->m_open_ctx.leader_ctx == nullptr ||
+      worker->m_open_ctx.leader_table == nullptr ||
+      worker->m_mq_handle == nullptr || worker->m_worker_thd == nullptr) {
+    pq_global_stats.worker_execute_iterator_threaded_smoke_blocked_setup
+        .fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+
+  JOIN *const leader_join = worker->m_task_leader_join;
+  QEP_TAB *const source_tab = pq_first_worker_smoke_qep_tab(leader_join);
+  if (source_tab == nullptr || source_tab->table() == nullptr ||
+      source_tab->table_ref == nullptr ||
+      source_tab->table() != worker->m_open_ctx.leader_table) {
+    pq_global_stats.worker_execute_iterator_threaded_smoke_blocked_setup
+        .fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+
+  bool success = false;
+  bool close_worker_table = false;
+  bool qep_tab_attached = false;
+  PQ_qep_tab_table_attach_state qep_tab_attach;
+  PQ_worker_execute_smoke_plan worker_plan;
+
+  auto finish = [&]() {
+    if (qep_tab_attached) {
+      pq_detach_qep_tab_table_smoke(&qep_tab_attach);
+      qep_tab_attached = false;
+    }
+    worker_plan.cleanup(close_worker_table, !success);
+    worker->m_task_leader_join = nullptr;
+    if (success) {
+      pq_global_stats.worker_execute_iterator_threaded_smoke_success.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats.worker_execute_iterator_threaded_smoke_blocked_preflight
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+    return false;
+  };
+
+  if (!worker_plan.create_with_borrowed_worker_thd(worker, gather,
+                                                   leader_join)) {
+    return finish();
+  }
+
+  THD *const worker_thd = worker_plan.worker_thd();
+  JOIN *const worker_join = worker_plan.worker_join();
+  if (worker_thd == nullptr || worker_join == nullptr ||
+      pq_clone_table_ref_preflight(worker_thd, source_tab->table_ref) ||
+      pq_clone_position_scalar_preflight(source_tab) ||
+      pq_clone_qep_tab_scalar_preflight(worker_join, source_tab)) {
+    return finish();
+  }
+
+  if (pq_open_worker_table(&worker->m_open_ctx)) return finish();
+  close_worker_table = true;
+
+  if (pq_clone_table_scalar_preflight(worker_thd,
+                                      worker->m_open_ctx.worker_table,
+                                      source_tab->table()) ||
+      pq_bind_qep_tab_table_preflight(worker_join,
+                                      worker->m_open_ctx.worker_table,
+                                      source_tab->table()) ||
+      pq_attach_qep_tab_table_smoke(worker_join,
+                                    worker->m_open_ctx.worker_table,
+                                    source_tab->table(), &qep_tab_attach)) {
+    return finish();
+  }
+  qep_tab_attached = true;
+
+  QEP_TAB *const worker_qep_tab = qep_tab_attach.tab;
+  if (pq_clone_worker_base_table_fields_smoke(
+          worker_thd, worker_join->query_block, leader_join->query_block,
+          worker->m_open_ctx.worker_table, source_tab->table())) {
+    return finish();
+  }
+
+  if (source_tab->range_scan() != nullptr) {
+    (void)pq_clone_range_scan_preflight(worker_thd,
+                                        worker->m_open_ctx.worker_table,
+                                        source_tab);
+  }
+
+  AccessPath *const worker_block_scan = NewPQblockScanAccessPath(
+      worker_thd, worker->m_open_ctx.worker_table, gather, DIV_TAB,
+      worker_qep_tab,
+      /*need_rowid=*/false);
+  if (worker_block_scan == nullptr) return finish();
+
+  {
+    auto iterator =
+        CreateIteratorFromAccessPath(worker_thd, worker_block_scan, worker_join,
+                                     /*eligible_for_batch_mode=*/false);
+    if (iterator == nullptr) return finish();
+  }
+
+  if (!worker_plan.bind_result()) return finish();
+
+  bool query_expression_root_owned = false;
+  bool root_precheck_failed = false;
+  {
+    AccessPath *const saved_root_access_path = worker_join->root_access_path();
+    worker_join->set_root_access_path(worker_block_scan);
+    auto restore_root_access_path = create_scope_guard([&]() {
+      if (query_expression_root_owned &&
+          worker_join->query_expression() != nullptr) {
+        worker_join->query_expression()->clear_root_access_path();
+      }
+      worker_join->set_root_access_path(saved_root_access_path);
+    });
+
+    if (worker_join->query_expression() == nullptr ||
+        worker_join->query_expression()->create_pq_worker_root_iterator_smoke(
+            worker_thd, worker_join, /*eligible_for_batch_mode=*/false)) {
+      root_precheck_failed = true;
+    } else {
+      query_expression_root_owned = true;
+      success = worker_plan.prepare_execute_iterator_unit_state() &&
+                worker_plan.preflight_execute_iterator_query();
+    }
+  }
+  if (root_precheck_failed) return finish();
+
+  return finish();
+}
+
 bool pq_run_worker_thread_task(PQ_worker_info *worker,
                                Gather_operator *gather) {
   if (worker == nullptr) return true;
@@ -3240,6 +3469,9 @@ bool pq_run_worker_thread_task(PQ_worker_info *worker,
       return pq_run_callback_limited_producer_task(worker, gather);
     case PQ_worker_task::QUERY_RESULT_MQ_PROBE:
       return pq_run_query_result_mq_probe_task(worker);
+    case PQ_worker_task::EXECUTE_ITERATOR_SMOKE:
+      return pq_run_worker_execute_iterator_threaded_precheck_task(worker,
+                                                                  gather);
   }
   return true;
 }

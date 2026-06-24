@@ -380,6 +380,15 @@ bool PQTableScanIterator::Init() {
       PrintError(HA_ERR_OUT_OF_MEM);
       return true;
     }
+    DBUG_EXECUTE_IF("pq_worker_execute_iterator_threaded_precheck_smoke", {
+      Gather_operator worker_execute_threaded_smoke(1);
+      if (worker_execute_threaded_smoke
+              .run_worker_execute_iterator_threaded_precheck_smoke(thd(),
+                                                                   m_join)) {
+        PrintError(HA_ERR_OUT_OF_MEM);
+        return true;
+      }
+    });
 
     if (!read_shadow_path && !threaded_read_shadow_path) {
       PQ_Leader_context *partial_execute_ctx = nullptr;

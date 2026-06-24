@@ -165,7 +165,8 @@ void pq_set_execution_state(THD *thd, PQ_execution_state state);
 enum class PQ_worker_task : uint {
   NOOP = 0,
   CALLBACK_LIMITED_PRODUCER,
-  QUERY_RESULT_MQ_PROBE
+  QUERY_RESULT_MQ_PROBE,
+  EXECUTE_ITERATOR_SMOKE
 };
 
 // ---------------------------------------------------------------------------
@@ -514,6 +515,11 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_execute_drain{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_execute{0};
   std::atomic<uint64> worker_execute_iterator_smoke_success{0};
+  std::atomic<uint64> worker_execute_iterator_threaded_smoke_attempts{0};
+  std::atomic<uint64> worker_execute_iterator_threaded_smoke_success{0};
+  std::atomic<uint64> worker_execute_iterator_threaded_smoke_blocked_setup{0};
+  std::atomic<uint64> worker_execute_iterator_threaded_smoke_blocked_preflight{
+      0};
   std::atomic<uint64> exchange_smoke_rows{0};      ///< Synthetic MQ rows read
   std::atomic<uint64> exchange_smoke_finishes{0};  ///< Synthetic FINISH tokens
   std::atomic<uint64> exchange_row_image_smoke_rows{0};  ///< Row-image smoke rows
@@ -1034,6 +1040,14 @@ struct PQ_global_stats {
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_success.store(0,
                                                 std::memory_order_relaxed);
+    worker_execute_iterator_threaded_smoke_attempts.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_threaded_smoke_success.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_threaded_smoke_blocked_setup.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_threaded_smoke_blocked_preflight.store(
+        0, std::memory_order_relaxed);
     exchange_smoke_rows.store(0, std::memory_order_relaxed);
     exchange_smoke_finishes.store(0, std::memory_order_relaxed);
     exchange_row_image_smoke_rows.store(0, std::memory_order_relaxed);
@@ -1266,6 +1280,7 @@ struct PQ_worker_info {
   bool m_thread_started{false};        ///< Thread was successfully created
   bool m_thread_joined{false};         ///< Thread has been joined
   PQ_worker_task m_task{PQ_worker_task::NOOP};  ///< Thread entry task
+  JOIN *m_task_leader_join{nullptr};   ///< Borrowed leader JOIN for smoke task
   uint32 m_task_max_rows{0};          ///< Task-specific callback row limit
   std::atomic<uint32> m_task_rows_sent{0};  ///< Rows enqueued by worker task
   bool m_task_force_error{false};     ///< Debug task injects worker ERROR
@@ -1858,6 +1873,20 @@ class Gather_operator {
   */
   bool run_worker_execute_iterator_smoke(THD *leader_thd, JOIN *join,
                                          PQ_Leader_context *leader_ctx);
+
+  /**
+    Run a worker-thread ExecuteIteratorQuery precheck smoke.
+
+    This starts one debug/smoke worker thread and moves the worker execute
+    plan/root/result/unit preflight into that thread using the thread-owned
+    worker THD. It does not call ExecuteIteratorQuery(), send user-visible
+    rows, or replace the synchronous guarded smoke.
+
+    @retval false  Probe completed and recorded a success/blocker counter
+    @retval true   Local fatal error such as thread start failure
+  */
+  bool run_worker_execute_iterator_threaded_precheck_smoke(THD *leader_thd,
+                                                           JOIN *join);
 
   /**
     Run a limited V2-8J callback multi-row producer smoke pass.
