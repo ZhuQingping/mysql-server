@@ -2340,7 +2340,7 @@ Notes:
 
 #### Batch D1.6q - PQWR multi-field NULL materialization
 
-Status: completed, reviewed, ready to commit.
+Status: completed, reviewed, committed, and pushed.
 
 目标：
 
@@ -2385,5 +2385,6 @@ Review:
 
 Notes:
 
+- commit: `8b7e3221537` Support multi-field PQWR materialization；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
