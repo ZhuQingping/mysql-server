@@ -643,14 +643,13 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 full-scan smoke 需要且当前分支可安全验证的 scalar subset：
 
 - 在 `TABLE` 上新增 `pq_copy(THD*, void*, TABLE*)` 成员声明；
-- 复制 `possible_quick_keys`、`covering_keys`、`key_read`、`null_row`、
-  `const_table`、nullable 标记、handler pushed ICP keyno、handler
-  `stats.records`；
+- 复制 `possible_quick_keys`、`covering_keys`、`key_read`、`const_table`、
+  nullable 标记、handler `stats.records`；
 - 新增 `pq_clone_table_scalar_preflight()`，在 worker table 打开后验证
   worker `TABLE` / handler / record buffer 与 leader 不共享；
 - 当前不复制 partition metadata 和 ICP condition deep clone；如果 leader 或
-  worker table 已存在 `part_info` / `pushed_idx_cond`，本小步返回
-  unsupported。
+  worker table 已存在 `part_info` / `pushed_idx_cond`，或者 leader row 已是
+  null-extended row，本小步返回 unsupported。
 
 新增诊断：
 
