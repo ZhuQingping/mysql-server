@@ -1,0 +1,147 @@
+CREATE TABLE pq_worker_execute_threaded_call_t (
+id INT PRIMARY KEY,
+v INT
+) ENGINE=InnoDB;
+INSERT INTO pq_worker_execute_threaded_call_t VALUES (1,10),(2,20),(3,30);
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET @threaded_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_attempts');
+SET @threaded_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_success');
+SET @threaded_blocked_setup_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_blocked_setup');
+SET @threaded_blocked_preflight_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_blocked_preflight');
+SET @threaded_drain_errors_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_drain_errors');
+SET @threaded_drained_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_drained_rows');
+SET @threaded_drained_finishes_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_drained_finishes');
+SET @execute_query_called_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_xiq_called');
+SET @execute_query_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_xiq_success');
+SET @execute_query_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_xiq_rows');
+SET @execute_query_finishes_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_xiq_finishes');
+SET @blocked_drain_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_blocked_drain');
+SET @old_debug=@@session.debug;
+SET SESSION debug="+d,pq_worker_execute_iterator_threaded_precheck_smoke";
+SET SESSION debug="+d,pq_worker_execute_iterator_threaded_call_smoke";
+SELECT id, v FROM pq_worker_execute_threaded_call_t WHERE v >= 0;
+id	v
+1	10
+2	20
+3	30
+SET SESSION debug=@old_debug;
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_attempts') -
+@threaded_attempts_before) >= 1 AS threaded_attempts_delta;
+threaded_attempts_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_success') -
+@threaded_success_before) >= 1 AS threaded_success_delta;
+threaded_success_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_blocked_setup') -
+@threaded_blocked_setup_before) = 0 AS threaded_blocked_setup_delta_is_0;
+threaded_blocked_setup_delta_is_0
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_blocked_preflight') -
+@threaded_blocked_preflight_before) = 0
+AS threaded_blocked_preflight_delta_is_0;
+threaded_blocked_preflight_delta_is_0
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_drain_errors') -
+@threaded_drain_errors_before) = 0 AS threaded_drain_errors_delta_is_0;
+threaded_drain_errors_delta_is_0
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_drained_rows') -
+@threaded_drained_rows_before) = 3 AS threaded_drained_rows_delta_is_3;
+threaded_drained_rows_delta_is_3
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_thread_smoke_drained_finishes') -
+@threaded_drained_finishes_before) = 1
+AS threaded_drained_finishes_delta_is_1;
+threaded_drained_finishes_delta_is_1
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_xiq_called') -
+@execute_query_called_before) >= 1 AS execute_query_called_delta;
+execute_query_called_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_xiq_success') -
+@execute_query_success_before) >= 1 AS execute_query_success_delta;
+execute_query_success_delta
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_execute_iterator_smoke_xiq_rows') -
+@execute_query_rows_before) = 3 AS execute_query_rows_delta_is_3;
+execute_query_rows_delta_is_3
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_smoke_xiq_finishes') -
+@execute_query_finishes_before) = 1 AS execute_query_finishes_delta_is_1;
+execute_query_finishes_delta_is_1
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME =
+'Parallel_worker_execute_iterator_smoke_blocked_drain') -
+@blocked_drain_before) = 0 AS execute_query_blocked_drain_delta_is_0;
+execute_query_blocked_drain_delta_is_0
+1
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+DROP TABLE pq_worker_execute_threaded_call_t;

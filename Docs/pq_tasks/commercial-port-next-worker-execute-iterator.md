@@ -244,6 +244,57 @@ readinfo 构建。
 - 下一步必须推进 worker plan / ExecuteIterator 主路径的新事实，不再重复
   synthetic `Query_result_mq`、typed pull bridge 或 readinfo smoke。
 
+## Threaded ExecuteIteratorQuery Call Smoke
+
+Status: coding/validation completed; Code/Docs/Test Review accepted.
+
+本轮切口承接 threaded precheck：在保持默认路径不变的前提下，新增
+DBUG-only `pq_worker_execute_iterator_threaded_call_smoke`。它只在
+`pq_worker_execute_iterator_threaded_precheck_smoke` 同时启用时生效。
+
+目标：
+
+- worker 线程内在 plan/root/result/unit preflight 全部通过后，真实调用一次
+  `Query_expression::ExecuteIteratorQuery(worker_thd)`；
+- worker result 仍绑定到 `Query_result_mq`，不返回给用户可见结果；
+- leader 在线程 wait 前 drain `PQWR` ROW/FINISH frame，避免 worker 在 MQ
+  send 上阻塞；
+- 默认查询路径、visible PQ eligibility、handler/InnoDB 主路径都不改变。
+
+实现边界：
+
+- 新增 file-local `PQWR` drain helper，仅消费 `Query_result_mq` frame，不走
+  `Exchange_nosort`，避免和 record-image `PQRM` 协议混用；
+- 新增 `PQ_worker_task::EXECUTE_ITERATOR_CALL_SMOKE`，与现有
+  `EXECUTE_ITERATOR_SMOKE` 分离；
+- 复用现有 `Parallel_worker_execute_iterator_smoke_xiq_*` 计数，并新增
+  threaded drain 计数：
+  - `Parallel_worker_execute_iterator_thread_smoke_drained_rows`
+  - `Parallel_worker_execute_iterator_thread_smoke_drained_finishes`
+  - `Parallel_worker_execute_iterator_thread_smoke_drain_errors`
+- 新增 MTR `pq_worker_execute_threaded_call_smoke`，断言 worker-side
+  `ExecuteIteratorQuery()` 被调用、成功、发送 3 行和 1 个 FINISH，leader
+  drain 成功且无 drain blocker。
+
+开发阶段验证范围：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_threaded_call_smoke \
+  pq_worker_execute_threaded_precheck_smoke \
+  pq_worker_execute_iterator_smoke \
+  pq_commercial_worker_result \
+  pq_commercial_worker_result_adapter \
+  pq_stats \
+  --parallel=1 --vardir=/tmp/pq-threaded-call-target-vardir \
+  --tmpdir=/tmp/pq-threaded-call-target-tmpdir
+```
+
+完整 `parallel_query` suite 继续留到阶段收尾，不在本开发小步中运行。
+
 ## Worker JOIN Root AccessPath Smoke
 
 本次小步在已完成的 worker QEP_TAB/TABLE attach 基础上继续推进 root

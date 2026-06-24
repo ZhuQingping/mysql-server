@@ -10537,6 +10537,15 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_threaded_smoke_blocked_preflight,
     worker_execute_iterator_threaded_smoke_blocked_preflight)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_threaded_smoke_drained_rows,
+    worker_execute_iterator_threaded_smoke_drained_rows)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_threaded_smoke_drained_finishes,
+    worker_execute_iterator_threaded_smoke_drained_finishes)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_threaded_smoke_drain_errors,
+    worker_execute_iterator_threaded_smoke_drain_errors)
 
 #undef DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC
 
@@ -12985,6 +12994,15 @@ SHOW_VAR status_vars[] = {
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_thread_smoke_blocked_setup",
      (char *)&show_pq_worker_execute_iterator_threaded_smoke_blocked_setup,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_thread_smoke_drain_errors",
+     (char *)&show_pq_worker_execute_iterator_threaded_smoke_drain_errors,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_thread_smoke_drained_finishes",
+     (char *)&show_pq_worker_execute_iterator_threaded_smoke_drained_finishes,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_thread_smoke_drained_rows",
+     (char *)&show_pq_worker_execute_iterator_threaded_smoke_drained_rows,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_thread_smoke_success",
      (char *)&show_pq_worker_execute_iterator_threaded_smoke_success,
