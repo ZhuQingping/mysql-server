@@ -116,3 +116,92 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 后续任何代码迁移必须保持这个基线，除非明确记录新的商用 positive result 替换
 旧 fallback/boundary result。
+
+## W1 合同确认报告
+
+Status: completed.
+
+### 当前 typed API 是主合同
+
+当前仓库同时保留 typed API 和商用兼容 `void *` API，但安全主路径是 typed
+contract：
+
+- `handler::pq_leader_scan_init(THD*, PQ_Leader_context**, ...)` 创建 leader
+  context；
+- `handler::pq_worker_scan_init(PQ_Worker_open_context*, PQ_Worker_context**)`
+  创建 worker context；
+- `handler::pq_worker_scan_next(PQ_Worker_context*, uchar*, bool *eof)` 是
+  typed pull-row 入口；
+- `handler::pq_worker_scan_callback_produce(PQ_Worker_context*, PQ_row_sink*)`
+  是当前已经验证的 callback row-stream producer；
+- `pq_worker_scan_end(PQ_Worker_context*)` 和
+  `pq_leader_scan_end(PQ_Leader_context*)` 是 typed cleanup 边界。
+
+商用兼容 wrappers `ha_pq_init()` / `ha_pq_next()` / `ha_pq_end()` 仍存在，
+但当前 InnoDB `pq_worker_scan_next(void*, uchar*)` 直接返回 unsupported，不是
+当前可依赖的安全主路径。
+
+### 当前 InnoDB owner / read-view / cleanup
+
+- `pq_leader_scan_init()` 创建 `InnoDB_pq_leader_ctx` 和 SQL wrapper；
+  handler 内部保存 leader ctx，`PROBE` 是 fallback-safe，`EXECUTE` 是
+  no-fallback commit point；
+- leader init 使用 `Parallel_reader::available_threads()` 获取线程预算；
+  失败路径和 leader end 必须释放预算；
+- leader trx owns read view，worker 不能创建独立 read view，也不能 mutate
+  leader trx；
+- `pq_leader_scan_end()` 先删除 worker contexts，再释放线程预算/read view，
+  最后删除 leader ctx/wrapper；
+- `pq_worker_scan_init()` 要求独立 worker TABLE/handler/record buffer；
+  worker end 删除 SQL wrapper，并由 wrapper 析构释放底层
+  `InnoDB_pq_worker_ctx`。
+
+### 当前可复用边界
+
+可以复用当前 callback producer，而不是绕过它：
+
+- `InnoDB_pq_scan_ctx::store_mysql_record()` 统一负责把 InnoDB record 转为
+  MySQL record；
+- `produce_callback_rows_for_range()` 通过 `Parallel_reader::add_scan()` /
+  `run()` 使用 leader trx/read-view；
+- `PQ_row_sink` 要求 SQL 层 deep-copy record image；
+- leader / worker error、KILL、abort、MQ ERROR token priority 已有测试护栏。
+
+### 商用调用链
+
+商用仓库的正路径是：
+
+1. worker `PQblockScanIterator::Init()` 调
+   `table()->file->pq_worker_scan_init(keyno, m_pq_ctx)`；
+2. worker `PQblockScanIterator::Read()` 调
+   `table()->file->ha_pq_next(m_record, m_pq_ctx)`；
+3. `handler::ha_pq_next()` 包 IO wait wrapper 后调用
+   `pq_worker_scan_next(scan_ctx, buf)`；
+4. InnoDB `pq_worker_scan_next(void*, uchar*)` 从 `Parallel_leader` dispatch
+   `PQ_Ctx_Base`，再调 `ctx->read_record(buf, m_prebuilt)`；
+5. `PQ_Ctx::read_record()` 用商用自有 cursor / mtr / visibility path 读页并
+   materialize MySQL record。
+
+### 不能整块拷贝商用 InnoDB 的原因
+
+- 商用 `void *scan_ctx == Parallel_leader*` 假设与当前 typed
+  `PQ_Leader_context` / `PQ_Worker_context` owner 不一致；
+- 商用 `PQ_Ctx::read_record()` 低层 cursor path 会绕过当前 8.0.46 已验证的
+  `Parallel_reader` thread budget、read-view cleanup、callback materialization
+  边界；
+- 当前 `row0pread_pq.*` 已明确 worker-local pull-row path 不能在 snapshot
+  合同未证明前接入主路径；
+- 直接打开商用 pull-row 会绕过当前 KILL / ERROR / row sink deep-copy 护栏。
+
+### W2 决策
+
+W2 只允许窄桥接：
+
+- 保持 typed API 为主；
+- 不启用商用低层 `PQ_Ctx::read_record()` cursor path；
+- 不让 `void *` API 成为真实 row source；
+- 如需增加 bridge，只能把当前已验证的 callback producer /
+  `PQ_row_sink` materialization 封装成可逐步替换 worker pull 的兼容层；
+- 如果实现需要共享 leader `row_prebuilt_t`、绕过 typed worker context、绕过
+  `Parallel_reader::available_threads()/release_threads()` 或绕过 leader
+  read-view close-on-end，则停止编码。
