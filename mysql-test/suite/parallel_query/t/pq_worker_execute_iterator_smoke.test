@@ -175,6 +175,14 @@ SET @result_bound_before_read_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
         'Parallel_worker_execute_iterator_smoke_result_bound_before_read');
+SET @blocked_output_fields_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_blocked_output_fields');
+SET @output_fields_cloned_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_output_fields_cloned');
 SET @blocked_result_send_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -391,6 +399,16 @@ SELECT
           'Parallel_worker_execute_iterator_smoke_result_bound_before_read') -
      @result_bound_before_read_before) >= 1
        AS worker_execute_result_bound_before_root_read,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_blocked_output_fields') -
+     @blocked_output_fields_before) = 0
+       AS worker_execute_not_blocked_output_fields,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_output_fields_cloned') -
+     @output_fields_cloned_before) >= 1
+       AS worker_execute_output_fields_cloned,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_blocked_result_send') -

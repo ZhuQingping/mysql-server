@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "sql/handler.h"
+#include "sql/item.h"
 #include "sql/parallel_query/sql_parallel.h"
 #include "sql/range_optimizer/range_optimizer.h"
 #include "sql/sql_class.h"
@@ -775,6 +776,72 @@ bool pq_clone_range_scan_preflight(THD *worker_thd, TABLE *worker_table,
   pq_global_stats.worker_range_scan_clone_success.fetch_add(
       1, std::memory_order_relaxed);
   return false;
+}
+
+bool pq_clone_worker_base_table_fields_smoke(THD *worker_thd,
+                                             Query_block *worker_query_block,
+                                             Query_block *leader_query_block,
+                                             TABLE *worker_table,
+                                             TABLE *leader_table) {
+  if (worker_thd == nullptr || worker_query_block == nullptr ||
+      leader_query_block == nullptr || worker_table == nullptr ||
+      leader_table == nullptr || worker_table->field == nullptr ||
+      worker_table->s == nullptr || leader_table->s == nullptr ||
+      worker_query_block->join == nullptr || leader_query_block->fields.empty() ||
+      !worker_query_block->fields.empty()) {
+    return true;
+  }
+
+  const size_t visible_count = CountVisibleFields(leader_query_block->fields);
+  if (visible_count == 0 || visible_count != leader_query_block->fields.size()) {
+    return true;
+  }
+
+  std::vector<Field *> worker_fields;
+  worker_fields.reserve(visible_count);
+  for (Item *leader_item : leader_query_block->fields) {
+    if (leader_item == nullptr || leader_item->hidden ||
+        leader_item->type() != Item::FIELD_ITEM) {
+      return true;
+    }
+
+    auto *leader_field_item = down_cast<Item_field *>(leader_item);
+    Field *const leader_field = leader_field_item->field;
+    if (leader_field == nullptr || leader_field->table != leader_table ||
+        leader_field->field_index() == NO_FIELD_INDEX ||
+        leader_field->field_index() >= worker_table->s->fields) {
+      return true;
+    }
+
+    Field *const worker_field = worker_table->field[leader_field->field_index()];
+    if (worker_field == nullptr || worker_field->table != worker_table) {
+      return true;
+    }
+    worker_fields.push_back(worker_field);
+  }
+
+  if (worker_query_block->base_ref_items.is_null()) {
+    Item **array = static_cast<Item **>(
+        worker_thd->mem_root->Alloc(sizeof(Item *) * visible_count));
+    if (array == nullptr) return true;
+    worker_query_block->base_ref_items =
+        Ref_item_array(array, visible_count);
+  } else if (worker_query_block->base_ref_items.size() < visible_count) {
+    return true;
+  }
+  worker_query_block->join->ref_items[REF_SLICE_ACTIVE] =
+      worker_query_block->base_ref_items;
+
+  size_t index = 0;
+  for (Field *worker_field : worker_fields) {
+    bitmap_set_bit(worker_table->read_set, worker_field->field_index());
+    auto *worker_item = new (worker_thd->mem_root) Item_field(worker_field);
+    if (worker_item == nullptr) return true;
+    worker_query_block->fields.push_back(worker_item);
+    worker_query_block->base_ref_items[index++] = worker_item;
+  }
+
+  return worker_query_block->fields.size() != visible_count;
 }
 
 namespace {

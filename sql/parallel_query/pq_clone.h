@@ -78,6 +78,12 @@ bool pq_clone_qep_tab_scalar_preflight(JOIN *worker_join,
 bool pq_clone_range_scan_preflight(THD *worker_thd, TABLE *worker_table,
                                    QEP_TAB *leader_tab);
 
+bool pq_clone_worker_base_table_fields_smoke(THD *worker_thd,
+                                             Query_block *worker_query_block,
+                                             Query_block *leader_query_block,
+                                             TABLE *worker_table,
+                                             TABLE *leader_table);
+
 /**
   Run the M11-A clone contract preflight.
 

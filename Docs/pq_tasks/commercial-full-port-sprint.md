@@ -1564,15 +1564,71 @@ Completion Report - Batch D1.6c-root:
   - `1b35cc9802d Bind PQ worker result before root read`
   - `c660519d854 Send PQ worker root read result smoke`
 
+#### Batch D1.6d - worker Query_block output Item_field smoke
+
+Status: completed locally；Code/Docs/Test Review accepted。
+
+目标：
+
+- 将 D1.6c 的局部临时 `Item_field` result adapter 推进到 worker
+  `Query_block::fields` / `base_ref_items`；
+- 只支持单表、纯 visible base-table `Item_field` SELECT list；
+- 仍不搬完整 `Item::pq_clone()` / `refix_fields()`，不触碰
+  QueryExpression root ownership，也不调用 `ExecuteIteratorQuery()`。
+
+Completion Report - Batch D1.6d:
+
+- changed files:
+  - `sql/parallel_query/pq_clone.h`
+  - `sql/parallel_query/pq_clone.cc`
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_worker_execute_iterator_smoke.test`
+  - `mysql-test/suite/parallel_query/r/pq_worker_execute_iterator_smoke.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+- implementation:
+  - added `pq_clone_worker_base_table_fields_smoke()`；
+  - the helper first validates the full SELECT list, then populates worker
+    `Query_block::fields` and `base_ref_items` with worker-table-owned
+    `Item_field` objects；
+  - the helper rejects empty output, hidden items, non-`FIELD_ITEM` expressions,
+    leader-table mismatch, invalid field indexes, and worker-field table
+    mismatch before mutating the worker query block；
+  - `send_current_row_result()` now sends through `worker_join->fields` and
+    verifies that pointer is exactly `&worker_join->query_block->fields`；
+  - this avoids the optimized-only `Query_expression::get_field_list()` API
+    while still proving the worker result path reads worker query-block output
+    fields；
+  - added status counters
+    `Parallel_worker_execute_iterator_smoke_blocked_output_fields` and
+    `Parallel_worker_execute_iterator_smoke_output_fields_cloned`。
+- validation:
+  - `git diff --check && cmake --build build-ninja --target mysqld -j 16`
+    passed；
+  - first MTR attempt exposed an assertion in
+    `Query_expression::get_field_list()` because the worker shell is not
+    optimized；the send path was corrected to use `worker_join->fields`；
+  - final targeted validation passed:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+    pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats
+    pq_commercial_worker_result_adapter --parallel=1
+    --vardir=/tmp/pq-worker-output-fields-vardir5
+    --tmpdir=/tmp/pq-worker-output-fields-tmpdir5`，all 5 tests successful。
+- review:
+  - independent Code/Docs/Test Review accepted；
+  - no Critical or Important findings；
+  - minor follow-up: add a future negative smoke for expression/hidden SELECT
+    output rejected by `blocked_output_fields`。
+
 Next blocker:
 
-- Current worker query shell still lacks full Item clone / refix /
-  replace-base-item. The MQ ROW/FINISH smoke intentionally uses a restricted
-  worker-owned `Item_field` adapter and must not be treated as proof that
-  worker `Query_block::fields` are ready for `ExecuteIteratorQuery()`；
-- Next source batch should target worker-owned output item source and
-  QueryExpression root iterator ownership before calling
-  `ExecuteIteratorQuery()`。
+- QueryExpression root iterator ownership is still not migrated. The current
+  worker root iterator is still created locally and destroyed before
+  `ExecuteIteratorQuery()`；
+- Next source batch should add a narrow `Query_expression` root iterator
+  ownership wrapper and migrate the smoke to use QueryExpression-owned root
+  iterator before attempting full `ExecuteIteratorQuery()`。
 
 ### Batch E1 - Commercial MTR migration
 
