@@ -4,7 +4,7 @@ Last synced: 2026-06-24
 
 ## 状态
 
-Design taskbook created. No source-code change in this step.
+Root iterator local Init/destructor-cleanup coding in progress.
 
 ## 背景
 
@@ -75,19 +75,22 @@ Design taskbook created. No source-code change in this step.
   `m_root_iterator`”，而当前 worker smoke 还没有安全设置 unit root path；
 - 本阶段若只为 smoke 写入 `m_root_iterator`，会制造一个看似可执行但 cleanup
   ownership 不完整的 worker unit；
-- 当前最需要证明的是 root iterator 的 `Init/Read/End` 合同，而不是
+- 当前最需要证明的是 root iterator 的 `Init()` / cleanup 合同，而不是
   `Query_expression` ownership。
 
 推荐下一小步：新增一个 smoke-local root iterator contract helper，只接收显式
 `THD* + AccessPath* + JOIN*`，构造局部 iterator，并在同一作用域内完成
-`Init()` / limited `Read()` / `End()` 探测。
+`Init()` 探测，依赖局部 `RowIterator` 析构完成具体 iterator cleanup。`Read()`
+作为后续独立切口处理，避免本阶段新 root iterator 和现有手写
+`PQblockScanIterator` Read smoke 竞争同一个 worker scan context。
 
 ## 下一阶段任务：Root Iterator Local Contract Helper
 
 ### Goal
 
 把当前“root AccessPath 可构造 iterator”的 smoke 推进到“root iterator
-生命周期可局部执行”的 smoke，但仍不写入 `Query_expression`。
+可局部 `Init()` 并由作用域析构清理”的 smoke，但仍不写入
+`Query_expression`。
 
 ### Allowed Files
 
@@ -118,16 +121,15 @@ Design taskbook created. No source-code change in this step.
 - helper 不得调用 `force_create_iterators()`；
 - helper 不得调用 `ExecuteIteratorQuery()`；
 - root path attach 后必须先恢复，再 cleanup worker plan；
-- iterator 必须在 worker QEP_TAB/TABLE detach 前析构或显式 `End()`；
+- iterator 必须在 worker QEP_TAB/TABLE detach 前析构；
+- 本阶段不调用 root iterator `Read()`，避免重复消费当前 worker scan context；
 - 失败路径必须只增加 blocked counter 并 fail-closed；
 - 默认用户可见 PQ gate 不变。
 
 ### Suggested Counters
 
 - `Parallel_worker_execute_iterator_smoke_root_init_success`
-- `Parallel_worker_execute_iterator_smoke_root_read_success`
 - `Parallel_worker_execute_iterator_smoke_blocked_root_init`
-- `Parallel_worker_execute_iterator_smoke_blocked_root_read`
 
 公开 status 名必须控制在 PFS 可见长度内。若名称接近 64 字符，应采用短名，
 例如 `Parallel_worker_execute_iterator_smoke_root_read_ok`。
@@ -149,9 +151,9 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
 - 是否绕过了本任务的 forbidden files；
 - 是否把 local smoke iterator 写进 `Query_expression`；
 - root path / QEP_TAB / TABLE / result 绑定恢复顺序是否安全；
-- `End()` / destructor 是否早于 worker TABLE close 和 worker THD destroy；
-- status/MTR 是否证明 root iterator local lifecycle，而不是重复上一阶段
-  construction smoke。
+- destructor 是否早于 worker TABLE close 和 worker THD destroy；
+- status/MTR 是否证明 root iterator local `Init()` / destructor cleanup
+  lifecycle，而不是重复上一阶段 construction smoke。
 
 ## 后续商用 wrapper 条件
 
@@ -164,3 +166,33 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   /EOF/error；
 - worker `JOIN` ownership 和 `join_free()` 语义已明确；
 - review agent 接受触碰 `sql/sql_lex.h` / `sql/sql_union.cc` 的设计。
+
+## 实现记录
+
+本阶段选择更窄的 Init/destructor-cleanup 切口：
+
+- 在现有 worker JOIN root attach scope 内复用 factory-created root iterator；
+- root Init smoke 放在既有手写 `PQblockScanIterator` single-row Read smoke
+  之后；
+- `CreateIteratorFromAccessPath()` 成功后调用 root iterator `Init()`；
+- `Init()` 成功后在同一 scope 内销毁 iterator；
+- 不调用 root iterator `Read()`；
+- 不写 `Query_expression::m_root_access_path`；
+- 不写 `Query_expression::m_root_iterator`；
+- 不调用 `force_create_iterators()`；
+- 不调用 `ExecuteIteratorQuery()`。
+
+新增诊断：
+
+- `Parallel_worker_execute_iterator_smoke_blocked_root_init`
+- `Parallel_worker_execute_iterator_smoke_root_init_ok`
+
+本阶段有意保留现有手写 `PQblockScanIterator` single-row Read smoke，避免
+factory-created root iterator 和手写 iterator 在同一小步内都读取同一个 worker
+scan context。`RowIterator` 基类没有 `End()` 接口；具体
+`PQblockScanIterator` 的 `End()` 由析构函数调用。
+
+MTR 首轮验证发现：若 root iterator `Init()` 放在手写 Read smoke 之前，会占用
+同一个 worker scan context 并导致后续手写 Read/result binding 断言失败。因此
+本阶段固定顺序为：先完成既有 hand-written iterator Read/End，再验证 factory
+root iterator Init/destructor cleanup。

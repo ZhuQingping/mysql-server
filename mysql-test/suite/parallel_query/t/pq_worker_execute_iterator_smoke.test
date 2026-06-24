@@ -131,6 +131,14 @@ SET @root_iterator_constructed_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
         'Parallel_worker_execute_iterator_smoke_root_iterator_ok');
+SET @blocked_root_init_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_blocked_root_init');
+SET @root_init_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_root_init_ok');
 SET @blocked_init_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -314,6 +322,14 @@ SELECT
           'Parallel_worker_execute_iterator_smoke_root_iterator_ok') -
      @root_iterator_constructed_before) >= 1
        AS worker_execute_root_iterator_constructed,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_blocked_root_init') -
+     @blocked_root_init_before) = 0 AS worker_execute_not_blocked_root_init,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_root_init_ok') -
+     @root_init_success_before) >= 1 AS worker_execute_root_init_success,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_blocked_init') -
