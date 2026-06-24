@@ -10424,6 +10424,27 @@ DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_root_read_success,
     worker_execute_iterator_smoke_root_read_success)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_preflight_attempts,
+    worker_execute_iterator_smoke_execute_preflight_attempts)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_preflight_thd_ready,
+    worker_execute_iterator_smoke_execute_preflight_thd_ready)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_preflight_root_ready,
+    worker_execute_iterator_smoke_execute_preflight_root_ready)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_preflight_result_ready,
+    worker_execute_iterator_smoke_execute_preflight_result_ready)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_preflight_fields_ready,
+    worker_execute_iterator_smoke_execute_preflight_fields_ready)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_preflight_unit_ready,
+    worker_execute_iterator_smoke_execute_preflight_unit_ready)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
+    worker_execute_iterator_smoke_execute_preflight_blocked_unit,
+    worker_execute_iterator_smoke_execute_preflight_blocked_unit)
+DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
     worker_execute_iterator_smoke_blocked_init,
     worker_execute_iterator_smoke_blocked_init)
 DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(
@@ -12855,6 +12876,27 @@ SHOW_VAR status_vars[] = {
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_root_read_ok",
      (char *)&show_pq_worker_execute_iterator_smoke_root_read_success,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xpf_attempts",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_preflight_attempts,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xpf_thd_ready",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_preflight_thd_ready,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xpf_root_ready",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_preflight_root_ready,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xpf_result_ready",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_preflight_result_ready,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xpf_fields_ready",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_preflight_fields_ready,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xpf_unit_ready",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_preflight_unit_ready,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_execute_iterator_smoke_xpf_blocked_unit",
+     (char *)&show_pq_worker_execute_iterator_smoke_execute_preflight_blocked_unit,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_success",
      (char *)&show_pq_worker_execute_iterator_smoke_success, SHOW_FUNC,

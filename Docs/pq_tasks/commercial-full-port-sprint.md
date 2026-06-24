@@ -1624,8 +1624,6 @@ Completion Report - Batch D1.6d:
   - minor follow-up: add a future negative smoke for expression/hidden SELECT
     output rejected by `blocked_output_fields`。
 
-Next blocker:
-
 #### Batch D1.6e - QueryExpression-owned worker root iterator smoke
 
 Status: completed locally；Code/Docs/Test Review accepted with minor notes。
@@ -1690,6 +1688,68 @@ Next blocker:
 - next source batch should define and verify the smallest
   `ExecuteIteratorQuery()` preflight contract: worker result metadata/data/EOF
   ownership, `join_free()` cleanup ordering, and error/KILL propagation。
+
+#### Batch D1.6f - ExecuteIteratorQuery preflight counters
+
+Status: completed locally；pending independent review。
+
+目标：
+
+- 在不调用 `ExecuteIteratorQuery()` 的前提下，记录 worker execute smoke 已满足
+  哪些正式执行前置条件；
+- 验证 THD/root/result/fields 已经 ready；
+- 显式记录当前阻断点仍是 worker `Query_expression` unit 未达到
+  `prepared + optimized + not executed` 合同；
+- 不改 `sql/sql_union.cc` / `sql/sql_lex.h`，不打开用户可见 PQ gate。
+
+Completion Report - Batch D1.6f:
+
+- changed files:
+  - `sql/parallel_query/sql_parallel.h`
+  - `sql/parallel_query/sql_parallel.cc`
+  - `sql/mysqld.cc`
+  - `mysql-test/suite/parallel_query/t/pq_worker_execute_iterator_smoke.test`
+  - `mysql-test/suite/parallel_query/r/pq_worker_execute_iterator_smoke.result`
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`
+  - `Docs/pq_tasks/commercial-full-port-sprint.md`
+- implementation:
+  - added `PQ_worker_execute_smoke_plan::preflight_execute_iterator_query()`；
+  - preflight runs after QueryExpression-owned root iterator is created and
+    before root `Init()/Read()` consumes the iterator；
+  - preflight records `xpf_thd_ready` when worker THD has worker identity and
+    worker info；
+  - preflight records `xpf_root_ready` when QueryExpression root path/iterator
+    exists and root path is `PQ_BLOCK_SCAN`；
+  - preflight records `xpf_result_ready` when both worker
+    `Query_expression` and `Query_block` point at the same `Query_result_mq`
+    with the worker MQ handle；
+  - preflight records `xpf_fields_ready` when `JOIN::fields` is exactly
+    `Query_block::fields` and non-empty；
+  - preflight records `xpf_blocked_unit` while `xpf_unit_ready` remains zero,
+    documenting the current blocker before a safe `ExecuteIteratorQuery()`
+    call can be attempted；
+  - SHOW STATUS names use short `xpf_*` suffixes because longer
+    `exec_preflight_*` names were not visible through
+    `performance_schema.global_status`。
+- validation:
+  - `git diff --check && cmake --build build-ninja --target mysqld -j 16`
+    passed；
+  - first MTR attempt exposed overlong status variable names returning NULL；
+    names were shortened to `xpf_*`；
+  - final targeted validation passed:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+    pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats
+    pq_commercial_worker_result_adapter --parallel=1
+    --vardir=/tmp/pq-worker-exec-preflight-vardir3
+    --tmpdir=/tmp/pq-worker-exec-preflight-tmpdir3`，all 5 tests successful。
+
+Next blocker:
+
+- worker `Query_expression` unit state is not optimized/prepared enough for
+  `ExecuteIteratorQuery()` contracts；
+- next source batch should decide whether to migrate the commercial
+  `make_pq_worker_plan()` / `pq_make_join_readinfo()` unit optimization path or
+  add a narrower smoke-only optimized unit transition before guarded execute。
 
 ### Batch E1 - Commercial MTR migration
 

@@ -346,6 +346,69 @@ class PQ_worker_execute_smoke_plan {
     return true;
   }
 
+  bool preflight_execute_iterator_query() {
+    pq_global_stats.worker_execute_iterator_smoke_execute_preflight_attempts
+        .fetch_add(1, std::memory_order_relaxed);
+
+    Query_expression *const unit =
+        m_worker_join != nullptr ? m_worker_join->query_expression() : nullptr;
+    Query_block *const block =
+        m_worker_join != nullptr ? m_worker_join->query_block : nullptr;
+
+    const bool thd_ready =
+        m_worker_thd != nullptr && m_worker_thd->pq_is_worker &&
+        m_worker_thd->pq_worker_info == m_worker && m_worker_thd->lex != nullptr;
+    if (thd_ready) {
+      pq_global_stats.worker_execute_iterator_smoke_execute_preflight_thd_ready
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const bool root_ready =
+        unit != nullptr && unit->root_access_path() != nullptr &&
+        unit->root_iterator() != nullptr &&
+        unit->root_access_path()->type == AccessPath::PQ_BLOCK_SCAN;
+    if (root_ready) {
+      pq_global_stats.worker_execute_iterator_smoke_execute_preflight_root_ready
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const bool result_ready =
+        m_result_bound && m_mq_result != nullptr && m_worker != nullptr &&
+        m_worker->m_mq_handle != nullptr && unit != nullptr && block != nullptr &&
+        unit->query_result() == m_mq_result &&
+        block->query_result() == m_mq_result &&
+        m_mq_result->get_mq_handler() == m_worker->m_mq_handle;
+    if (result_ready) {
+      pq_global_stats
+          .worker_execute_iterator_smoke_execute_preflight_result_ready
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const bool fields_ready =
+        block != nullptr && m_worker_join != nullptr &&
+        m_worker_join->fields == &block->fields && !block->fields.empty();
+    if (fields_ready) {
+      pq_global_stats
+          .worker_execute_iterator_smoke_execute_preflight_fields_ready
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const bool unit_ready =
+        unit != nullptr && unit->is_simple() && unit->is_prepared() &&
+        unit->is_optimized() && !unit->is_executed() &&
+        !unit->unfinished_materialization();
+    if (unit_ready) {
+      pq_global_stats.worker_execute_iterator_smoke_execute_preflight_unit_ready
+          .fetch_add(1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats
+          .worker_execute_iterator_smoke_execute_preflight_blocked_unit
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+
+    return thd_ready && root_ready && result_ready && fields_ready && unit_ready;
+  }
+
   void cleanup(bool close_worker_table, bool table_error) {
     restore_result();
 
@@ -2755,6 +2818,7 @@ bool Gather_operator::run_worker_execute_iterator_smoke(THD *leader_thd,
           .fetch_add(1, std::memory_order_relaxed);
       pq_global_stats.worker_execute_iterator_smoke_root_owned.fetch_add(
           1, std::memory_order_relaxed);
+      (void)worker_plan.preflight_execute_iterator_query();
       if (iterator->Init()) {
         pq_global_stats.worker_execute_iterator_smoke_blocked_root_init
             .fetch_add(1, std::memory_order_relaxed);

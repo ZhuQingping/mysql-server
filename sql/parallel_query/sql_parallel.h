@@ -473,6 +473,20 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_execute_iterator_smoke_root_init_success{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_root_read{0};
   std::atomic<uint64> worker_execute_iterator_smoke_root_read_success{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_execute_preflight_attempts{
+      0};
+  std::atomic<uint64> worker_execute_iterator_smoke_execute_preflight_thd_ready{
+      0};
+  std::atomic<uint64> worker_execute_iterator_smoke_execute_preflight_root_ready{
+      0};
+  std::atomic<uint64>
+      worker_execute_iterator_smoke_execute_preflight_result_ready{0};
+  std::atomic<uint64>
+      worker_execute_iterator_smoke_execute_preflight_fields_ready{0};
+  std::atomic<uint64> worker_execute_iterator_smoke_execute_preflight_unit_ready{
+      0};
+  std::atomic<uint64>
+      worker_execute_iterator_smoke_execute_preflight_blocked_unit{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_init{0};
   std::atomic<uint64> worker_execute_iterator_smoke_init_success{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_read{0};
@@ -946,6 +960,20 @@ struct PQ_global_stats {
     worker_execute_iterator_smoke_blocked_root_read.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_root_read_success.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_preflight_attempts.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_preflight_thd_ready.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_preflight_root_ready.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_preflight_result_ready.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_preflight_fields_ready.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_preflight_unit_ready.store(
+        0, std::memory_order_relaxed);
+    worker_execute_iterator_smoke_execute_preflight_blocked_unit.store(
         0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_init.store(
         0, std::memory_order_relaxed);

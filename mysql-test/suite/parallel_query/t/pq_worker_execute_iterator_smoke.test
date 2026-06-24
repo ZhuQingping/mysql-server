@@ -151,6 +151,34 @@ SET @root_read_success_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
         'Parallel_worker_execute_iterator_smoke_root_read_ok');
+SET @exec_preflight_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_xpf_attempts');
+SET @exec_preflight_thd_ready_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_xpf_thd_ready');
+SET @exec_preflight_root_ready_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_xpf_root_ready');
+SET @exec_preflight_result_ready_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_xpf_result_ready');
+SET @exec_preflight_fields_ready_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_xpf_fields_ready');
+SET @exec_preflight_unit_ready_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_xpf_unit_ready');
+SET @exec_preflight_blocked_unit_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME =
+        'Parallel_worker_execute_iterator_smoke_xpf_blocked_unit');
 SET @blocked_init_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -378,6 +406,41 @@ SELECT
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_root_read_ok') -
      @root_read_success_before) >= 1 AS worker_execute_root_read_success,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_xpf_attempts') -
+     @exec_preflight_attempts_before) >= 1
+       AS worker_execute_exec_preflight_attempted,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_xpf_thd_ready') -
+     @exec_preflight_thd_ready_before) >= 1
+       AS worker_execute_exec_preflight_thd_ready,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_xpf_root_ready') -
+     @exec_preflight_root_ready_before) >= 1
+       AS worker_execute_exec_preflight_root_ready,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_xpf_result_ready') -
+     @exec_preflight_result_ready_before) >= 1
+       AS worker_execute_exec_preflight_result_ready,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_xpf_fields_ready') -
+     @exec_preflight_fields_ready_before) >= 1
+       AS worker_execute_exec_preflight_fields_ready,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_xpf_unit_ready') -
+     @exec_preflight_unit_ready_before) = 0
+       AS worker_execute_exec_preflight_unit_not_ready,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME =
+          'Parallel_worker_execute_iterator_smoke_xpf_blocked_unit') -
+     @exec_preflight_blocked_unit_before) >= 1
+       AS worker_execute_exec_preflight_blocked_unit,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_blocked_init') -
