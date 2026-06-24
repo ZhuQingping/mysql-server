@@ -2132,7 +2132,7 @@ Notes:
 
 #### Batch D1.6m - PQWR through Exchange_nosort adapter
 
-Status: completed locally; final review accepted; awaiting commit.
+Status: completed, reviewed, committed, and pushed.
 
 目标：
 
@@ -2183,12 +2183,13 @@ Review:
 
 Notes:
 
+- commit: `ad95b12cbd8` Route PQWR worker results through Exchange smoke；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
 
 #### Batch D1.6n - Minimal MQ_record_gather facade
 
-Status: completed locally; awaiting review/commit.
+Status: completed, reviewed, committed, and pushed.
 
 目标：
 
@@ -2222,5 +2223,8 @@ Validation:
 
 Notes:
 
+- review: independent Review Agent accepted with no Critical or Important
+  findings；
+- commit: `4c54338aadb` Add minimal MQ record gather facade；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
