@@ -22,6 +22,12 @@ SET @pull_rows_before = (
 SET @pull_eofs_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_worker_typed_pull_next_eofs');
+SET @record_buffer_null_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_null_probes');
+SET @record_buffer_nonnull_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_nonnull_probes');
 SET @fallback_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_queries_fallback');
@@ -43,6 +49,12 @@ SELECT
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME = 'Parallel_worker_typed_pull_next_eofs') -
      @pull_eofs_before) = 1 AS typed_pull_eof,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_null_probes') -
+     @record_buffer_null_before) >= 1 AS record_buffer_null_probe,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_nonnull_probes') -
+     @record_buffer_nonnull_before) = 0 AS record_buffer_nonnull_probe,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME = 'Parallel_queries_fallback') -
      @fallback_before) = 1 AS fallback_after_smoke,

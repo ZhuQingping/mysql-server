@@ -2668,6 +2668,15 @@ bool Gather_operator::run_worker_typed_pull_next_smoke(THD *leader_thd,
                  &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
              worker->m_worker_ctx == nullptr;
   }
+  if (!failed) {
+    if (worker->m_open_ctx.worker_handler->ha_get_record_buffer() != nullptr) {
+      pq_global_stats.worker_record_buffer_nonnull_probes.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      pq_global_stats.worker_record_buffer_null_probes.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+  }
 
   uint32 rows_read = 0;
   bool eof = false;
