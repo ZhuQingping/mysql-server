@@ -195,6 +195,61 @@ static bool pq_lex_cstring_eq(const LEX_CSTRING &left,
          memcmp(left.str, right.str, left.length) == 0;
 }
 
+static void pq_copy_position_scalar_fields(POSITION *dst,
+                                           const POSITION *src) {
+  dst->rows_fetched = src->rows_fetched;
+  dst->read_cost = src->read_cost;
+  dst->filter_effect = src->filter_effect;
+  dst->prefix_rowcount = src->prefix_rowcount;
+  dst->prefix_cost = src->prefix_cost;
+  dst->table = nullptr;
+  dst->key = nullptr;
+  dst->ref_depend_map = src->ref_depend_map;
+  dst->use_join_buffer = src->use_join_buffer;
+  dst->sj_strategy = src->sj_strategy;
+  dst->n_sj_tables = src->n_sj_tables;
+  dst->dups_producing_tables = src->dups_producing_tables;
+  dst->first_loosescan_table = src->first_loosescan_table;
+  dst->loosescan_need_tables = src->loosescan_need_tables;
+  dst->loosescan_key = src->loosescan_key;
+  dst->loosescan_parts = src->loosescan_parts;
+  dst->first_firstmatch_table = src->first_firstmatch_table;
+  dst->first_firstmatch_rtbl = src->first_firstmatch_rtbl;
+  dst->firstmatch_need_tables = src->firstmatch_need_tables;
+  dst->cur_embedding_map = src->cur_embedding_map;
+  dst->first_dupsweedout_table = src->first_dupsweedout_table;
+  dst->dupsweedout_tables = src->dupsweedout_tables;
+  dst->sjm_scan_last_inner = src->sjm_scan_last_inner;
+  dst->sjm_scan_need_tables = src->sjm_scan_need_tables;
+}
+
+static bool pq_position_scalar_fields_equal(const POSITION *left,
+                                            const POSITION *right) {
+  return left->rows_fetched == right->rows_fetched &&
+         left->read_cost == right->read_cost &&
+         left->filter_effect == right->filter_effect &&
+         left->prefix_rowcount == right->prefix_rowcount &&
+         left->prefix_cost == right->prefix_cost &&
+         left->table == nullptr && left->key == nullptr &&
+         left->ref_depend_map == right->ref_depend_map &&
+         left->use_join_buffer == right->use_join_buffer &&
+         left->sj_strategy == right->sj_strategy &&
+         left->n_sj_tables == right->n_sj_tables &&
+         left->dups_producing_tables == right->dups_producing_tables &&
+         left->first_loosescan_table == right->first_loosescan_table &&
+         left->loosescan_need_tables == right->loosescan_need_tables &&
+         left->loosescan_key == right->loosescan_key &&
+         left->loosescan_parts == right->loosescan_parts &&
+         left->first_firstmatch_table == right->first_firstmatch_table &&
+         left->first_firstmatch_rtbl == right->first_firstmatch_rtbl &&
+         left->firstmatch_need_tables == right->firstmatch_need_tables &&
+         left->cur_embedding_map == right->cur_embedding_map &&
+         left->first_dupsweedout_table == right->first_dupsweedout_table &&
+         left->dupsweedout_tables == right->dupsweedout_tables &&
+         left->sjm_scan_last_inner == right->sjm_scan_last_inner &&
+         left->sjm_scan_need_tables == right->sjm_scan_need_tables;
+}
+
 bool pq_dup_tabs_skeleton_preflight(JOIN *worker_join, JOIN *leader_join) {
   pq_global_stats.worker_qep_tab_skeleton_attempts.fetch_add(
       1, std::memory_order_relaxed);
@@ -352,6 +407,31 @@ bool pq_clone_table_ref_preflight(THD *worker_thd, Table_ref *leader_ref) {
   }
 
   pq_global_stats.worker_table_ref_clone_success.fetch_add(
+      1, std::memory_order_relaxed);
+  return false;
+}
+
+bool pq_clone_position_scalar_preflight(QEP_TAB *leader_tab) {
+  pq_global_stats.worker_position_clone_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (leader_tab == nullptr || leader_tab->position() == nullptr ||
+      leader_tab->ref().key != -1) {
+    pq_global_stats.worker_position_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  POSITION cloned_position{};
+  pq_copy_position_scalar_fields(&cloned_position, leader_tab->position());
+  if (!pq_position_scalar_fields_equal(&cloned_position,
+                                       leader_tab->position())) {
+    pq_global_stats.worker_position_clone_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+  }
+
+  pq_global_stats.worker_position_clone_success.fetch_add(
       1, std::memory_order_relaxed);
   return false;
 }

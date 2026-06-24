@@ -52,6 +52,8 @@ bool pq_bind_qep_tab_table_preflight(JOIN *worker_join, TABLE *worker_table,
 
 bool pq_clone_table_ref_preflight(THD *worker_thd, Table_ref *leader_ref);
 
+bool pq_clone_position_scalar_preflight(QEP_TAB *leader_tab);
+
 bool pq_clone_range_scan_preflight(THD *worker_thd, TABLE *worker_table,
                                    QEP_TAB *leader_tab);
 

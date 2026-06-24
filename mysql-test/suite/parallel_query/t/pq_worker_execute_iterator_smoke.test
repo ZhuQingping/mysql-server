@@ -71,6 +71,15 @@ SET @table_ref_clone_success_before = (
 SET @table_ref_clone_unsupported_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_worker_table_ref_clone_unsupported');
+SET @position_clone_attempts_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_position_clone_attempts');
+SET @position_clone_success_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_position_clone_success');
+SET @position_clone_unsupported_before = (
+  SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+  WHERE VARIABLE_NAME = 'Parallel_worker_position_clone_unsupported');
 SET @worker_table_opened_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME =
@@ -197,6 +206,18 @@ SELECT
     WHERE VARIABLE_NAME = 'Parallel_worker_table_ref_clone_unsupported') -
      @table_ref_clone_unsupported_before) = 0
        AS worker_table_ref_clone_not_unsupported,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_position_clone_attempts') -
+     @position_clone_attempts_before) >= 1
+       AS worker_position_clone_attempted,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_position_clone_success') -
+     @position_clone_success_before) >= 1
+       AS worker_position_clone_success,
+  ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+    WHERE VARIABLE_NAME = 'Parallel_worker_position_clone_unsupported') -
+     @position_clone_unsupported_before) = 0
+       AS worker_position_clone_not_unsupported,
   ((SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
     WHERE VARIABLE_NAME =
           'Parallel_worker_execute_iterator_smoke_worker_table_opened') -

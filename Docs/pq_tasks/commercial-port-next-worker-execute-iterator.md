@@ -637,6 +637,44 @@ TMPDIR=/tmp ./mtr --suite=parallel_query \
   --tmpdir=/tmp/pq-worker-table-ref-clone-tmpdir
 ```
 
+## Worker POSITION Scalar Clone Smoke
+
+本次小步继续平移商用 `POSITION::pq_copy()` 的前置合同，但只做
+smoke-only 标量字段复制校验：
+
+- 新增 `pq_clone_position_scalar_preflight()`；
+- 复制并校验 `rows_fetched`、`read_cost`、`filter_effect`、prefix cost /
+  rowcount、`cur_embedding_map`、semi-join 相关标量字段；
+- 显式清空 cloned `POSITION::table` / `POSITION::key` 指针；
+- 仅支持非 ref 访问形态，`QEP_TAB::ref().key != -1` 时记录 unsupported；
+- 当前不把 cloned `POSITION` 挂入 worker `QEP_TAB`，不改变生产执行路径。
+
+新增诊断：
+
+- `Parallel_worker_position_clone_attempts`
+- `Parallel_worker_position_clone_success`
+- `Parallel_worker_position_clone_unsupported`
+
+当前边界：
+
+- 不迁移 `Key_use::pq_copy()`；
+- 不迁移 `Index_lookup::pq_copy()`；
+- 不迁移 ref / eq_ref worker clone；
+- 不迁移完整 `QEP_TAB::pq_copy()`；
+- 不修改 optimizer / executor / handler / InnoDB 主路径。
+
+验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_iterator_smoke pq_clone_diagnostics pq_stats \
+  --parallel=1 --vardir=/tmp/pq-worker-position-clone-vardir \
+  --tmpdir=/tmp/pq-worker-position-clone-tmpdir
+```
+
 ## Restricted Worker Plan Ownership Helper
 
 本次小步不改变执行语义，只把 `run_worker_execute_iterator_smoke()` 里散落的

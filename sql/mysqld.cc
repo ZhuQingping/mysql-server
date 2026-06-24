@@ -9740,6 +9740,12 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_table_ref_clone_success,
                                 worker_table_ref_clone_success)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_table_ref_clone_unsupported,
                                 worker_table_ref_clone_unsupported)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_position_clone_attempts,
+                                worker_position_clone_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_position_clone_success,
+                                worker_position_clone_success)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_position_clone_unsupported,
+                                worker_position_clone_unsupported)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_range_scan_clone_attempts,
                                 worker_range_scan_clone_attempts)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(worker_range_scan_clone_success,
@@ -11914,6 +11920,15 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_table_ref_clone_unsupported",
      (char *)&show_pq_worker_table_ref_clone_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_position_clone_attempts",
+     (char *)&show_pq_worker_position_clone_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_position_clone_success",
+     (char *)&show_pq_worker_position_clone_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_position_clone_unsupported",
+     (char *)&show_pq_worker_position_clone_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_range_scan_clone_attempts",
      (char *)&show_pq_worker_range_scan_clone_attempts, SHOW_FUNC,
