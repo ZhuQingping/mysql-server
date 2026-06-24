@@ -30,16 +30,19 @@ SET @workers_launched_before = (
   SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
   WHERE VARIABLE_NAME = 'Parallel_workers_launched');
 
+SET @old_debug=@@session.debug;
+SET SESSION debug="+d,pq_exchange_worker_result_smoke";
 SELECT id, v FROM pq_commercial_worker_result_adapter_t WHERE v >= 0;
+SET SESSION debug=@old_debug;
 
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_rows') -
-  @worker_result_rows_before) >= 7 AS worker_result_rows_delta_at_least_7;
+  @worker_result_rows_before) >= 8 AS worker_result_rows_delta_at_least_8;
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_finishes') -
-  @worker_result_finishes_before) >= 5 AS worker_result_finishes_delta_at_least_5;
+  @worker_result_finishes_before) >= 7 AS worker_result_finishes_delta_at_least_7;
 SELECT (
   (SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
    WHERE VARIABLE_NAME = 'Parallel_worker_result_smoke_errors') -

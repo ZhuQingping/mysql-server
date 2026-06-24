@@ -61,6 +61,7 @@
 #include <cstdint>
 
 struct TABLE;
+class THD;
 
 /**
   Typed MQ message header for PQ row-image protocol.
@@ -335,6 +336,30 @@ class Exchange_nosort : public Exchange {
                                             Materialize_status *status);
 
   /**
+    Read and materialize one Query_result_mq worker-result frame.
+
+    This debug-gated bridge moves worker SQL projection consumption into
+    Exchange_nosort, matching the commercial MQ_record_gather shape more
+    closely than ad hoc drains in Gather_operator. It consumes PQWR frames
+    produced by Query_result_mq, not the typed record-image protocol above.
+
+    The current materializer is intentionally narrow: it validates the
+    two-column SELECT id, v worker smoke row and stores it into table->record[0].
+
+    @param table         TABLE whose record[0] receives the decoded row
+    @param[out] status   ROW, EOF_REACHED, WOULD_BLOCK, or ERROR
+    @param[out] id_value Materialized first column value, for smoke checks
+    @param[out] v_value  Materialized second column value, for smoke checks
+
+    @retval false  Status is valid
+    @retval true   Invalid input or malformed worker-result frame
+  */
+  bool materialize_next_worker_result_status(TABLE *table,
+                                             Materialize_status *status,
+                                             uint64 *id_value,
+                                             uint64 *v_value);
+
+  /**
     Wait briefly for producer activity.
 
     This is the bounded wait primitive for `PQTableScanIterator::Read()`: the
@@ -428,6 +453,25 @@ class Exchange_nosort : public Exchange {
   */
   bool run_synthetic_row_image_smoke(TABLE *table, uint32 *rows_read,
                                      uint32 *finishes_read);
+
+  /**
+    Run a controlled Query_result_mq worker-result materialization smoke.
+
+    The helper sends a FINISH on queue 0, then a ROW and FINISH on queue 1,
+    and verifies the PQWR Exchange adapter skips the already read-done queue
+    while materializing the second queue's row.
+
+    @param thd               THD used to allocate synthetic Item_int values
+    @param table             Leader TABLE whose record[0] receives the row
+    @param[out] rows_read    Number of PQWR ROW frames materialized
+    @param[out] finishes_read Number of worker queues observed as finished
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_synthetic_worker_result_smoke(THD *thd, TABLE *table,
+                                         uint32 *rows_read,
+                                         uint32 *finishes_read);
 
   /**
     Run a controlled synthetic partial GROUP BY message smoke.

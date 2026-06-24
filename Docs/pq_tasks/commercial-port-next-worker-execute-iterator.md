@@ -667,6 +667,62 @@ Next blocker:
 - 下一步应继续在 DBUG gate 下把 materialized row 交给更接近
   `Exchange_nosort::Read()` 的 leader pull adapter，而不是直接打开用户路径。
 
+## PQWR Through Exchange_nosort Adapter
+
+Status: coding/target validation completed; awaiting independent review.
+
+商用仓 worker-to-leader row path 是 `Query_result_mq -> MQueue ->
+MQ_record_gather -> Exchange_nosort -> leader table->record[0]`。当前仓上一小步
+已经能 decode `PQWR` 并写 leader record，但 decode 逻辑还在
+`Gather_operator` 的临时 drain helper 中。
+
+本轮小步把该 leader 端 materialization 移入 `Exchange_nosort`：
+
+- 新增 `Exchange_nosort::materialize_next_worker_result_status()`；
+- 该接口直接消费 `Query_result_mq` 产生的 `PQWR` frame；
+- 新增 `Exchange_nosort::run_synthetic_worker_result_smoke()`，覆盖双队列
+  `FINISH -> ROW -> FINISH` 读取顺序和 read-done 队列跳过；
+- 保留既有 typed record-image `materialize_next_record_image_status()` 不变；
+- threaded worker `ExecuteIteratorQuery()` smoke 改为通过
+  `Gather_operator::get_exchange()` 消费 worker result；
+- 当前 materializer 仍只支持 debug-only `SELECT id, v` 两列 smoke，不作为通用
+  SQL 投影协议。
+
+开发期验证范围保持为相关模块：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 16
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query \
+  pq_worker_execute_threaded_call_smoke \
+  pq_worker_execute_threaded_precheck_smoke \
+  pq_worker_execute_iterator_smoke \
+  pq_commercial_worker_result \
+  pq_commercial_worker_result_adapter \
+  pq_stats \
+  --parallel=1 --vardir=/tmp/pq-exchange-pqwr-vardir \
+  --tmpdir=/tmp/pq-exchange-pqwr-tmpdir
+```
+
+结果：目标 MTR 7/7 通过（含 `shutdown_report`）。
+
+Review fix:
+
+- Review Agent 指出初版 PQWR adapter 没有跳过已经 `set_readdone()` 的队列；
+- 已在 `materialize_next_worker_result_status()` 中优先检查
+  `MQueue_handle::has_readdone()`；
+- `pq_commercial_worker_result_adapter` 增加
+  `pq_exchange_worker_result_smoke`，验证多队列 read-done 状态机。
+
+Next blocker:
+
+- 仍未迁移商用 `Field_raw_data` 全协议；
+- 默认 visible `ParallelScanIterator::Read()` 仍使用 typed record-image path；
+- 下一步可在 debug-only smoke 中构建更接近商用的
+  `MQ_record_gather` facade，或开始把 `PQWR` adapter 接入 controlled
+  `ParallelScanIterator` gate。
+
 ## Worker JOIN Scalar Shape Copy Smoke
 
 本次小步把 worker-owned query shell 继续推进为带 JOIN 标量 shape 的非执行

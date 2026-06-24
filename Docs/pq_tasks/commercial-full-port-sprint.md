@@ -2129,3 +2129,59 @@ Notes:
   `dbug_tmp_restore_column_map()` around the smoke-only store path；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6m - PQWR through Exchange_nosort adapter
+
+Status: completed locally; final review accepted; awaiting commit.
+
+目标：
+
+- 将 worker `Query_result_mq` 的 `PQWR` frame 消费点从
+  `Gather_operator` 临时 drain helper 移入 `Exchange_nosort`；
+- 贴近商用 `MQ_record_gather -> Exchange_nosort -> table->record[0]`
+  leader row collection 形状；
+- 保持 debug-only，不改变默认 visible PQ path。
+
+Implementation:
+
+- added `Exchange_nosort::materialize_next_worker_result_status()`；
+- `Exchange_nosort` now has a narrow PQWR materializer for current
+  `SELECT id, v` worker smoke；
+- added `run_synthetic_worker_result_smoke()` to cover a two-queue
+  FINISH/ROW/FINISH sequence and read-done queue skipping；
+- existing typed record-image `materialize_next_record_image_status()` remains
+  unchanged；
+- threaded worker `ExecuteIteratorQuery()` smoke now drains through
+  `get_exchange()` instead of directly receiving from `worker->m_mq_handle`；
+- `sql_parallel.cc` keeps lifecycle/statistics responsibility only。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 16` passed；
+- targeted MTR passed:
+  `pq_worker_execute_threaded_call_smoke`
+  `pq_worker_execute_threaded_precheck_smoke`
+  `pq_worker_execute_iterator_smoke`
+  `pq_commercial_worker_result`
+  `pq_commercial_worker_result_adapter`
+  `pq_stats`。
+
+Review:
+
+- independent Review Agent found one Important issue: the new public Exchange
+  PQWR adapter did not skip queues already marked read-done, which could break
+  future multi-queue use；
+- fixed by checking `MQueue_handle::has_readdone()` before receive；
+- added `pq_exchange_worker_result_smoke` coverage in
+  `pq_commercial_worker_result_adapter` to prove queue0 FINISH followed by
+  queue1 ROW/FINISH still drains correctly；
+- final Review Agent accepted with no Critical or Important findings；
+- the only Minor coverage note was fixed by making the smoke explicitly call
+  the adapter once after queue0 FINISH and before queue1 ROW/FINISH is sent,
+  so the next call exercises the read-done skip branch。
+
+Notes:
+
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。

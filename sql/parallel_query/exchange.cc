@@ -50,6 +50,10 @@
 #include <cassert>
 #include <cstring>
 
+#include "sql/field.h"
+#include "sql/item.h"
+#include "sql/parallel_query/query_result_mq.h"
+#include "sql/sql_class.h"
 #include "sql/table.h"  // TABLE, TABLE_SHARE::reclength
 
 namespace {
@@ -137,6 +141,53 @@ bool pq_materialize_record_image(TABLE *table, const void *payload,
   memcpy(table->record[0], payload, record_len);
   table->set_found_row();
   return false;
+}
+
+bool pq_materialize_worker_result_smoke_row(TABLE *table, const void *raw_data,
+                                            uint32 raw_len, uint64 *id_value,
+                                            uint64 *v_value) {
+  if (id_value != nullptr) *id_value = 0;
+  if (v_value != nullptr) *v_value = 0;
+  if (table == nullptr || table->s == nullptr || table->field == nullptr ||
+      table->record[0] == nullptr || table->s->fields < 2 ||
+      table->s->reclength == 0 || id_value == nullptr || v_value == nullptr) {
+    return true;
+  }
+
+  std::vector<PQ_worker_result_decoded_field> fields;
+  if (pq_decode_worker_result_row(raw_data, raw_len, &fields) ||
+      fields.size() != 2) {
+    return true;
+  }
+
+  std::vector<uchar> saved_record(table->s->reclength);
+  memcpy(saved_record.data(), table->record[0], table->s->reclength);
+  my_bitmap_map *old_write_set =
+      dbug_tmp_use_all_columns(table, table->write_set);
+
+  bool failed = false;
+  restore_record(table, s->default_values);
+  for (uint32 i = 0; i < fields.size(); ++i) {
+    Field *field = table->field[i];
+    if (field == nullptr || fields[i].is_null || fields[i].value == nullptr ||
+        field->store(fields[i].value, fields[i].value_len,
+                     &my_charset_bin) != TYPE_OK) {
+      failed = true;
+      break;
+    }
+  }
+
+  if (!failed) {
+    *id_value = static_cast<uint64>(table->field[0]->val_int());
+    *v_value = static_cast<uint64>(table->field[1]->val_int());
+    table->set_found_row();
+  }
+
+  dbug_tmp_restore_column_map(table->write_set, old_write_set);
+  if (failed) {
+    memcpy(table->record[0], saved_record.data(), table->s->reclength);
+  }
+  return failed;
 }
 
 const PQ_partial_group_merge_slot_v1 *pq_find_partial_group_merge_slot(
@@ -565,6 +616,95 @@ bool Exchange_nosort::materialize_next_record_image_status(
   return false;
 }
 
+bool Exchange_nosort::materialize_next_worker_result_status(
+    TABLE *table, Materialize_status *status, uint64 *id_value,
+    uint64 *v_value) {
+  if (status != nullptr) *status = Materialize_status::ERROR;
+  if (id_value != nullptr) *id_value = 0;
+  if (v_value != nullptr) *v_value = 0;
+  if (table == nullptr || status == nullptr || id_value == nullptr ||
+      v_value == nullptr) {
+    return true;
+  }
+
+  uint32 nvisited = 0;
+  while (!m_all_done && nvisited < m_nqueues) {
+    MQueue_handle *handle = get_mq_handle(m_next_queue);
+    if (handle->has_readdone()) {
+      m_next_queue = (m_next_queue + 1) % m_nqueues;
+      ++nvisited;
+      continue;
+    }
+
+    void *raw_data = nullptr;
+    uint32 raw_len = 0;
+    const MQ_RESULT result = handle->receive(&raw_data, &raw_len);
+
+    if (result == MQ_DETACHED) {
+      handle->set_readdone();
+      if (m_active_readers > 0) --m_active_readers;
+      if (m_active_readers == 0) {
+        m_all_done = true;
+        *status = Materialize_status::EOF_REACHED;
+        return false;
+      }
+      m_next_queue = (m_next_queue + 1) % m_nqueues;
+      continue;
+    }
+
+    if (result == MQ_WOULD_BLOCK) {
+      m_next_queue = (m_next_queue + 1) % m_nqueues;
+      ++nvisited;
+      continue;
+    }
+
+    if (result != MQ_SUCCESS) return true;
+
+    const PQ_worker_result_frame_header *header = nullptr;
+    const uchar *null_bitmap = nullptr;
+    const uchar *payload = nullptr;
+    if (pq_validate_worker_result_frame(raw_data, raw_len, &header,
+                                        &null_bitmap, &payload)) {
+      return true;
+    }
+
+    const auto frame_type =
+        static_cast<PQ_worker_result_message_type>(header->type);
+    if (frame_type == PQ_worker_result_message_type::ROW) {
+      if (pq_materialize_worker_result_smoke_row(table, raw_data, raw_len,
+                                                id_value, v_value)) {
+        return true;
+      }
+      *status = Materialize_status::ROW;
+      return false;
+    }
+
+    if (frame_type == PQ_worker_result_message_type::FINISH) {
+      handle->set_readdone();
+      if (m_active_readers > 0) --m_active_readers;
+      if (m_active_readers == 0) {
+        m_all_done = true;
+        *status = Materialize_status::EOF_REACHED;
+        return false;
+      }
+      m_next_queue = (m_next_queue + 1) % m_nqueues;
+      continue;
+    }
+
+    if (frame_type == PQ_worker_result_message_type::ERROR) {
+      *status = Materialize_status::ERROR;
+      return false;
+    }
+
+    return true;
+  }
+
+  *status =
+      m_all_done ? Materialize_status::EOF_REACHED
+                 : Materialize_status::WOULD_BLOCK;
+  return false;
+}
+
 void Exchange_nosort::wait_for_message(uint64 timeout_us) {
   if (m_receiver_event == nullptr || m_all_done) return;
 
@@ -714,6 +854,80 @@ bool Exchange_nosort::run_synthetic_row_image_smoke(TABLE *table,
 
   if (rows_read != nullptr) *rows_read = local_rows;
   if (finishes_read != nullptr) *finishes_read = m_nqueues;
+  return false;
+}
+
+bool Exchange_nosort::run_synthetic_worker_result_smoke(
+    THD *thd, TABLE *table, uint32 *rows_read, uint32 *finishes_read) {
+  if (rows_read != nullptr) *rows_read = 0;
+  if (finishes_read != nullptr) *finishes_read = 0;
+  if (thd == nullptr || table == nullptr || rows_read == nullptr ||
+      finishes_read == nullptr || m_mq_handles == nullptr || m_nqueues < 2) {
+    return true;
+  }
+
+  Query_result_mq finish_only(nullptr, get_mq_handle(0), false);
+  mem_root_deque<Item *> finish_fields(thd->mem_root);
+  finish_fields.push_back(new (thd->mem_root) Item_int(7));
+  finish_fields.push_back(new (thd->mem_root) Item_int(42));
+  const ha_rows sent_rows_before = thd->get_sent_row_count();
+  bool failed = finish_fields[0] == nullptr || finish_fields[1] == nullptr ||
+                finish_only.start_execution(thd) ||
+                finish_only.send_result_set_metadata(thd, finish_fields, 0) ||
+                finish_only.send_eof(thd);
+  thd->set_sent_row_count(sent_rows_before);
+  if (failed) return true;
+
+  uint64 id_value = 0;
+  uint64 v_value = 0;
+  Materialize_status status = Materialize_status::ERROR;
+  if (materialize_next_worker_result_status(table, &status, &id_value,
+                                            &v_value) ||
+      status != Materialize_status::WOULD_BLOCK) {
+    return true;
+  }
+
+  Query_result_mq row_result(nullptr, get_mq_handle(1), false);
+  mem_root_deque<Item *> row_fields(thd->mem_root);
+  row_fields.push_back(new (thd->mem_root) Item_int(7));
+  row_fields.push_back(new (thd->mem_root) Item_int(42));
+  thd->set_sent_row_count(sent_rows_before);
+  failed = row_fields[0] == nullptr || row_fields[1] == nullptr ||
+           row_result.start_execution(thd) ||
+           row_result.send_result_set_metadata(thd, row_fields, 0) ||
+           row_result.send_data(thd, row_fields) || row_result.send_eof(thd);
+  thd->set_sent_row_count(sent_rows_before);
+  if (failed) return true;
+
+  uint32 local_rows = 0;
+  uint32 local_finishes = 0;
+  while (!m_all_done) {
+    id_value = 0;
+    v_value = 0;
+    status = Materialize_status::ERROR;
+    if (materialize_next_worker_result_status(table, &status, &id_value,
+                                              &v_value)) {
+      return true;
+    }
+
+    if (status == Materialize_status::ROW) {
+      if (id_value != 7 || v_value != 42) return true;
+      ++local_rows;
+      continue;
+    }
+
+    if (status == Materialize_status::EOF_REACHED) {
+      local_finishes = m_nqueues;
+      break;
+    }
+
+    if (status == Materialize_status::ERROR) return true;
+    return true;
+  }
+
+  if (local_rows != 1 || local_finishes != m_nqueues) return true;
+  *rows_read = local_rows;
+  *finishes_read = local_finishes;
   return false;
 }
 
