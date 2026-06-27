@@ -22,6 +22,7 @@ worker TABLE / handler contract smoke completed locally and review accepted；
 M11-F6d-2 positive ref path design split completed and review accepted；
 M11-F6e-1 worker-local constant-ref row smoke completed locally and review
 accepted；M11-F6e-2 worker-local last-key edge hardening completed locally and
+review accepted；M11-F6e-3 visible / MQ route design completed locally and
 review accepted。
 Real worker-side ICP positive row production, worker-side visible ref execution,
 and commercial `ha_pq_next(void*)` positive ref path remain blocked。
@@ -3699,6 +3700,172 @@ F6e-2 Review Result:
 - Safe next task: proceed only through another narrow reviewed step；visible
   worker-side ref, commercial `ha_pq_next(void*)`, and production MQ row output
   still require separate design and MTR gates。
+
+#### M11-F6e-3: Visible / MQ Route Design
+
+Status: docs-only design completed locally；independent design review accepted。
+
+Goal:
+
+- define the next route from F6e worker-local exact ref rows toward visible
+  worker-side ref execution；
+- decide whether the next implementation should use existing typed row image,
+  `PQWR` worker-result row frames, a new leader adapter, or keep a leader-local
+  bridge until more commercial state is migrated；
+- explicitly define failure semantics before any source task touches visible
+  worker-side ref output。
+
+Current Proven Baseline:
+
+- F6e-1 proves an independently opened worker TABLE / handler can perform exact
+  constant covering secondary ref lookups with worker-owned key bytes；
+- F6e-1 writes row images to a local vector only；
+- F6e-2 adds hit / miss / last-key / injected failure coverage；
+- existing visible SQL result correctness still comes from the M9-C2
+  leader-local `PQSecondaryCoveringRefIterator` path。
+
+Open Design Questions:
+
+1. Visible row carrier:
+   - should ref rows use existing typed row image into `Exchange_nosort`；
+   - should ref rows use `PQWR` row frames and `Query_result_mq::send_data()`；
+   - should a debug-only leader adapter consume local worker rows before any
+     production MQ route；
+   - or should visible worker-side ref remain blocked until commercial
+     `ha_pq_next(void*)` state is ported?
+2. Iterator selection:
+   - whether `PQSecondaryCoveringRefIterator` remains the only visible gate；
+   - whether `PQRefIterator` stays fail-closed；
+   - whether `AccessPath::REF` must remain unchanged until a separate gate。
+3. Error semantics:
+   - pre-row failure may fallback to serial only if no worker row / MQ row has
+     been emitted；
+   - post-row failure must not silent-fallback to serial；
+   - post-row failure must drain / detach / cleanup worker output and return an
+     explicit ERROR observation；silent EOF / FINISH-as-EOF is not allowed
+     after any ROW has been emitted。
+4. Counter semantics:
+   - visible worker-side ref must have separate selected / executed / rows /
+     cleanup / error counters；
+   - existing F6e local counters must not be reused as visible execution
+     counters；
+  - worker / MQ / typed row counters must state exactly which route is being
+    exercised。
+
+Inventory Findings:
+
+- Current F6e-1/F6e-2 only proves worker TABLE / handler exact ref row access
+  with `ha_index_read_map()` / `ha_index_next_same()` into a local vector；
+- candidate carriers:
+  - `PQRM` typed row image through `Exchange_nosort` is closest to the current
+    fixed row-image smoke path and can copy worker `TABLE::record[0]` into
+    leader `TABLE::record[0]` under a debug-only gate；
+  - `PQWR` / `Query_result_mq` matches commercial cloned worker JOIN output but
+    is wider than the next safe constant-ref task because current materializers
+    remain smoke-narrow；
+  - `PQWR` stable-ref token transport remains private context transport only,
+    not a visible row carrier；`PQWR` row / raw-field / read-set variants are
+    deferred to cloned worker JOIN / commercial-path work；
+  - a leader adapter is lower risk but does not advance the worker/MQ carrier；
+  - keeping M9-C2 leader-local visible output remains the default until a
+    carrier probe passes；
+- commercial reference uses `PQRefIterator::Read()` +
+  `pq_ref_build_ranges()` + `ha_pq_next(void*)` and cloned worker
+  `Query_result_mq` output, but current branch is not ready to open that route
+  in one step。
+
+Decision:
+
+- F6e-3 chooses **F6e-4 debug-only typed row-image carrier probe** as the next
+  source task；
+- F6e-4 should use existing `Exchange_nosort` / `PQRM` fixed row-image carrier,
+  DOP=1, constant covering ref only, non-BLOB, and debug-only hooks；
+- `PQWR` / `Query_result_mq::send_data()` remains deferred for cloned worker
+  JOIN / commercial path migration；
+- no visible worker-side ref gate is allowed before the carrier probe and its
+  cleanup/error semantics pass independent review。
+
+Hard Stops:
+
+- no source edits in F6e-3；
+- no production `Query_result_mq::send_data()` behavior change；
+- no `PQWR` wire-format change；
+- no production `Exchange_nosort` / `PQRM` behavior, wire/header,
+  materializer, or enqueue change；
+- no AccessPath / optimizer / visible iterator eligibility change；
+- no visible worker-side ref gate；
+- no `PQRefIterator::Read()` or `PQblockScanIterator::Read()` production change；
+- no commercial `handler::ha_pq_next()` / `pq_worker_scan_next(void*)`
+  positive behavior；
+- no worker-side ICP, dependent ref, non-covering ref, partition, MVI, reverse
+  or ORDER BY path。
+
+Proposed Next Split:
+
+1. F6e-3: docs-only route design and review。
+2. F6e-4: debug-only typed row-image carrier probe, selected only after F6e-3
+   review:
+   - F6e-4 taskbook must explicitly inherit all F6e-3 hard stops；
+   - worker exact ref rows enter existing `Exchange_nosort` / `PQRM` fixed
+     record-image route；
+   - leader materializes into leader `TABLE::record[0]` only inside the DBUG
+     smoke；
+   - no visible SQL result change；
+   - no AccessPath / production iterator change。
+3. F6e-5: visible worker-side ref gate design, only after carrier probe passes
+   and defines pre/post row failure semantics。
+
+MTR Requirements For The First Source Task After F6e-3:
+
+- no-DBUG zero deltas for new carrier counters；
+- DBUG success for hit / miss / last-key；
+- exact ROW / FINISH / ERROR or equivalent typed carrier counters for the
+  chosen `PQRM` route；
+- injected pre-row failure with ROW / FINISH / ERROR all zero；
+- injected post-row failure with ROW observed, ERROR observed, cleanup/detach
+  observed, no FINISH-as-EOF, and no serial fallback；
+- zero deltas for unrelated ORDER BY / reverse / partition / MVI / dependent
+  ref counters；
+- status variables added to `pq_stats` if new counters are introduced。
+
+Review Prompt - M11-F6e-3:
+
+请作为 M11-F6e-3 Design Review Agent，只读审查当前 design：
+
+1. 当前可见 worker-side ref 的 row carrier 候选是否列全；
+2. 是否应优先选择 typed row image、`PQWR` row frame、leader adapter，还是
+   继续 blocked；
+3. pre-row fallback 与 post-row error cleanup 语义是否足够明确；
+4. Hard Stops 是否足够防止误开 visible worker-side ref、commercial
+   `ha_pq_next(void*)`、production MQ、ICP、dependent ref、ORDER BY；
+5. 下一步最小安全 source task 应是什么。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`；
+- Blocking findings；
+- Required fixes；
+- Non-blocking risks；
+- Safe next task recommendation。
+
+F6e-3 Review Result:
+
+- First review verdict: `REVISE`；
+- required fixes completed:
+  - hard stops now explicitly forbid production `Exchange_nosort` / `PQRM`
+    behavior, wire/header, materializer, or enqueue changes；
+  - hard stops now explicitly forbid AccessPath / optimizer / visible iterator
+    eligibility changes；
+  - post-row failure now requires explicit ERROR observation and forbids silent
+    EOF / FINISH-as-EOF after any ROW has been emitted；
+  - MTR requirements now distinguish pre-row ROW/FINISH/ERROR zero counters
+    from post-row ROW + ERROR + cleanup/detach observations；
+  - `PQWR` stable-ref token transport is documented as private context
+    transport only, not a visible row carrier；
+- Re-review verdict: `ACCEPT`；
+- Blocking findings: none；
+- Safe next task: F6e-4 debug-only `Exchange_nosort` / `PQRM` typed row-image
+  carrier probe, with the F6e-3 hard stops explicitly inherited。
 
 Required Future MTR Windows:
 
