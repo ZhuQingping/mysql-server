@@ -2450,3 +2450,45 @@ Notes:
 - commit: this commit (`Support PQWR subset field mapping`)；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6s - PQWR predicate-only read_set coverage
+
+Status: completed, reviewed, committed, and pushed.
+
+目标：
+
+- 补齐 D1.6r review 留下的测试缺口：projection + WHERE 场景中，
+  WHERE predicate 使用的字段不在 SELECT 输出列中，但必须通过 worker
+  read_set PQWR frame 传给 leader；
+- 不改功能代码，只增强 `pq_read_threaded_pqwr_record_gather` MTR 护栏。
+
+Implementation:
+
+- 新增 `SELECT id FROM t1 WHERE wide_v = 'alpha' OR d = '2038-01-19'`；
+- 该查询输出只依赖 `id`，predicate-only 字段为 `wide_v` 和 `d`；
+- 断言 `Parallel_queries_executed` 增加 1、fallback 为 0、扫描 5 行、
+  launch 2 个 worker，证明走 threaded PQWR record_gather 路径。
+
+Validation:
+
+- `git diff --check` passed；
+- targeted MTR passed:
+  `pq_read_threaded_pqwr_record_gather`
+  `pq_read_threaded_pqwr_worker_error`
+  `pq_leader_pqwr_record_gather_smoke`
+  `pq_commercial_worker_result_adapter`
+  `pq_read_threaded_projection_where`。
+
+Review:
+
+- independent Review Agent accepted with no Critical or Important findings；
+- reviewer confirmed the query projects only `id` while predicate-only fields
+  `wide_v` and `d` are required for WHERE evaluation；
+- reviewer confirmed the counter assertion proves threaded PQWR execution
+  instead of fallback。
+
+Notes:
+
+- source code unchanged；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
