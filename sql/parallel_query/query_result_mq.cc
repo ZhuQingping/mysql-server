@@ -1214,6 +1214,134 @@ bool pq_run_query_result_mq_stable_ref_adapter_smoke(
          *owned_ref_success != 1 || *length_mismatch_rejects != 1;
 }
 
+bool pq_run_query_result_mq_constant_ref_token_transport_smoke(
+    const uchar *token, uint32 token_len, uint32 expected_token_len,
+    uint32 *token_bytes, uint32 *deep_copy_success,
+    uint32 *normal_decode_rejects, uint32 *invalid_rejects,
+    uint32 *length_mismatch_rejects) {
+  if (token == nullptr || token_len == 0 || expected_token_len == 0 ||
+      token_bytes == nullptr || deep_copy_success == nullptr ||
+      normal_decode_rejects == nullptr || invalid_rejects == nullptr ||
+      length_mismatch_rejects == nullptr) {
+    return true;
+  }
+  *token_bytes = 0;
+  *deep_copy_success = 0;
+  *normal_decode_rejects = 0;
+  *invalid_rejects = 0;
+  *length_mismatch_rejects = 0;
+
+  PQ_mq_event sender_event;
+  PQ_mq_event receiver_event;
+  char ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue queue(&sender_event, &receiver_event, ring, sizeof(ring));
+  MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (handle.init()) return true;
+
+  std::vector<uchar> mutable_token(token, token + token_len);
+  const std::vector<uchar> expected_token = mutable_token;
+  const uchar null_bitmap[] = {0};
+  std::vector<uchar> field_payload;
+  pq_worker_result_append_uint32(&field_payload, 1);
+  field_payload.push_back('K');
+
+  /*
+    Use the stable-ref frame slot only as opaque local transport. The decoded
+    bytes are copied immediately as a private constant-ref token and must not
+    be treated as handler row-id bytes.
+  */
+  bool failed = pq_send_worker_result_stable_ref_frame(
+      &handle, 1, null_bitmap, sizeof(null_bitmap), field_payload.data(),
+      static_cast<uint32>(field_payload.size()), mutable_token.data(),
+      static_cast<uint32>(mutable_token.size()));
+
+  if (!mutable_token.empty()) mutable_token[0] ^= 0xff;
+
+  void *raw_data = nullptr;
+  uint32 raw_len = 0;
+  if (!failed && handle.receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+    failed = true;
+  }
+
+  PQ_worker_result_stable_ref stable_ref;
+  if (!failed &&
+      pq_decode_worker_result_stable_ref_row(raw_data, raw_len, &stable_ref)) {
+    failed = true;
+  }
+
+  auto copy_constant_ref_token = [](const PQ_worker_result_stable_ref &decoded,
+                                    uint32 expected_len,
+                                    std::vector<uchar> *owned_token) {
+    if (owned_token == nullptr || decoded.row_id == nullptr ||
+        decoded.row_id_len == 0 || decoded.row_id_len != expected_len ||
+        decoded.field_count != 1 || decoded.null_bitmap_len != 1) {
+      return true;
+    }
+    owned_token->assign(decoded.row_id, decoded.row_id + decoded.row_id_len);
+    return false;
+  };
+
+  std::vector<uchar> owned_token;
+  if (!failed &&
+      copy_constant_ref_token(stable_ref, expected_token_len, &owned_token)) {
+    failed = true;
+  }
+
+  if (!failed) {
+    if (owned_token.size() != expected_token_len ||
+        owned_token.size() != expected_token.size() ||
+        memcmp(owned_token.data(), expected_token.data(),
+               expected_token.size()) != 0) {
+      failed = true;
+    } else {
+      *token_bytes = static_cast<uint32>(owned_token.size());
+      ++(*deep_copy_success);
+    }
+  }
+
+  std::vector<PQ_worker_result_decoded_field> decoded_fields;
+  if (!failed && pq_decode_worker_result_row(raw_data, raw_len,
+                                             &decoded_fields)) {
+    ++(*normal_decode_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  std::vector<uchar> mismatched_token;
+  if (!failed && token_len < static_cast<uint32>(~0U) &&
+      copy_constant_ref_token(stable_ref, token_len + 1, &mismatched_token)) {
+    ++(*length_mismatch_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  PQ_worker_result_frame_header invalid_flags{};
+  invalid_flags.magic = PQ_WORKER_RESULT_FRAME_MAGIC;
+  invalid_flags.version = PQ_WORKER_RESULT_FRAME_VERSION;
+  invalid_flags.type = static_cast<uint16>(PQ_worker_result_message_type::ROW);
+  invalid_flags.field_count = 1;
+  invalid_flags.null_bitmap_len = 1;
+  invalid_flags.payload_len = sizeof(uint32) + token_len;
+  invalid_flags.flags = PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF | (1U << 4);
+  const PQ_worker_result_frame_header *bad_header = nullptr;
+  const uchar *bad_null_bitmap = nullptr;
+  const uchar *bad_payload = nullptr;
+  if (!failed &&
+      pq_validate_worker_result_frame(&invalid_flags, sizeof(invalid_flags),
+                                      &bad_header, &bad_null_bitmap,
+                                      &bad_payload)) {
+    ++(*invalid_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  handle.cleanup();
+
+  return failed || *token_bytes != token_len || *deep_copy_success != 1 ||
+         *normal_decode_rejects != 1 || *invalid_rejects != 1 ||
+         *length_mismatch_rejects != 1;
+}
+
 bool pq_run_query_result_mq_stable_ref_pair_smoke(
     const uchar *left_ref, uint32 left_ref_len, const uchar *right_ref,
     uint32 right_ref_len, uint32 expected_ref_length,

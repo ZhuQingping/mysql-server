@@ -2537,6 +2537,41 @@ bool Gather_operator::run_worker_attach_contract_smoke(
       pq_global_stats.stable_ref_adapter_ref_length_mismatch.fetch_add(
           stable_ref_adapter_length_mismatch, std::memory_order_relaxed);
     });
+    DBUG_EXECUTE_IF("pq_worker_constant_ref_token_transport_smoke", {
+      pq_global_stats.constant_ref_token_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+
+      uint32 token_bytes = 0;
+      uint32 token_deep_copy = 0;
+      uint32 token_normal_rejects = 0;
+      uint32 token_invalid_rejects = 0;
+      uint32 token_length_mismatch = 0;
+      const std::vector<uchar> &private_token = handler_ref_two_row_smoke_refs[0];
+      const bool token_failed =
+          pq_run_query_result_mq_constant_ref_token_transport_smoke(
+              private_token.data(), static_cast<uint32>(private_token.size()),
+              static_cast<uint32>(private_token.size()), &token_bytes,
+              &token_deep_copy, &token_normal_rejects,
+              &token_invalid_rejects, &token_length_mismatch);
+      if (token_failed) {
+        pq_global_stats.constant_ref_token_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+        return true;
+      }
+
+      pq_global_stats.constant_ref_token_success.fetch_add(
+          1, std::memory_order_relaxed);
+      pq_global_stats.constant_ref_token_bytes.fetch_add(
+          token_bytes, std::memory_order_relaxed);
+      pq_global_stats.constant_ref_token_deep_copy_success.fetch_add(
+          token_deep_copy, std::memory_order_relaxed);
+      pq_global_stats.constant_ref_token_normal_rejects.fetch_add(
+          token_normal_rejects, std::memory_order_relaxed);
+      pq_global_stats.constant_ref_token_invalid_rejects.fetch_add(
+          token_invalid_rejects, std::memory_order_relaxed);
+      pq_global_stats.constant_ref_token_len_mismatch.fetch_add(
+          token_length_mismatch, std::memory_order_relaxed);
+    });
   }
   if (stable_ref_pair_cmp_smoke_pending) {
     std::vector<uchar> left_owned_ref;

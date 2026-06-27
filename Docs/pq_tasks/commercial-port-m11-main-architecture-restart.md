@@ -126,9 +126,10 @@ leader-local gate。F 已创建独立 taskbook：
 [commercial-port-m11-ref-icp-worker-path.md](commercial-port-m11-ref-icp-worker-path.md)。
 M11-F0-F5 已完成 design / diagnostic / negative guard / closure。M11-F6
 已选择 worker-side constant covering ref 作为最小正向候选，F6a design-only
-contract、F6a-1 context shape 和 F6a-2 cleanup diagnostics 已完成。当前进入
-F6b private constant-ref token handoff；F6b-0 先做 source inventory /
-contract confirmation，仍不打开 worker row/MQ、`PQRefIterator::Read()` 或
+contract、F6a-1 context shape 和 F6a-2 cleanup diagnostics 已完成。F6b-0
+source inventory / contract confirmation 已完成；F6b-1 local constant-ref
+token transport helper 已完成本地实现和 targeted 验证，等待独立 review。
+仍不打开 worker row/MQ、`PQRefIterator::Read()` 或
 `pq_worker_scan_next()`。
 
 ## 验收边界
@@ -146,14 +147,16 @@ contract confirmation，仍不打开 worker row/MQ、`PQRefIterator::Read()` 或
 2. M11-F6 positive-path phase selection 已提交为 `31bdc66fb36`；
 3. M11-F6a worker-side constant covering ref contract design 已提交为
    `69d629abc7a`；
-4. F6a-1/F6a-2 diagnostics 已完成；当前完成 F6b-0 source inventory /
-   contract confirmation，下一步是 F6b-1 local constant-ref token transport
-   helper；
-5. F6b-1 只允许复用 `PQWR` stable-ref local-MQ helper 的 transport /
+4. F6a-1/F6a-2 diagnostics 已完成；F6b-0 source inventory / contract
+   confirmation 已完成并提交；F6b-1 local constant-ref token transport
+   helper 已完成本地实现和 targeted 验证，等待 review；
+5. F6b-1 只复用 `PQWR` stable-ref local-MQ helper 的 transport /
    decode / deep-copy mechanics，必须把 payload 命名为 private
    constant-ref token，不得把 constant-ref key bytes 当作 handler row-id /
    stable-ref；
-6. 仍不得打开 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+6. F6b-1 review 通过后的下一步是 F6b-2 constant-ref context to token
+   smoke；
+7. 仍不得打开 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
    `pq_worker_scan_next()`、`ha_pq_next()`、worker MQ production row 或
    production `Query_result_mq::send_data()` 行为。
 

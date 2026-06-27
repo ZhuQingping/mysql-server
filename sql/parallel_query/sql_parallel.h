@@ -457,6 +457,14 @@ struct PQ_global_stats {
   std::atomic<uint64> stable_ref_adapter_bytes{0};  ///< E6g-3
   std::atomic<uint64> stable_ref_adapter_deep_copy_success{0};  ///< E6g-3
   std::atomic<uint64> stable_ref_adapter_ref_length_mismatch{0};  ///< E6g-3
+  std::atomic<uint64> constant_ref_token_attempts{0};  ///< F6b-1
+  std::atomic<uint64> constant_ref_token_success{0};  ///< F6b-1
+  std::atomic<uint64> constant_ref_token_unsupported{0};  ///< F6b-1
+  std::atomic<uint64> constant_ref_token_bytes{0};  ///< F6b-1
+  std::atomic<uint64> constant_ref_token_deep_copy_success{0};  ///< F6b-1
+  std::atomic<uint64> constant_ref_token_normal_rejects{0};  ///< F6b-1
+  std::atomic<uint64> constant_ref_token_invalid_rejects{0};  ///< F6b-1
+  std::atomic<uint64> constant_ref_token_len_mismatch{0};  ///< F6b-1
   std::atomic<uint64> stable_ref_pair_adapter_attempts{0};  ///< E6g-4
   std::atomic<uint64> stable_ref_pair_adapter_success{0};  ///< E6g-4
   std::atomic<uint64> stable_ref_pair_adapter_unsupported{0};  ///< E6g-4
@@ -959,6 +967,15 @@ struct PQ_global_stats {
                                                std::memory_order_relaxed);
     stable_ref_adapter_ref_length_mismatch.store(
         0, std::memory_order_relaxed);
+    constant_ref_token_attempts.store(0, std::memory_order_relaxed);
+    constant_ref_token_success.store(0, std::memory_order_relaxed);
+    constant_ref_token_unsupported.store(0, std::memory_order_relaxed);
+    constant_ref_token_bytes.store(0, std::memory_order_relaxed);
+    constant_ref_token_deep_copy_success.store(0,
+                                               std::memory_order_relaxed);
+    constant_ref_token_normal_rejects.store(0, std::memory_order_relaxed);
+    constant_ref_token_invalid_rejects.store(0, std::memory_order_relaxed);
+    constant_ref_token_len_mismatch.store(0, std::memory_order_relaxed);
     stable_ref_pair_adapter_attempts.store(0, std::memory_order_relaxed);
     stable_ref_pair_adapter_success.store(0, std::memory_order_relaxed);
     stable_ref_pair_adapter_unsupported.store(0, std::memory_order_relaxed);

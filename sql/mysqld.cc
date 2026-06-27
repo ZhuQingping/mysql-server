@@ -10256,6 +10256,22 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_adapter_deep_copy_success,
                                   stable_ref_adapter_deep_copy_success)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_adapter_ref_length_mismatch,
                                   stable_ref_adapter_ref_length_mismatch)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(constant_ref_token_attempts,
+                                  constant_ref_token_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(constant_ref_token_success,
+                                  constant_ref_token_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(constant_ref_token_unsupported,
+                                  constant_ref_token_unsupported)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(constant_ref_token_bytes,
+                                  constant_ref_token_bytes)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(constant_ref_token_deep_copy_success,
+                                  constant_ref_token_deep_copy_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(constant_ref_token_normal_rejects,
+                                  constant_ref_token_normal_rejects)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(constant_ref_token_invalid_rejects,
+                                  constant_ref_token_invalid_rejects)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(constant_ref_token_len_mismatch,
+                                  constant_ref_token_len_mismatch)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_pair_adapter_attempts,
                                   stable_ref_pair_adapter_attempts)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(stable_ref_pair_adapter_success,
@@ -12821,6 +12837,29 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_result_stable_ref_adapter_unsupported",
      (char *)&show_pq_stable_ref_adapter_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_constant_ref_token_attempts",
+     (char *)&show_pq_constant_ref_token_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_constant_ref_token_bytes",
+     (char *)&show_pq_constant_ref_token_bytes, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_constant_ref_token_deep_copy_success",
+     (char *)&show_pq_constant_ref_token_deep_copy_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_constant_ref_token_invalid_rejects",
+     (char *)&show_pq_constant_ref_token_invalid_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_constant_ref_token_len_mismatch",
+     (char *)&show_pq_constant_ref_token_len_mismatch, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_constant_ref_token_normal_rejects",
+     (char *)&show_pq_constant_ref_token_normal_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_constant_ref_token_success",
+     (char *)&show_pq_constant_ref_token_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_constant_ref_token_unsupported",
+     (char *)&show_pq_constant_ref_token_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_result_stable_ref_pair_adapter_antisym_success",
      (char *)&show_pq_stable_ref_pair_adapter_antisymmetric_success, SHOW_FUNC,
