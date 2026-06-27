@@ -578,6 +578,11 @@ class ha_innobase : public handler {
       const key_range *end_key, uint requested_dop,
       uint *ranges_built) override;
 
+  int pq_primary_range_produce(
+      THD *leader_thd, uint keyno, const key_range *start_key,
+      const key_range *end_key, uint max_rows, PQ_row_sink *row_sink,
+      uint *row_count) override;
+
   /**
     Debug-only secondary visibility contract smoke.
 

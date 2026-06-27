@@ -5025,6 +5025,25 @@ class handler {
     return HA_ERR_UNSUPPORTED;
   }
 
+  /** Experimental primary clustered range row producer.
+
+    This is a narrow leader-local bridge for the first user-visible clustered
+    range gate. Engines must fail closed on unsupported shapes and must not
+    start worker threads or consume the commercial worker-pull path here.
+    Callers must use a discardable buffering sink: if this method returns any
+    nonzero error, row_count is zero and all rows previously sent to row_sink
+    during the failed attempt must be ignored before falling back.
+  */
+  virtual int pq_primary_range_produce(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *start_key [[maybe_unused]],
+      const key_range *end_key [[maybe_unused]],
+      uint max_rows [[maybe_unused]],
+      PQ_row_sink *row_sink [[maybe_unused]], uint *row_count) {
+    if (row_count != nullptr) *row_count = 0;
+    return HA_ERR_UNSUPPORTED;
+  }
+
   /** Debug-only secondary visibility contract smoke.
 
     This must not read rows, produce rows, or open a user-visible PQ execution

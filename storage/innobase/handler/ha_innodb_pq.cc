@@ -87,6 +87,42 @@ static int pq_map_dberr_to_handler_error(dberr_t err, bool *eof) {
   }
 }
 
+class PQ_counting_row_sink final : public PQ_row_sink {
+ public:
+  PQ_counting_row_sink(PQ_row_sink *inner, uint max_rows)
+      : m_inner(inner), m_max_rows(max_rows) {}
+
+  bool send_row(TABLE *source_table) override {
+    if (m_max_rows == 0 || m_rows >= m_max_rows) {
+      m_limit_hit = true;
+      return true;
+    }
+    if (m_inner == nullptr || m_inner->send_row(source_table)) {
+      return true;
+    }
+    ++m_rows;
+    return false;
+  }
+
+  bool should_abort() const override { return m_limit_hit || inner_abort(); }
+
+  bool stop_is_success() const override {
+    return m_limit_hit || (m_inner != nullptr && m_inner->stop_is_success());
+  }
+
+  uint rows() const { return m_rows; }
+  bool limit_hit() const { return m_limit_hit; }
+  bool inner_abort() const {
+    return m_inner != nullptr && m_inner->should_abort();
+  }
+
+ private:
+  PQ_row_sink *const m_inner;
+  const uint m_max_rows;
+  uint m_rows{0};
+  bool m_limit_hit{false};
+};
+
 class InnoDB_pq_sql_leader_context final : public PQ_Leader_context {
  public:
   explicit InnoDB_pq_sql_leader_context(InnoDB_pq_leader_ctx *innodb_ctx)
@@ -882,6 +918,208 @@ int ha_innobase::pq_primary_range_partition_smoke(
     if (err == DB_SUCCESS) {
       *ranges_built = static_cast<uint>(scan_ctx.ranges().size());
     }
+  }
+
+  mem_heap_free(heap);
+  cleanup_read_view();
+
+  return pq_map_dberr_to_handler_error(err, nullptr);
+}
+
+int ha_innobase::pq_primary_range_produce(
+    THD *leader_thd, uint keyno, const key_range *start_key,
+    const key_range *end_key, uint max_rows, PQ_row_sink *row_sink,
+    uint *row_count) {
+  if (row_count != nullptr) {
+    *row_count = 0;
+  }
+
+  if (leader_thd == nullptr || row_sink == nullptr || row_count == nullptr ||
+      max_rows == 0 || table == nullptr || table->s == nullptr ||
+      keyno >= table->s->keys || m_prebuilt == nullptr ||
+      m_prebuilt->m_mysql_table == nullptr ||
+      m_prebuilt->m_mysql_table->record[0] == nullptr ||
+      m_prebuilt->table == nullptr || m_prebuilt->table->is_intrinsic() ||
+      m_prebuilt->trx == nullptr || m_prebuilt->idx_cond ||
+      m_prebuilt->select_lock_type != LOCK_NONE ||
+      m_prebuilt->pcur == nullptr || m_prebuilt->clust_pcur == nullptr) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (keyno != table->s->primary_key) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (start_key != nullptr && start_key->flag != HA_READ_KEY_OR_NEXT) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+  if (end_key != nullptr && end_key->flag != HA_READ_BEFORE_KEY) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  dict_index_t *index = innobase_get_index(keyno);
+  if (index == nullptr || !index->is_clustered() ||
+      !index->is_usable(m_prebuilt->trx) || index->is_corrupted() ||
+      dict_table_has_fts_index(index->table)) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  trx_t *trx = m_prebuilt->trx;
+  const bool had_active_read_view =
+      srv_read_only_mode ||
+      (trx->read_view != nullptr && MVCC::is_view_active(trx->read_view));
+  trx_start_if_not_started(trx, false, UT_LOCATION_HERE);
+  if (!srv_read_only_mode) {
+    trx_assign_read_view(trx);
+  }
+  const bool close_read_view_on_end =
+      !had_active_read_view &&
+      !thd_test_options(leader_thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+
+  auto cleanup_read_view = [&]() {
+    if (close_read_view_on_end && trx->read_view != nullptr &&
+        MVCC::is_view_active(trx->read_view)) {
+      mutex_enter(&trx_sys->mutex);
+      trx_sys->mvcc->view_close(trx->read_view, true);
+      mutex_exit(&trx_sys->mutex);
+    }
+    if (close_read_view_on_end && m_prebuilt != nullptr) {
+      m_prebuilt->sql_stat_start = true;
+    }
+  };
+
+  const KEY *key = &table->key_info[keyno];
+  mem_heap_t *heap = mem_heap_create(
+      2 * (key->actual_key_parts * sizeof(dfield_t) + sizeof(dtuple_t)),
+      UT_LOCATION_HERE);
+  if (heap == nullptr) {
+    cleanup_read_view();
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+
+  dtuple_t *range_start = nullptr;
+  dtuple_t *range_end = nullptr;
+  dberr_t err = DB_SUCCESS;
+
+  if (start_key != nullptr && start_key->keypart_map != 0) {
+    range_start = dtuple_create(heap, key->actual_key_parts);
+    dict_index_copy_types(range_start, index, key->actual_key_parts);
+    row_sel_convert_mysql_key_to_innobase(
+        range_start, m_prebuilt->srch_key_val1, m_prebuilt->srch_key_val_len,
+        index, reinterpret_cast<const byte *>(start_key->key),
+        static_cast<ulint>(start_key->length));
+    if (range_start->n_fields == 0) {
+      err = DB_UNSUPPORTED;
+    }
+  }
+
+  if (err == DB_SUCCESS && end_key != nullptr && end_key->keypart_map != 0) {
+    range_end = dtuple_create(heap, key->actual_key_parts);
+    dict_index_copy_types(range_end, index, key->actual_key_parts);
+    row_sel_convert_mysql_key_to_innobase(
+        range_end, m_prebuilt->srch_key_val2, m_prebuilt->srch_key_val_len,
+        index, reinterpret_cast<const byte *>(end_key->key),
+        static_cast<ulint>(end_key->length));
+    if (range_end->n_fields == 0) {
+      err = DB_UNSUPPORTED;
+    }
+  }
+
+  dict_index_t *saved_index = m_prebuilt->index;
+  const unsigned saved_read_just_key = m_prebuilt->read_just_key;
+  const unsigned saved_template_type = m_prebuilt->template_type;
+  const unsigned saved_n_template = m_prebuilt->n_template;
+  const unsigned saved_null_bitmap_len = m_prebuilt->null_bitmap_len;
+  const unsigned saved_need_to_access_clustered =
+      m_prebuilt->need_to_access_clustered;
+  const unsigned saved_templ_contains_blob = m_prebuilt->templ_contains_blob;
+  const unsigned saved_templ_contains_fixed_point =
+      m_prebuilt->templ_contains_fixed_point;
+  const ulint saved_mysql_prefix_len = m_prebuilt->mysql_prefix_len;
+  const ulint saved_idx_cond_n_cols = m_prebuilt->idx_cond_n_cols;
+  const bool saved_keep_other_fields_on_keyread =
+      m_prebuilt->keep_other_fields_on_keyread;
+  const bool saved_in_fts_query = m_prebuilt->in_fts_query;
+  const bool saved_m_end_range = m_prebuilt->m_end_range;
+  mysql_row_templ_t *saved_mysql_template_ptr = m_prebuilt->mysql_template;
+  std::vector<mysql_row_templ_t> saved_mysql_template;
+  if (saved_mysql_template_ptr != nullptr && table->s->fields > 0) {
+    saved_mysql_template.resize(table->s->fields);
+    std::memcpy(saved_mysql_template.data(), saved_mysql_template_ptr,
+                table->s->fields * sizeof(mysql_row_templ_t));
+  }
+
+  auto restore_prebuilt_template_state = [&]() {
+    reset_template();
+    if (saved_mysql_template_ptr == nullptr) {
+      if (m_prebuilt->mysql_template != nullptr) {
+        ut::free(m_prebuilt->mysql_template);
+      }
+      m_prebuilt->mysql_template = nullptr;
+    } else {
+      if (m_prebuilt->mysql_template != saved_mysql_template_ptr &&
+          m_prebuilt->mysql_template != nullptr) {
+        ut::free(m_prebuilt->mysql_template);
+      }
+      m_prebuilt->mysql_template = saved_mysql_template_ptr;
+      if (!saved_mysql_template.empty()) {
+        std::memcpy(m_prebuilt->mysql_template, saved_mysql_template.data(),
+                    saved_mysql_template.size() * sizeof(mysql_row_templ_t));
+      }
+    }
+    m_prebuilt->index = saved_index;
+    m_prebuilt->read_just_key = saved_read_just_key;
+    m_prebuilt->template_type = saved_template_type;
+    m_prebuilt->n_template = saved_n_template;
+    m_prebuilt->null_bitmap_len = saved_null_bitmap_len;
+    m_prebuilt->need_to_access_clustered = saved_need_to_access_clustered;
+    m_prebuilt->templ_contains_blob = saved_templ_contains_blob;
+    m_prebuilt->templ_contains_fixed_point =
+        saved_templ_contains_fixed_point;
+    m_prebuilt->mysql_prefix_len = saved_mysql_prefix_len;
+    m_prebuilt->idx_cond_n_cols = saved_idx_cond_n_cols;
+    m_prebuilt->keep_other_fields_on_keyread =
+        saved_keep_other_fields_on_keyread;
+    m_prebuilt->in_fts_query = saved_in_fts_query;
+    m_prebuilt->m_end_range = saved_m_end_range;
+  };
+
+  if (err == DB_SUCCESS) {
+    m_prebuilt->index = index;
+    m_prebuilt->read_just_key = 0;
+    build_template(false);
+
+    const bool is_compact = dict_table_is_comp(index->table);
+    page_size_t page_size(dict_tf_to_fsp_flags(index->table->flags));
+    InnoDB_pq_scan_ctx scan_ctx(index, trx, is_compact, page_size);
+    err = scan_ctx.partition(0, range_start, range_end);
+
+    PQ_counting_row_sink counting_sink(row_sink, max_rows);
+    if (err == DB_SUCCESS) {
+      for (const auto &range : scan_ctx.ranges()) {
+        err = scan_ctx.produce_callback_rows_for_range(
+            m_prebuilt->m_mysql_table->record[0], m_prebuilt, &counting_sink,
+            &range);
+        if (err != DB_SUCCESS || counting_sink.should_abort()) {
+          break;
+        }
+      }
+    }
+    if (err == DB_INTERRUPTED && counting_sink.limit_hit()) {
+      err = DB_UNSUPPORTED;
+    }
+    if (err == DB_SUCCESS && counting_sink.inner_abort()) {
+      err = DB_INTERRUPTED;
+    }
+    if (err == DB_SUCCESS) {
+      *row_count = counting_sink.rows();
+    }
+
+    restore_prebuilt_template_state();
+  }
+
+  if (err != DB_SUCCESS) {
+    *row_count = 0;
   }
 
   mem_heap_free(heap);

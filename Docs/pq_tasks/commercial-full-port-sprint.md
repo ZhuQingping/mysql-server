@@ -2547,6 +2547,58 @@ Notes:
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
 
+#### Batch D1.6ac - Primary clustered range producer API
+
+Status: completed; independent re-review accepted after fail-closed cleanup.
+
+目标：
+
+- 继续向商用 primary clustered range 扫描路径靠拢；
+- 在 handler/InnoDB 层增加 leader-local primary clustered range row
+  producer API，为后续 SQL iterator/factory 接入准备存储引擎行生产能力；
+- 保持当前批次不打开用户可见 primary range PQ 执行路径；
+- 保持 fail-closed：不启动 worker、不接入 commercial worker-pull
+  `ha_pq_next` 路径，unsupported shape 直接返回 unsupported 供 SQL 层
+  fallback。
+
+Implementation:
+
+- 新增 handler API `pq_primary_range_produce()`，默认返回 unsupported；
+- InnoDB 实现只接受 clustered PRIMARY、单段正向 range、无 ICP、非
+  intrinsic table、可用且未损坏索引；
+- 复用 `row_sel_convert_mysql_key_to_innobase()` 将 SQL range endpoint
+  转换为 InnoDB tuple，并复用 `InnoDB_pq_scan_ctx::partition()` /
+  `produce_callback_rows_for_range()` 生产 callback rows；
+- 生产期间保存并恢复 `row_prebuilt_t` template/index 相关状态，调用结束
+  后清理本次创建的 read view；
+- API 增加 `max_rows` 上限，超过上限时返回 unsupported，避免后续
+  SQL 层可见路径在估算误差下无限制 materialize rows。
+
+Validation:
+
+- `git diff --check -- sql/handler.h storage/innobase/handler/ha_innodb.h
+  storage/innobase/handler/ha_innodb_pq.cc
+  Docs/pq_tasks/commercial-full-port-sprint.md` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed。
+
+Review:
+
+- independent Review Agent initially requested changes for locking-read
+  fail-closed handling and nonzero-return row-discard contract；
+- fixed by rejecting `select_lock_type != LOCK_NONE` and documenting that
+  callers must use discardable buffering sinks and ignore any rows from a
+  failed attempt；
+- re-review accepted with no Critical or Important findings。
+
+Notes:
+
+- 本批次只提供 handler/InnoDB producer bridge；SQL iterator/factory、
+  status counter 和用户可见 MTR 将在后续独立小任务完成；
+- no SQL caller exists yet; `rg pq_primary_range_produce` only finds handler
+  declaration and InnoDB override；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
+
 #### Batch D1.6aa - ORDER BY sidecar preflight readiness
 
 Status: completed; independent re-review accepted.
