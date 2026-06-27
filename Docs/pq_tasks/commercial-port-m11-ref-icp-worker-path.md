@@ -14,8 +14,9 @@ M11-F5 closure accepted；M11-F6 positive-path phase selection design committed
 as `31bdc66fb36`；M11-F6a worker-side constant covering ref contract design and
 F6a-1/F6a-2 diagnostics completed；M11-F6b-0 source inventory / contract
 confirmation completed；M11-F6b-1 local constant-ref token transport helper
-completed locally and pending independent review。Real worker-side ICP positive
-row production remains blocked。
+completed and committed；M11-F6b-2 constant-ref context to token smoke completed
+locally and pending independent review。Real worker-side ICP positive row
+production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -2627,7 +2628,8 @@ Completion Report - M11-F6a-2 Coding:
 #### M11-F6b: Worker Constant-ref Private Row-token Handoff
 
 Status: F6b-0 source inventory completed and committed；F6b-1 local
-constant-ref token transport helper completed locally；pending independent
+constant-ref token transport helper completed and committed；F6b-2
+constant-ref context to token smoke completed locally；pending independent
 code/docs/test review。
 
 Goal:
@@ -2884,6 +2886,78 @@ Completion Report - M11-F6b-1 Coding:
   - DBUG-only bridge from F6a-owned constant-ref context to the F6b-1 private
     token helper, still no worker TABLE / handler row execution and no user
     visible result path。
+
+Completion Report - M11-F6b-2 Coding:
+
+- Changed files:
+  - `sql/parallel_query/pq_iterators.cc`；
+  - `sql/parallel_query/sql_parallel.h`；
+  - `sql/mysqld.cc`；
+  - `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`；
+  - `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`；
+  - `mysql-test/suite/parallel_query/r/pq_stats.result`；
+  - `Docs/pq_tasks/README.md`；
+  - `Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md`；
+  - `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`。
+- Implementation:
+  - added DBUG-only `pq_worker_ref_ctx_token_transport_smoke` under
+    `PQSecondaryCoveringRefIterator::Init()` after F6a constant-ref context
+    construction；
+  - the bridge calls
+    `pq_run_query_result_mq_constant_ref_token_transport_smoke()` with
+    `PQ_worker_constant_ref_context_shape::owned_key`；
+  - added eight bridge-specific counters:
+    `Parallel_worker_ref_ctx_token_attempts`,
+    `Parallel_worker_ref_ctx_token_success`,
+    `Parallel_worker_ref_ctx_token_unsupported`,
+    `Parallel_worker_ref_ctx_token_bytes`,
+    `Parallel_worker_ref_ctx_token_deep_copy_success`,
+    `Parallel_worker_ref_ctx_token_normal_rejects`,
+    `Parallel_worker_ref_ctx_token_invalid_rejects`,
+    `Parallel_worker_ref_ctx_token_len_mismatch`；
+  - kept F6b-1 generic `Parallel_worker_constant_ref_token_*` counters
+    unchanged so F6b-1 and F6b-2 remain distinguishable。
+- Scope kept closed:
+  - no `PQRefIterator::Read()` / `PQblockScanIterator::Read()`
+    implementation；
+  - no `pq_worker_scan_next()` or `ha_pq_next()`；
+  - no production `Query_result_mq::send_data()` / `m_stable_output` behavior
+    change；
+  - no `PQWR` header / flag / production wire-format change；
+  - no storage / InnoDB / optimizer / access-path changes；
+  - no worker TABLE / handler row execution and no user-visible worker-side ref
+    row production。
+- MTR coverage:
+  - no-DBUG zero deltas for all eight F6b-2 bridge counters；
+  - DBUG success proves F6a-owned constant-ref key bytes can pass through the
+    private token transport helper with owned bytes, deep-copy, normal decode
+    reject, invalid frame reject, and length mismatch reject；
+  - explicit zero deltas for `Parallel_workers_launched`,
+    `Parallel_ranges_dispatched`, `Parallel_worker_result_smoke_rows`,
+    `Parallel_orderby_worker_adapter_rows`,
+    `Parallel_exchange_sort_worker_frame_smoke_rows`, and
+    `Parallel_callback_smoke_rows`；
+  - `pq_stats` includes the eight new status variables。
+- Verification:
+  - `git diff --check` passed before build；
+  - `cmake --build build-ninja --target mysqld -j 8` passed；
+  - `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1
+    pq_commercial_ref_icp pq_stats --vardir=/tmp/pq_f6b2_verify_vardir
+    --tmpdir=/tmp/pq_f6b2_verify_tmp` passed。
+- Residual risk:
+  - F6b-2 still executes inside the current leader-local constant covering ref
+    iterator, so its SELECT window increases existing visible leader-local
+    executed/secondary-row counters；the test separately proves worker/range/MQ
+    row counters remain zero；
+  - the token helper still uses the `PQWR` stable-ref frame slot internally as
+    opaque transport；semantic safety relies on the F6b wrapper naming and
+    counters until a future production token format is designed。
+- Safe next task after review:
+  - M11-F6c User-visible Migration Decision；
+  - decide whether to migrate M9-C2 leader-local constant covering ref toward a
+    worker-side path or require another worker TABLE/handler source inventory；
+  - do not open visible worker-side ref execution until this decision is
+    accepted。
 
 Required Future MTR Windows:
 

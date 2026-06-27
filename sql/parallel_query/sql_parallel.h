@@ -398,6 +398,14 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_ref_ctx_cleanup_success{0};  ///< F6a-2
   std::atomic<uint64> worker_ref_ctx_cleanup_failures{0};  ///< F6a-2
   std::atomic<uint64> worker_ref_ctx_cleanup_unsupported{0};  ///< F6a-2
+  std::atomic<uint64> worker_ref_ctx_token_attempts{0};  ///< F6b-2
+  std::atomic<uint64> worker_ref_ctx_token_success{0};  ///< F6b-2
+  std::atomic<uint64> worker_ref_ctx_token_unsupported{0};  ///< F6b-2
+  std::atomic<uint64> worker_ref_ctx_token_bytes{0};  ///< F6b-2
+  std::atomic<uint64> worker_ref_ctx_token_deep_copy_success{0};  ///< F6b-2
+  std::atomic<uint64> worker_ref_ctx_token_normal_rejects{0};  ///< F6b-2
+  std::atomic<uint64> worker_ref_ctx_token_invalid_rejects{0};  ///< F6b-2
+  std::atomic<uint64> worker_ref_ctx_token_len_mismatch{0};  ///< F6b-2
   std::atomic<uint64> secondary_reverse_reject_probes{0};  ///< Reverse ref rejects
   std::atomic<uint64> secondary_reverse_ref_reject_probes{0};  ///< Reverse ref
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
@@ -890,6 +898,15 @@ struct PQ_global_stats {
     worker_ref_ctx_cleanup_success.store(0, std::memory_order_relaxed);
     worker_ref_ctx_cleanup_failures.store(0, std::memory_order_relaxed);
     worker_ref_ctx_cleanup_unsupported.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_token_attempts.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_token_success.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_token_unsupported.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_token_bytes.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_token_deep_copy_success.store(0,
+                                                 std::memory_order_relaxed);
+    worker_ref_ctx_token_normal_rejects.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_token_invalid_rejects.store(0, std::memory_order_relaxed);
+    worker_ref_ctx_token_len_mismatch.store(0, std::memory_order_relaxed);
     secondary_reverse_reject_probes.store(0, std::memory_order_relaxed);
     secondary_reverse_ref_reject_probes.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);

@@ -39,6 +39,7 @@
 #include "sql/mysqld.h"
 #include "sql/parallel_query/exchange_sort.h"
 #include "sql/parallel_query/pq_handler.h"
+#include "sql/parallel_query/query_result_mq.h"
 #include "sql/parallel_query/sql_parallel.h"
 #include "sql/range_optimizer/index_range_scan.h"
 #include "sql/range_optimizer/range_optimizer.h"
@@ -1149,6 +1150,45 @@ class PQSecondaryCoveringRefIterator final : public TableRowIterator {
     });
     DBUG_EXECUTE_IF("pq_worker_ref_ctx_cleanup_fail_smoke", {
       run_ref_ctx_cleanup_smoke(true);
+    });
+
+    DBUG_EXECUTE_IF("pq_worker_ref_ctx_token_transport_smoke", {
+      pq_global_stats.worker_ref_ctx_token_attempts.fetch_add(
+          1, std::memory_order_relaxed);
+      PQ_worker_constant_ref_context_shape ctx;
+      if (pq_build_worker_constant_ref_context_shape(table(), m_ref, ref_key,
+                                                     &ctx) ||
+          ctx.owned_key.empty()) {
+        pq_global_stats.worker_ref_ctx_token_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+      } else {
+        uint32 token_bytes = 0;
+        uint32 token_deep_copy = 0;
+        uint32 token_normal_rejects = 0;
+        uint32 token_invalid_rejects = 0;
+        uint32 token_length_mismatch = 0;
+        if (pq_run_query_result_mq_constant_ref_token_transport_smoke(
+                ctx.owned_key.data(), static_cast<uint32>(ctx.owned_key.size()),
+                static_cast<uint32>(ctx.owned_key.size()), &token_bytes,
+                &token_deep_copy, &token_normal_rejects,
+                &token_invalid_rejects, &token_length_mismatch)) {
+          pq_global_stats.worker_ref_ctx_token_unsupported.fetch_add(
+              1, std::memory_order_relaxed);
+        } else {
+          pq_global_stats.worker_ref_ctx_token_success.fetch_add(
+              1, std::memory_order_relaxed);
+          pq_global_stats.worker_ref_ctx_token_bytes.fetch_add(
+              token_bytes, std::memory_order_relaxed);
+          pq_global_stats.worker_ref_ctx_token_deep_copy_success.fetch_add(
+              token_deep_copy, std::memory_order_relaxed);
+          pq_global_stats.worker_ref_ctx_token_normal_rejects.fetch_add(
+              token_normal_rejects, std::memory_order_relaxed);
+          pq_global_stats.worker_ref_ctx_token_invalid_rejects.fetch_add(
+              token_invalid_rejects, std::memory_order_relaxed);
+          pq_global_stats.worker_ref_ctx_token_len_mismatch.fetch_add(
+              token_length_mismatch, std::memory_order_relaxed);
+        }
+      }
     });
 
     pq_record_buffer_probe(table());

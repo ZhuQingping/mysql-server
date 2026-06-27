@@ -10050,6 +10050,22 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_cleanup_failures,
                                     worker_ref_ctx_cleanup_failures)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_cleanup_unsupported,
                                     worker_ref_ctx_cleanup_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_attempts,
+                                    worker_ref_ctx_token_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_success,
+                                    worker_ref_ctx_token_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_unsupported,
+                                    worker_ref_ctx_token_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_bytes,
+                                    worker_ref_ctx_token_bytes)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_deep_copy_success,
+                                    worker_ref_ctx_token_deep_copy_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_normal_rejects,
+                                    worker_ref_ctx_token_normal_rejects)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_invalid_rejects,
+                                    worker_ref_ctx_token_invalid_rejects)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_len_mismatch,
+                                    worker_ref_ctx_token_len_mismatch)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_reject_probes,
                                     secondary_reverse_reject_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_ref_reject_probes,
@@ -12665,6 +12681,30 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_ctx_cleanup_unsupported",
      (char *)&show_pq_worker_ref_ctx_cleanup_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_token_attempts",
+     (char *)&show_pq_worker_ref_ctx_token_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_token_bytes",
+     (char *)&show_pq_worker_ref_ctx_token_bytes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_token_deep_copy_success",
+     (char *)&show_pq_worker_ref_ctx_token_deep_copy_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_token_invalid_rejects",
+     (char *)&show_pq_worker_ref_ctx_token_invalid_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_token_len_mismatch",
+     (char *)&show_pq_worker_ref_ctx_token_len_mismatch, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_token_normal_rejects",
+     (char *)&show_pq_worker_ref_ctx_token_normal_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_token_success",
+     (char *)&show_pq_worker_ref_ctx_token_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_ctx_token_unsupported",
+     (char *)&show_pq_worker_ref_ctx_token_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_ctx_success", (char *)&show_pq_worker_ref_ctx_success,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
