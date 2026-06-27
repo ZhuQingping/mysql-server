@@ -87,6 +87,10 @@ SET @pq_orderby_preflight_blocked_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_orderby_execution_preflight_blocked');
+SET @pq_orderby_preflight_blocked_elig_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_execution_preflight_blocked_eligibility');
 SET @pq_orderby_preflight_ready_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -161,6 +165,10 @@ SELECT
       @pq_orderby_preflight_blocked_before AS orderby_preflight_blocked_delta,
   (SELECT CAST(variable_value AS UNSIGNED)
      FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_execution_preflight_blocked_eligibility') -
+      @pq_orderby_preflight_blocked_elig_before AS orderby_preflight_blocked_elig_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_orderby_execution_preflight_ready') -
       @pq_orderby_preflight_ready_before AS orderby_preflight_ready_delta;
 
@@ -203,6 +211,149 @@ SELECT
      FROM performance_schema.global_status
      WHERE variable_name = 'Parallel_orderby_preflight_missing_error_diag') -
       @pq_orderby_preflight_missing_error_diag_before AS missing_error_diag_delta;
+
+# Unsupported ORDER BY shapes must also be fail-closed with an explicit
+# preflight eligibility diagnostic, without reporting missing execution
+# prerequisites for a shape that was never selected as a future candidate.
+SET @pq_orderby_elig_attempts_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_eligibility_contract_attempts');
+SET @pq_orderby_elig_candidate_disabled_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_eligibility_contract_candidate_disabled');
+SET @pq_orderby_elig_unsupported_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_eligibility_contract_unsupported');
+SET @pq_orderby_preflight_attempts_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_execution_preflight_attempts');
+SET @pq_orderby_preflight_blocked_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_execution_preflight_blocked');
+SET @pq_orderby_preflight_blocked_elig_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_execution_preflight_blocked_eligibility');
+SET @pq_orderby_preflight_ready_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_execution_preflight_ready');
+SET @pq_orderby_preflight_missing_saved_order_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_saved_order');
+SET @pq_orderby_preflight_missing_filesort_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_filesort');
+SET @pq_orderby_preflight_missing_sort_param_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_sort_param');
+SET @pq_orderby_preflight_missing_worker_frame_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_worker_frame');
+SET @pq_orderby_preflight_missing_exchange_heap_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_exchange_heap');
+SET @pq_orderby_preflight_missing_leader_mat_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_leader_materialize');
+SET @pq_orderby_preflight_missing_rowid_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_rowid');
+SET @pq_orderby_preflight_missing_ordered_read_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_ordered_read');
+SET @pq_orderby_preflight_missing_error_diag_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_orderby_preflight_missing_error_diag');
+
+SET @old_debug=@@debug;
+SET SESSION debug="+d,pq_orderby_eligibility_contract_smoke";
+SET SESSION debug="+d,pq_orderby_execution_preflight_smoke";
+--replace_column 10 ROWS
+EXPLAIN SELECT id, k FROM t1 ORDER BY k DESC, id ASC;
+SET SESSION debug=@old_debug;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_eligibility_contract_attempts') -
+      @pq_orderby_elig_attempts_unsupported_before AS unsupported_elig_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_eligibility_contract_candidate_disabled') -
+      @pq_orderby_elig_candidate_disabled_unsupported_before AS unsupported_elig_candidate_disabled_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_eligibility_contract_unsupported') -
+      @pq_orderby_elig_unsupported_unsupported_before AS unsupported_elig_unsupported_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_execution_preflight_attempts') -
+      @pq_orderby_preflight_attempts_unsupported_before AS unsupported_preflight_attempts_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_execution_preflight_blocked') -
+      @pq_orderby_preflight_blocked_unsupported_before AS unsupported_preflight_blocked_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_execution_preflight_blocked_eligibility') -
+      @pq_orderby_preflight_blocked_elig_unsupported_before AS unsupported_preflight_blocked_elig_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_execution_preflight_ready') -
+      @pq_orderby_preflight_ready_unsupported_before AS unsupported_preflight_ready_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_saved_order') -
+      @pq_orderby_preflight_missing_saved_order_unsupported_before AS unsupported_missing_saved_order_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_filesort') -
+      @pq_orderby_preflight_missing_filesort_unsupported_before AS unsupported_missing_filesort_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_sort_param') -
+      @pq_orderby_preflight_missing_sort_param_unsupported_before AS unsupported_missing_sort_param_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_worker_frame') -
+      @pq_orderby_preflight_missing_worker_frame_unsupported_before AS unsupported_missing_worker_frame_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_exchange_heap') -
+      @pq_orderby_preflight_missing_exchange_heap_unsupported_before AS unsupported_missing_exchange_heap_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_leader_materialize') -
+      @pq_orderby_preflight_missing_leader_mat_unsupported_before AS unsupported_missing_leader_mat_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_rowid') -
+      @pq_orderby_preflight_missing_rowid_unsupported_before AS unsupported_missing_rowid_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_ordered_read') -
+      @pq_orderby_preflight_missing_ordered_read_unsupported_before AS unsupported_missing_ordered_read_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_orderby_preflight_missing_error_diag') -
+      @pq_orderby_preflight_missing_error_diag_unsupported_before AS unsupported_missing_error_diag_delta;
 
 # ORDER BY is still optimizer-rejected in M8. It must stay serial and must not
 # create a PQ iterator until the real Exchange_sort worker path is wired.

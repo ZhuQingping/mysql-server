@@ -2493,6 +2493,52 @@ Notes:
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
 
+#### Batch D1.6w - ORDER BY preflight blocked-eligibility diagnostic
+
+Status: completed; independent review accepted after fixing review finding.
+
+目标：
+
+- 补齐 ORDER BY execution preflight 对 unsupported ORDER BY shape 的诊断；
+- 当前已有 visible ORDER BY future-candidate + central execution blocker
+  覆盖，本批次只补 `BLOCKED_ELIGIBILITY` 分支；
+- 保持 ORDER BY 用户可见执行路径 serial fail-closed，不接入
+  `Exchange_sort` 或 worker ordered read。
+
+Implementation:
+
+- 新增 `Parallel_orderby_execution_preflight_blocked_eligibility` status
+  counter；
+- `pq_orderby_execution_preflight_smoke` 在
+  `PQOrderByExecutionPreflightStatus::BLOCKED_ELIGIBILITY` 时递增该 counter；
+- `pq_commercial_order_by` 新增 `ORDER BY DESC` unsupported shape 断言：
+  eligibility unsupported +1，preflight blocked-eligibility +1，central
+  blocked/ready +0，missing prerequisite counters 不增长。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_commercial_order_by`
+  `pq_saved_order_group_contract`
+  `pq_commercial_order_by_frames`
+  `pq_parallel_scan_iterator_order_gather_smoke`
+  `pq_stats`。
+
+Review:
+
+- independent Review Agent found no Critical or Important issues；
+- one Minor issue was fixed: unsupported-shape MTR now asserts every
+  `Parallel_orderby_preflight_missing_*` counter remains unchanged, not only
+  `missing_saved_order`。
+
+Notes:
+
+- 不打开 ORDER BY 执行路径；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
+
 #### Batch D1.6t - Visible DOP2 PQWR record_gather gate
 
 Status: completed; independent re-review accepted after fixing review findings.

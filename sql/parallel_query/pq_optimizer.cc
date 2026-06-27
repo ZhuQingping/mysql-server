@@ -1277,6 +1277,9 @@ static void pq_maybe_run_orderby_execution_preflight_smoke(
                                            &preflight)) {
     pq_global_stats.orderby_execution_preflight_ready.fetch_add(
         1, std::memory_order_relaxed);
+  } else if (preflight.blocked_by_eligibility()) {
+    pq_global_stats.orderby_execution_preflight_blocked_eligibility.fetch_add(
+        1, std::memory_order_relaxed);
   } else if (preflight.blocked_by_execution_disabled()) {
     pq_global_stats.orderby_execution_preflight_blocked.fetch_add(
         1, std::memory_order_relaxed);

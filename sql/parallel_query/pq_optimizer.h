@@ -353,6 +353,10 @@ struct PQOrderByExecutionPreflight {
                    BLOCKED_EXECUTION_DISABLED &&
            eligibility_candidate_disabled && execution_disabled;
   }
+
+  bool blocked_by_eligibility() const {
+    return status == PQOrderByExecutionPreflightStatus::BLOCKED_ELIGIBILITY;
+  }
 };
 
 bool pq_build_orderby_execution_preflight(

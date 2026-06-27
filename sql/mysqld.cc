@@ -9799,6 +9799,9 @@ DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_eligibility_contract_unsupported,
                                 orderby_eligibility_contract_unsupported)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_attempts,
                                 orderby_execution_preflight_attempts)
+DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(
+    orderby_execution_preflight_blocked_eligibility,
+    orderby_execution_preflight_blocked_eligibility)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_blocked,
                                 orderby_execution_preflight_blocked)
 DEFINE_PQ_CLONE_PROBE_SHOW_FUNC(orderby_execution_preflight_ready,
@@ -11958,6 +11961,9 @@ SHOW_VAR status_vars[] = {
     {"Parallel_orderby_execution_preflight_attempts",
      (char *)&show_pq_orderby_execution_preflight_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_orderby_execution_preflight_blocked_eligibility",
+     (char *)&show_pq_orderby_execution_preflight_blocked_eligibility,
+     SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_orderby_execution_preflight_blocked",
      (char *)&show_pq_orderby_execution_preflight_blocked, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

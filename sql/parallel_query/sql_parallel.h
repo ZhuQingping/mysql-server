@@ -303,6 +303,7 @@ struct PQ_global_stats {
   std::atomic<uint64> orderby_eligibility_contract_candidate_disabled{0};
   std::atomic<uint64> orderby_eligibility_contract_unsupported{0};
   std::atomic<uint64> orderby_execution_preflight_attempts{0};  ///< 5e-2
+  std::atomic<uint64> orderby_execution_preflight_blocked_eligibility{0};
   std::atomic<uint64> orderby_execution_preflight_blocked{0};
   std::atomic<uint64> orderby_execution_preflight_ready{0};
   std::atomic<uint64> orderby_execution_preflight_missing_saved_order_state{0};  ///< 5g-4a
@@ -743,6 +744,8 @@ struct PQ_global_stats {
     orderby_eligibility_contract_unsupported.store(0,
                                                    std::memory_order_relaxed);
     orderby_execution_preflight_attempts.store(0, std::memory_order_relaxed);
+    orderby_execution_preflight_blocked_eligibility.store(
+        0, std::memory_order_relaxed);
     orderby_execution_preflight_blocked.store(0, std::memory_order_relaxed);
     orderby_execution_preflight_ready.store(0, std::memory_order_relaxed);
     orderby_execution_preflight_missing_saved_order_state.store(
