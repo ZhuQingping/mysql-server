@@ -2539,6 +2539,47 @@ Notes:
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
 
+#### Batch D1.6x - Visible PQWR LIMIT early-stop cleanup guard
+
+Status: completed; independent review accepted after documentation refresh.
+
+目标：
+
+- 为 visible DOP2 PQWR record_gather 增加 LIMIT/OFFSET early-stop cleanup
+  targeted MTR；
+- 验证 leader 在未读到 EOF 时停止读取后，worker/MQ cleanup 不会 hang；
+- 验证同一 session 后续 PQWR 查询可以再次启动，证明没有残留
+  gather/exchange state；
+- 不修改 PQWR frame 协议，不启用 ORDER BY/range/ref/ICP。
+
+Implementation:
+
+- 新增 `pq_read_threaded_pqwr_limit_cleanup` MTR；
+- first query 使用 `LIMIT 2 OFFSET 1`，断言 visible PQWR selected +1、
+  workers +2、rows +3；
+- follow-up query 读取全表，断言 visible PQWR 再次 selected +1、
+  workers +2、rows +8。
+
+Validation:
+
+- targeted MTR passed:
+  `pq_read_threaded_pqwr_limit_cleanup`
+  `pq_read_threaded_pqwr_record_gather`
+  `pq_read_threaded_pqwr_worker_error`
+  `pq_stats`。
+
+Review:
+
+- independent Review Agent found no Critical or Important issues；
+- one Minor issue was fixed: documentation status and validation were updated
+  after the targeted verification run。
+
+Notes:
+
+- source code unchanged；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
+
 #### Batch D1.6t - Visible DOP2 PQWR record_gather gate
 
 Status: completed; independent re-review accepted after fixing review findings.
