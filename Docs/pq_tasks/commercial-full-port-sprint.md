@@ -2599,6 +2599,54 @@ Notes:
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
 
+#### Batch D1.6ad - Primary clustered range SQL iterator/factory gate
+
+Status: completed; independent review accepted.
+
+目标：
+
+- 在 D1.6ac handler/InnoDB producer API 之上，接入 SQL iterator/factory；
+- 打开一个小范围用户可见 primary clustered range 正路径；
+- 保持 leader-local buffering，不启动 worker，不进入 commercial
+  worker-pull `ha_pq_next` 路径；
+- 对当前 handler 未覆盖的 endpoint flag 继续在 SQL factory 层 fail
+  closed，避免无谓 fallback counter 噪声。
+
+Implementation:
+
+- 新增 `TryCreatePQPrimaryClusteredRangeIterator()`；
+- `access_path.cc` 增加独立 `allow_pq_primary_range` root gate，并让
+  `FILTER` 继续传递该 gate；
+- 新增 `PQPrimaryClusteredRangeIterator`，复用 `PQ_record_buffer_sink` 和
+  `pq_primary_range_produce()`；
+- SQL iterator 使用 discardable candidate row buffer，只有 handler 返回
+  success 且 `row_count` 与 buffer 行数一致时才暴露给上层；
+- factory 当前只选择 InnoDB clustered PRIMARY、单 range、正向、无 ICP、
+  single-table simple SELECT、无 ORDER/GROUP/HAVING、估算行数不超过 64
+  的形态；
+- endpoint 预检只接受当前 handler 支持的 `HA_READ_KEY_OR_NEXT` start 和
+  `HA_READ_BEFORE_KEY` end；`BETWEEN`、`>` 等形态暂继续走原生
+  `IndexRangeScanIterator`。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_commercial_range_clust`。
+
+Review:
+
+- independent Review Agent accepted the uncommitted D1.6ad diff with no
+  Critical, Important, or Minor findings。
+
+Notes:
+
+- `pq_commercial_range_clust` 中 `WHERE id < 5` 现在断言
+  `Parallel_queries_executed` 增加 1、`Parallel_rows_scanned` 增加 4、
+  worker launch 为 0；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
+
 #### Batch D1.6aa - ORDER BY sidecar preflight readiness
 
 Status: completed; independent re-review accepted.

@@ -51,6 +51,8 @@
 namespace {
 
 constexpr double kPQSecondaryCoveringMaxEstimatedRows = 64.0;
+constexpr double kPQPrimaryClusteredMaxEstimatedRows = 64.0;
+constexpr uint kPQPrimaryClusteredMaxBufferedRows = 64;
 constexpr size_t kPQSecondaryDependentRefMaxBufferedRows = 1024;
 constexpr uint kPQSecondaryNoncoveringIcpMaxRows = 64;
 constexpr uint64 kPQParallelScanIteratorReadWaitTimeoutUs = 1000;
@@ -322,6 +324,77 @@ bool pq_secondary_key_parts_are_safe(const TABLE *table, uint keyno) {
   return true;
 }
 
+bool pq_primary_clustered_key_parts_are_safe(const TABLE *table, uint keyno) {
+  if (table == nullptr || table->s == nullptr || table->key_info == nullptr ||
+      keyno >= table->s->keys || keyno != table->s->primary_key) {
+    return false;
+  }
+
+  const KEY &key = table->key_info[keyno];
+  if (key.flags & (HA_SPATIAL | HA_MULTI_VALUED_KEY)) {
+    return false;
+  }
+
+  for (uint part = 0; part < key.user_defined_key_parts; ++part) {
+    const KEY_PART_INFO &key_part = key.key_part[part];
+    Field *field = key_part.field;
+    if (!pq_secondary_covering_field_type_is_safe(field)) {
+      return false;
+    }
+    if ((key_part.key_part_flag &
+         (HA_REVERSE_SORT | HA_PART_KEY_SEG | HA_VAR_LENGTH_PART |
+          HA_BLOB_PART | HA_BIT_PART)) != 0 ||
+        field == nullptr || key_part.length != field->key_length()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool pq_primary_clustered_read_set_is_safe(const TABLE *table) {
+  if (table == nullptr || table->s == nullptr || table->field == nullptr ||
+      table->read_set == nullptr) {
+    return false;
+  }
+
+  bool saw_read_field = false;
+  for (uint i = 0; i < table->s->fields; ++i) {
+    Field *field = table->field[i];
+    if (field == nullptr || !bitmap_is_set(table->read_set, i)) {
+      continue;
+    }
+
+    saw_read_field = true;
+    if (field->is_gcol() || field->is_hidden() ||
+        field->is_field_for_functional_index() ||
+        field->is_flag_set(BLOB_FLAG) || field->type() == MYSQL_TYPE_GEOMETRY) {
+      return false;
+    }
+  }
+
+  return saw_read_field;
+}
+
+bool pq_primary_clustered_range_endpoints_are_safe(QUICK_RANGE *range) {
+  if (range == nullptr) {
+    return false;
+  }
+
+  key_range start_key;
+  key_range end_key;
+  range->make_min_endpoint(&start_key);
+  range->make_max_endpoint(&end_key);
+
+  if (start_key.keypart_map != 0 && start_key.flag != HA_READ_KEY_OR_NEXT) {
+    return false;
+  }
+  if (end_key.keypart_map != 0 && end_key.flag != HA_READ_BEFORE_KEY) {
+    return false;
+  }
+  return true;
+}
+
 bool pq_secondary_ref_is_constant_and_safe(TABLE *table,
                                            const Index_lookup *ref) {
   if (table == nullptr || table->s == nullptr || ref == nullptr ||
@@ -558,6 +631,138 @@ class PQSecondaryCoveringRangeIterator final : public TableRowIterator {
   std::vector<std::vector<uchar>> m_rows;
   size_t m_pos{0};
   bool m_executed_counted{false};
+  unique_ptr_destroy_only<RowIterator> m_serial_iterator;
+};
+
+class PQPrimaryClusteredRangeIterator final : public TableRowIterator {
+ public:
+  PQPrimaryClusteredRangeIterator(THD *thd, MEM_ROOT *mem_root, TABLE *table,
+                                  ha_rows *examined_rows, double expected_rows,
+                                  uint index_arg,
+                                  bool need_rows_in_rowid_order,
+                                  bool reuse_handler, uint mrr_flags,
+                                  uint mrr_buf_size,
+                                  Bounds_checked_array<QUICK_RANGE *> ranges)
+      : TableRowIterator(thd, table),
+        m_mem_root(mem_root),
+        m_examined_rows(examined_rows),
+        m_expected_rows(expected_rows),
+        m_index(index_arg),
+        m_need_rows_in_rowid_order(need_rows_in_rowid_order),
+        m_reuse_handler(reuse_handler),
+        m_mrr_flags(mrr_flags),
+        m_mrr_buf_size(mrr_buf_size),
+        m_ranges(ranges) {}
+
+  bool Init() override {
+    m_rows.clear();
+    m_pos = 0;
+    m_serial_iterator = nullptr;
+
+    if (m_ranges.size() != 1 || table() == nullptr || table()->file == nullptr ||
+        table()->s == nullptr || table()->s->reclength == 0) {
+      return fallback_to_serial();
+    }
+
+    QUICK_RANGE *range = m_ranges[0];
+    if (range == nullptr) {
+      return fallback_to_serial();
+    }
+
+    key_range start_key;
+    key_range end_key;
+    range->make_min_endpoint(&start_key);
+    range->make_max_endpoint(&end_key);
+
+    PQ_copied_key_endpoint copied_start;
+    PQ_copied_key_endpoint copied_end;
+    if (!pq_copy_key_endpoint(start_key, &copied_start) ||
+        !pq_copy_key_endpoint(end_key, &copied_end)) {
+      PrintError(HA_ERR_OUT_OF_MEM);
+      return true;
+    }
+
+    std::vector<std::vector<uchar>> candidate_rows;
+    pq_record_buffer_probe(table());
+    PQ_record_buffer_sink sink(table(), &candidate_rows);
+    uint row_count = 0;
+    const int error = table()->file->pq_primary_range_produce(
+        thd(), m_index, copied_start.present ? &copied_start.range : nullptr,
+        copied_end.present ? &copied_end.range : nullptr,
+        kPQPrimaryClusteredMaxBufferedRows, &sink, &row_count);
+
+    if (error == HA_ERR_UNSUPPORTED) {
+      return fallback_to_serial();
+    }
+
+    if (error != 0) {
+      PrintError(error);
+      return true;
+    }
+
+    if (row_count != candidate_rows.size() ||
+        row_count > kPQPrimaryClusteredMaxBufferedRows) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+
+    m_rows = std::move(candidate_rows);
+    pq_set_execution_state(thd(), PQ_execution_state::EXECUTED);
+    pq_global_stats.queries_executed.fetch_add(1, std::memory_order_relaxed);
+    pq_global_stats.rows_scanned.fetch_add(row_count, std::memory_order_relaxed);
+    return false;
+  }
+
+  int Read() override {
+    if (m_serial_iterator != nullptr) {
+      return m_serial_iterator->Read();
+    }
+
+    if (m_pos >= m_rows.size()) {
+      table()->set_no_row();
+      return -1;
+    }
+
+    std::memcpy(table()->record[0], m_rows[m_pos].data(),
+                table()->s->reclength);
+    ++m_pos;
+    if (m_examined_rows != nullptr) {
+      ++*m_examined_rows;
+    }
+    return 0;
+  }
+
+  void UnlockRow() override {
+    if (m_serial_iterator != nullptr) {
+      m_serial_iterator->UnlockRow();
+      return;
+    }
+    TableRowIterator::UnlockRow();
+  }
+
+ private:
+  bool fallback_to_serial() {
+    m_rows.clear();
+    pq_set_execution_state(thd(), PQ_execution_state::FALLBACK_SERIAL);
+    pq_global_stats.queries_fallback.fetch_add(1, std::memory_order_relaxed);
+    m_serial_iterator = NewIterator<IndexRangeScanIterator>(
+        thd(), m_mem_root, table(), m_examined_rows, m_expected_rows, m_index,
+        m_need_rows_in_rowid_order, m_reuse_handler, m_mem_root, m_mrr_flags,
+        m_mrr_buf_size, m_ranges);
+    return m_serial_iterator == nullptr || m_serial_iterator->Init();
+  }
+
+  MEM_ROOT *const m_mem_root;
+  ha_rows *const m_examined_rows;
+  const double m_expected_rows;
+  const uint m_index;
+  const bool m_need_rows_in_rowid_order;
+  const bool m_reuse_handler;
+  const uint m_mrr_flags;
+  const uint m_mrr_buf_size;
+  Bounds_checked_array<QUICK_RANGE *> m_ranges;
+  std::vector<std::vector<uchar>> m_rows;
+  size_t m_pos{0};
   unique_ptr_destroy_only<RowIterator> m_serial_iterator;
 };
 
@@ -1685,6 +1890,74 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQSecondaryCoveringRangeIterator(
       thd, mem_root, mem_root, table, examined_rows,
       path->num_output_rows(), param.index, param.need_rows_in_rowid_order,
       param.reuse_handler, param.mrr_flags, param.mrr_buf_size,
+      Bounds_checked_array{param.ranges, param.num_ranges});
+}
+
+unique_ptr_destroy_only<RowIterator> TryCreatePQPrimaryClusteredRangeIterator(
+    THD *thd, MEM_ROOT *mem_root, JOIN *join, AccessPath *path,
+    ha_rows *examined_rows, bool is_root_range_scan) {
+  if (thd == nullptr || mem_root == nullptr || join == nullptr ||
+      path == nullptr || path->type != AccessPath::INDEX_RANGE_SCAN) {
+    return nullptr;
+  }
+
+  if (!is_root_range_scan) {
+    return nullptr;
+  }
+
+  if (!thd->variables.parallel_query ||
+      !thd->variables.parallel_query_experimental_threaded_dop ||
+      thd->pq_is_worker) {
+    return nullptr;
+  }
+
+  if (thd->lex == nullptr || thd->lex->is_explain() ||
+      thd->lex->sql_command != SQLCOM_SELECT) {
+    return nullptr;
+  }
+
+  if (!join->plan_is_single_table() || join->query_block == nullptr ||
+      !join->query_block->is_simple_query_block() ||
+      join->query_block->is_ordered() ||
+      join->query_block->is_explicitly_grouped() ||
+      join->query_block->having_cond() != nullptr) {
+    return nullptr;
+  }
+
+  if (path->num_output_rows() > kPQPrimaryClusteredMaxEstimatedRows) {
+    return nullptr;
+  }
+
+  const auto &param = path->index_range_scan();
+  if (param.geometry || param.reverse || param.num_ranges != 1 ||
+      param.ranges == nullptr || param.used_key_part == nullptr) {
+    return nullptr;
+  }
+  if (!pq_primary_clustered_range_endpoints_are_safe(param.ranges[0])) {
+    return nullptr;
+  }
+
+  TABLE *table = param.used_key_part[0].field != nullptr
+                     ? param.used_key_part[0].field->table
+                     : nullptr;
+  if (table == nullptr || table->s == nullptr || table->file == nullptr ||
+      table->key_info == nullptr || table->s->db_type() != innodb_hton ||
+      table->part_info != nullptr || table->file->pushed_idx_cond != nullptr ||
+      table->s->primary_key == MAX_KEY || param.index != table->s->primary_key ||
+      !table->file->primary_key_is_clustered()) {
+    return nullptr;
+  }
+
+  if (!pq_primary_clustered_key_parts_are_safe(table, param.index) ||
+      !pq_primary_clustered_read_set_is_safe(table)) {
+    return nullptr;
+  }
+
+  pq_set_execution_state(thd, PQ_execution_state::ITERATOR_SELECTED);
+  return NewIterator<PQPrimaryClusteredRangeIterator>(
+      thd, mem_root, mem_root, table, examined_rows, path->num_output_rows(),
+      param.index, param.need_rows_in_rowid_order, param.reuse_handler,
+      param.mrr_flags, param.mrr_buf_size,
       Bounds_checked_array{param.ranges, param.num_ranges});
 }
 

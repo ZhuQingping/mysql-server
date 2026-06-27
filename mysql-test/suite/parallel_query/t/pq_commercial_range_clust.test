@@ -40,6 +40,10 @@ SET @pq_workers_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_workers_launched');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
 SET @pq_primary_range_probe_attempts_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -81,6 +85,9 @@ SELECT
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
     AS workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_scanned_delta,
   ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_primary_range_probe_attempts') -
    @pq_primary_range_probe_attempts_before) >= 1
