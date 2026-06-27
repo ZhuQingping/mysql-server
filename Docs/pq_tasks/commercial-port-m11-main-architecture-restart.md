@@ -132,10 +132,12 @@ token transport helper 已提交；F6b-2 constant-ref context to token smoke 已
 完成、review accepted、提交。F6c user-visible migration decision 已完成
 docs-only 决策并通过独立 review：暂不把 M9-C2 leader-local visible ref gate
 迁移到 worker-side visible execution，下一步先做 F6d / F6c-1 worker TABLE /
-handler source inventory and contract。仍不改变 worker row/MQ、
-`PQRefIterator::Read()`、
-`PQblockScanIterator::Read()`、`handler::ha_pq_next()` 或
-`pq_worker_scan_next()` 的 production 行为。
+handler source inventory and contract。F6d worker-side ref execution
+inventory / contract 已完成 docs-only 任务书并通过独立 review；建议后续
+先做 F6d-1 no-row worker TABLE / handler contract smoke，再评估 positive
+visible worker-side ref row path。仍不改变 worker row/MQ、
+`PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+`handler::ha_pq_next()` 或 `pq_worker_scan_next()` 的 production 行为。
 
 ## 验收边界
 
@@ -164,7 +166,10 @@ handler source inventory and contract。仍不改变 worker row/MQ、
    inventory and contract；该任务必须明确区分 typed
    `pq_worker_scan_next(PQ_Worker_context*, ...)` 与 commercial
    `pq_worker_scan_next(void*, ...)` / `handler::ha_pq_next()` 路径；
-9. 仍不得打开 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+9. F6d worker-side ref execution inventory / contract 已完成 docs-only
+   任务书并通过独立 review；结论是下一步优先做 F6d-1 no-row worker TABLE /
+   handler contract smoke，不直接打开 visible worker-side ref row path；
+10. 仍不得打开 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
    `pq_worker_scan_next()`、`ha_pq_next()`、worker MQ production row 或
    production `Query_result_mq::send_data()` 行为。
 

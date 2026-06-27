@@ -323,8 +323,11 @@
   ref gate 迁移到 worker-side visible execution，下一步先做 F6d / F6c-1
   worker TABLE / handler source inventory and contract，并明确区分 typed
   `pq_worker_scan_next(PQ_Worker_context*, ...)` 与 commercial
-  `pq_worker_scan_next(void*, ...)` / `handler::ha_pq_next()` 路径。继续禁止在当前
-  F5/F6a/F6b/F6c closure 后直接打开
+  `pq_worker_scan_next(void*, ...)` / `handler::ha_pq_next()` 路径。M11-F6d
+  worker-side ref execution inventory / contract 已完成 docs-only 任务书并通过
+  独立 review；建议后续先做 F6d-1 no-row worker TABLE / handler
+  contract smoke，不直接打开 visible worker-side ref row path。继续禁止在当前
+  F5/F6a/F6b/F6c/F6d closure 后直接打开
   `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
   `pq_worker_scan_next()`、worker MQ row production、worker-side ICP + native
   `Record_buffer`、MVI unique filter、partition、reverse、secondary MIN

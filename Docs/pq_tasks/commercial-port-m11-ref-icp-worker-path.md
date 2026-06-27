@@ -16,8 +16,10 @@ F6a-1/F6a-2 diagnostics completed；M11-F6b-0 source inventory / contract
 confirmation completed；M11-F6b-1 local constant-ref token transport helper
 completed and committed；M11-F6b-2 constant-ref context to token smoke completed,
 review accepted, and committed；M11-F6c user-visible migration decision
-completed locally and review accepted。Real worker-side ICP positive row
-production and visible worker-side ref execution remain blocked。
+completed locally and review accepted；M11-F6d worker-side ref execution
+inventory / contract completed locally and review accepted。Real
+worker-side ICP positive row production and visible worker-side ref execution
+remain blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -3069,6 +3071,170 @@ F6c Review Result:
   `handler::ha_pq_next()` path；
 - Safe next task: F6d / F6c-1 read-only worker-side ref execution inventory and
   contract。
+
+#### M11-F6d: Worker-side Ref Execution Inventory / Contract
+
+Status: completed locally；independent docs/source/test review accepted；
+docs-only。
+
+Goal:
+
+- Turn the F6c decision into a concrete source inventory and coding boundary；
+- decide what must be proven before any visible worker-side constant covering ref
+  path can replace or sit beside the current M9-C2 leader-local gate；
+- prevent confusing the typed callback-backed worker bridge with the commercial
+  `handler::ha_pq_next()` / `void*` pull-row path；
+- keep all source and MTR behavior unchanged in this task。
+
+Inventory Findings:
+
+- Current user-visible constant covering ref does not use `PQRefIterator`:
+  `AccessPath::REF` first tries `TryCreatePQSecondaryCoveringRefIterator()` and
+  otherwise falls back to `RefIterator`；
+- `PQSecondaryCoveringRefIterator` is leader-local：it constructs the ref lookup
+  on the leader, calls `pq_secondary_covering_ref_produce()`, stores rows in a
+  local vector, and copies row images to the leader record buffer in `Read()`；
+- `PQRefIterator` is a worker-side skeleton used only by the `PQ_REF_SCAN`
+  AccessPath case；its `Init()` requires worker THD/open context and creates a
+  typed `PQ_Worker_context`；
+- `PQRefIterator::Read()` calls `construct_lookup()` on first row, then calls
+  typed `pq_worker_scan_next(PQ_Worker_context*, record, &eof)`；it does not
+  transfer the ref key into a worker-owned lookup/range contract；
+- `PQblockScanIterator` follows the same typed worker context model and is not
+  evidence for commercial ref lookup semantics；
+- SQL worker TABLE open/close helpers already reject sharing leader TABLE,
+  handler, and `record[0]`, copy table bitmaps, and clean worker table/handler
+  state on close；
+- typed InnoDB `pq_worker_scan_next(PQ_Worker_context*, ...)` can read rows from
+  callback-backed worker context buffers and dispatch further ranges；
+- commercial `pq_worker_scan_next(void*, uchar*)`, the overload used by
+  `handler::ha_pq_next()`, remains unsupported in InnoDB；
+- `handler::ha_pq_next()` calls the commercial `void*` overload, not the typed
+  bridge, so typed bridge success must not be used as proof that `ha_pq_next()`
+  works；
+- `pq_ref_build_ranges()` has only the base unsupported declaration and no
+  InnoDB override in the current branch；
+- F6b token smokes prove private token ownership / decode / deep-copy only；
+  they do not prove worker TABLE ownership, InnoDB ref lookup, visible SQL row
+  materialization, production `send_data()`, or production `PQWR` wire format。
+
+Contract Decision:
+
+- F6d does not authorize visible worker-side ref coding；
+- the next coding task should be F6d-1 no-row worker TABLE / handler ref
+  contract smoke before a positive visible worker-side ref row path；
+- a positive visible worker-side constant covering ref row path is allowed only
+  after the no-row contract proves worker TABLE/handler/prebuilt ownership,
+  lookup-token handoff shape, cleanup, and unsupported/error behavior；
+- the current M9-C2 leader-local ref gate remains the only user-visible
+  constant covering ref implementation until a reviewed task explicitly replaces
+  or augments it。
+
+F6d-1 No-row Contract Smoke Requirements:
+
+- DBUG-only；no user-visible row production；
+- execute only after worker TABLE open and before any row is emitted；
+- prove worker TABLE, handler, `record[0]`, and prebuilt belong to the worker,
+  not to the leader；
+- prove constant-ref lookup bytes are worker-owned lookup input, not handler
+  row-id or stable-ref bytes；
+- prove unsupported/no-row/error cleanup leaves no worker row token, no MQ row,
+  no dangling worker context, and no modified production wire format；
+- expose separate diagnostic counters for attempts, success, unsupported,
+  cleanup, and any injected failure；do not reuse F6b token counters as row
+  production evidence。
+
+Positive Worker-side Ref Path Prerequisites:
+
+- choose explicitly between the typed worker bridge path and the commercial
+  `ha_pq_next()` / `void*` path；do not mix their evidence；
+- define how `construct_lookup()` / constant-ref key bytes become worker-side
+  lookup/range input；
+- define or implement `pq_ref_build_ranges()` semantics before using commercial
+  per-ref range build；
+- define worker read-view and handler/prebuilt lifetime；
+- define fallback-before-row and post-row error behavior separately；
+- define KILL/ERROR/MQ drain/worker detach cleanup；
+- define whether `Query_result_mq::send_data()` emits full row frames, row-id /
+  stable-ref frames, or a new reviewed frame type；F6b private token transport is
+  not sufficient for production row output。
+
+Hard Stops for F6d:
+
+- docs-only；no source or MTR changes；
+- no `AccessPath::REF` to `PQ_REF_SCAN` migration；
+- no `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+  `handler::ha_pq_next()`、`pq_worker_scan_next()` or `pq_ref_build_ranges()`
+  behavior changes；
+- no storage / InnoDB source changes；
+- no production `Query_result_mq::send_data()`、`m_stable_output`、`PQWR`
+  header / flag / wire-format changes；
+- do not treat constant-ref key bytes as handler row-id, stable-ref,
+  `cmp_ref()` input, cached-record identity, or ORDER BY tie-break input；
+- no worker MQ row production, no native `Record_buffer` positive path, no
+  worker-side ICP clone/refix/pushdown, no partition/reverse/MVI, no ORDER BY
+  positive path。
+
+Required Future MTR Windows for Worker-side Ref Coding:
+
+- normal OFF / no-DBUG zero deltas for F6b token counters and future worker-ref
+  contract counters；
+- DBUG no-row worker TABLE/handler contract success and injected failure；
+- visible constant covering ref hit and miss result correctness, matching the
+  current M9-C2 leader-local baseline；
+- explicit status deltas for `Parallel_queries_executed`,
+  `Parallel_workers_launched`, `Parallel_ranges_built`,
+  `Parallel_ranges_dispatched`, worker row/MQ counter, visible row counter, and
+  fallback/reject counter；
+- unsupported/fallback coverage for ICP, non-covering shapes, partition,
+  reverse, MVI, ORDER BY, multi-table shapes, and any unsupported key shape；
+- pre-row failure must prove no row token and serial-safe cleanup；
+- post-row failure must prove MQ drain/detach, worker cleanup, and no silent
+  serial fallback after rows have been produced。
+
+Validation:
+
+- docs-only `git diff --check`；
+- independent Docs / Source / Test Review Agent must return `ACCEPT` before
+  commit；
+- no build or MTR required for F6d docs-only；
+- if the next task enters coding, at minimum run targeted
+  `pq_commercial_ref_icp pq_worker_attach_contract_smoke pq_stats` after
+  `mysqld` build；defer full `parallel_query` suite until the user-visible row
+  path is actually changed。
+
+Review Prompt - M11-F6d:
+
+请作为 M11-F6d Docs / Source / Test Review Agent，只读审查当前 F6d 任务书：
+
+1. inventory 是否准确区分 M9-C2 leader-local gate、`PQRefIterator` skeleton、
+   typed `pq_worker_scan_next(PQ_Worker_context*, ...)` 和 commercial
+   `pq_worker_scan_next(void*, ...)` / `handler::ha_pq_next()`；
+2. F6d 是否没有把 F6b private token smoke 当作 production row / MQ evidence；
+3. F6d-1 no-row worker TABLE / handler contract smoke 是否是合理的下一步，
+   是否比直接打开 visible worker-side ref row path 更稳；
+4. hard stops 是否足够防止源码/MTR、AccessPath、InnoDB、MQ wire-format、
+   Record_buffer、ICP、ORDER BY 等越界；
+5. required MTR windows 是否覆盖 hit/miss、unsupported/fallback、worker/range
+   / MQ status、pre-row failure、post-row cleanup。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Required fixes
+- Non-blocking risks
+- Safe next task recommendation
+
+F6d Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Required fixes: none；
+- Non-blocking risk carried into dispatch: use the canonical next-task name
+  `F6d-1 no-row worker TABLE / handler contract smoke` only, and keep its
+  counters separate from F6b token counters；
+- Safe next task: F6d-1 no-row worker TABLE / handler contract smoke。
 
 Required Future MTR Windows:
 
