@@ -894,6 +894,9 @@ class ha_innobase : public handler {
   defensive cleanup of legacy or future contexts. */
   std::vector<InnoDB_pq_worker_ctx *> m_pq_worker_ctxs;
 
+  /** DBUG-only commercial void* pull bridge current worker context. */
+  PQ_Worker_context *m_pq_void_pull_smoke_worker_ctx{nullptr};
+
   /** Thread handle of the user currently using the handler;
   this is set in external_lock function */
   THD *m_user_thd;

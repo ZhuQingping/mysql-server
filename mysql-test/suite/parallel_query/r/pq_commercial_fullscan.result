@@ -173,6 +173,132 @@ WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
 AS workers_delta;
 executed_delta	fallback_delta	rows_delta	workers_delta
 1	0	8	4
+SELECT COUNT(*) AS void_pull_status_vars
+FROM performance_schema.global_status
+WHERE variable_name IN (
+'Parallel_worker_void_pull_attempts',
+'Parallel_worker_void_pull_success',
+'Parallel_worker_void_pull_rows',
+'Parallel_worker_void_pull_eofs',
+'Parallel_worker_void_pull_unsupported',
+'Parallel_worker_void_pull_failures',
+'Parallel_worker_void_pull_cleanup');
+void_pull_status_vars
+7
+SET @void_pull_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_attempts');
+SET @void_pull_success_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_success');
+SET @void_pull_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_rows');
+SET @void_pull_eofs_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_eofs');
+SET @void_pull_unsupported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_unsupported');
+SET @void_pull_failures_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_failures');
+SET @void_pull_cleanup_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_cleanup');
+SELECT id FROM t1 WHERE val >= 10;
+id
+1
+2
+3
+4
+5
+6
+7
+8
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_attempts') -
+@void_pull_attempts_before AS attempts_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_success') -
+@void_pull_success_before AS success_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_cleanup') -
+@void_pull_cleanup_before AS cleanup_delta;
+attempts_delta	success_delta	cleanup_delta
+0	0	0
+SET @visible_pqwr_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected');
+SET @visible_pqwr_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
+SET SESSION debug = 'd,pq_worker_void_pull_fullscan_smoke';
+SELECT id FROM t1 WHERE val >= 10;
+id
+1
+2
+3
+4
+5
+6
+7
+8
+SET SESSION debug = '';
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_attempts') -
+@void_pull_attempts_before AS attempts_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_success') -
+@void_pull_success_before AS success_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_rows') -
+@void_pull_rows_before AS rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_eofs') -
+@void_pull_eofs_before AS eofs_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_unsupported') -
+@void_pull_unsupported_before AS unsupported_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_failures') -
+@void_pull_failures_before AS failures_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_cleanup') -
+@void_pull_cleanup_before AS cleanup_delta;
+attempts_delta	success_delta	rows_delta	eofs_delta	unsupported_delta	failures_delta	cleanup_delta
+1	1	8	1	0	0	1
+SELECT
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_success') -
+@void_pull_success_before) =
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_void_pull_cleanup') -
+@void_pull_cleanup_before) AS cleanup_matches_success;
+cleanup_matches_success
+1
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected') -
+@visible_pqwr_selected_before AS visible_pqwr_selected_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
+@visible_pqwr_rows_before AS visible_pqwr_rows_delta;
+visible_pqwr_selected_delta	visible_pqwr_rows_delta
+0	0
 CREATE TABLE t_blob (id INT PRIMARY KEY, payload TEXT) ENGINE=InnoDB;
 INSERT INTO t_blob VALUES (1,'alpha'),(2,'beta');
 SET SESSION parallel_query_experimental_threaded_dop4=OFF;

@@ -10240,6 +10240,20 @@ DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_record_buffer_nonnull_probes,
                                   worker_record_buffer_nonnull_probes)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_icp_record_buffer_reject_probes,
                                   worker_icp_record_buffer_reject_probes)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_void_pull_attempts,
+                                  worker_void_pull_attempts)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_void_pull_success,
+                                  worker_void_pull_success)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_void_pull_rows,
+                                  worker_void_pull_rows)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_void_pull_eofs,
+                                  worker_void_pull_eofs)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_void_pull_unsupported,
+                                  worker_void_pull_unsupported)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_void_pull_failures,
+                                  worker_void_pull_failures)
+DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(worker_void_pull_cleanup,
+                                  worker_void_pull_cleanup)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_worker_handler_ref_attempts,
                                   orderby_worker_handler_ref_attempts)
 DEFINE_PQ_WORKER_ATTACH_SHOW_FUNC(orderby_worker_handler_ref_success,
@@ -12307,6 +12321,25 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_typed_pull_next_rows",
      (char *)&show_pq_worker_typed_pull_next_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_void_pull_attempts",
+     (char *)&show_pq_worker_void_pull_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_void_pull_cleanup",
+     (char *)&show_pq_worker_void_pull_cleanup, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_void_pull_eofs",
+     (char *)&show_pq_worker_void_pull_eofs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_void_pull_failures",
+     (char *)&show_pq_worker_void_pull_failures, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_void_pull_rows",
+     (char *)&show_pq_worker_void_pull_rows, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_void_pull_success",
+     (char *)&show_pq_worker_void_pull_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_void_pull_unsupported",
+     (char *)&show_pq_worker_void_pull_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_exchange_smoke_finishes",
      (char *)&show_pq_exchange_smoke_finishes, SHOW_FUNC, SHOW_SCOPE_GLOBAL},

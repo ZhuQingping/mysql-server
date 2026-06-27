@@ -210,6 +210,16 @@ bool PQTableScanIterator::Init() {
     return init_serial_fallback();
   });
 
+  DBUG_EXECUTE_IF("pq_worker_void_pull_fullscan_smoke", {
+    Gather_operator void_pull_smoke(1);
+    if (void_pull_smoke.run_worker_void_pull_fullscan_smoke(thd(), table(),
+                                                            2)) {
+      PrintError(HA_ERR_INTERNAL_ERROR);
+      return true;
+    }
+    return init_serial_fallback();
+  });
+
   DBUG_EXECUTE_IF("pq_leader_row_stream_smoke", {
     pq_global_stats.leader_row_stream_smoke_attempts.fetch_add(
         1, std::memory_order_relaxed);

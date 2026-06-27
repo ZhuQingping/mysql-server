@@ -207,12 +207,12 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   saved ORDER/GROUP 与 Filesort/Sort_param contract 可在 preflight 中标记
   ready，但 worker producer、Exchange_sort heap read 和 leader materialization
   仍保持执行阻断；
-- 下一步：D1.7 商用 worker pull fullscan。当前 visible fullscan 已可通过
-  PQWR record_gather 路径执行，但商用 `ha_pq_next(void*) ->
-  pq_worker_scan_next(void*, uchar*)` 正路径仍 fail-closed。D1.7 先以
-  DBUG-only smoke 建立 clustered fullscan void-pull bridge，复用当前 typed
-  worker context / callback-backed materialization，不替换默认 visible PQWR
-  fullscan，不混入 ref/range/ICP/ORDER BY。任务书见
+- D1.7 商用 worker pull fullscan 已完成本地实现和 targeted 验证。当前
+  visible fullscan 已可通过 PQWR record_gather 路径执行；D1.7 进一步在
+  DBUG-only smoke 下建立 `ha_pq_next(void*) ->
+  pq_worker_scan_next(void*, uchar*)` clustered fullscan bridge，复用当前 typed
+  worker context / callback-backed materialization，默认 visible PQWR fullscan
+  不变，不混入 ref/range/ICP/ORDER BY。任务书与完成报告见
   [commercial-port-d1-worker-pull-fullscan.md](commercial-port-d1-worker-pull-fullscan.md)。
 
 ## Batch A 审计结果

@@ -437,6 +437,13 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_ref_range_build_unsupported{0};  ///< F6e-5b
   std::atomic<uint64> worker_ref_range_build_failures{0};  ///< F6e-5b
   std::atomic<uint64> worker_ref_range_build_key_bytes{0};  ///< F6e-5b
+  std::atomic<uint64> worker_void_pull_attempts{0};  ///< D1.7 void pull
+  std::atomic<uint64> worker_void_pull_success{0};  ///< D1.7 smoke ok
+  std::atomic<uint64> worker_void_pull_rows{0};  ///< D1.7 rows
+  std::atomic<uint64> worker_void_pull_eofs{0};  ///< D1.7 EOFs
+  std::atomic<uint64> worker_void_pull_unsupported{0};  ///< D1.7 rejects
+  std::atomic<uint64> worker_void_pull_failures{0};  ///< D1.7 errors
+  std::atomic<uint64> worker_void_pull_cleanup{0};  ///< D1.7 cleanup
   std::atomic<uint64> secondary_reverse_reject_probes{0};  ///< Reverse ref rejects
   std::atomic<uint64> secondary_reverse_ref_reject_probes{0};  ///< Reverse ref
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
@@ -972,6 +979,13 @@ struct PQ_global_stats {
     worker_ref_range_build_unsupported.store(0, std::memory_order_relaxed);
     worker_ref_range_build_failures.store(0, std::memory_order_relaxed);
     worker_ref_range_build_key_bytes.store(0, std::memory_order_relaxed);
+    worker_void_pull_attempts.store(0, std::memory_order_relaxed);
+    worker_void_pull_success.store(0, std::memory_order_relaxed);
+    worker_void_pull_rows.store(0, std::memory_order_relaxed);
+    worker_void_pull_eofs.store(0, std::memory_order_relaxed);
+    worker_void_pull_unsupported.store(0, std::memory_order_relaxed);
+    worker_void_pull_failures.store(0, std::memory_order_relaxed);
+    worker_void_pull_cleanup.store(0, std::memory_order_relaxed);
     secondary_reverse_reject_probes.store(0, std::memory_order_relaxed);
     secondary_reverse_ref_reject_probes.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
@@ -2130,6 +2144,20 @@ class Gather_operator {
   */
   bool run_worker_typed_pull_next_smoke(THD *leader_thd, TABLE *leader_table,
                                         uint32 min_rows);
+
+  /**
+    Run a DBUG-only commercial void* pull-next smoke pass.
+
+    This uses handler::ha_pq_next(record, scan_ctx), which routes through the
+    commercial void* pq_worker_scan_next() API, while keeping the default
+    visible fullscan path unchanged.
+
+    @retval false  Smoke pass completed and read at least min_rows rows
+    @retval true   Smoke pass failed
+  */
+  bool run_worker_void_pull_fullscan_smoke(THD *leader_thd,
+                                           TABLE *leader_table,
+                                           uint32 min_rows);
 
   /**
     Run a worker-local partial GROUP BY producer smoke pass.

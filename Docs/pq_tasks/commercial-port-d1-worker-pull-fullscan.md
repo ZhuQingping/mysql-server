@@ -2,7 +2,8 @@
 
 ## 状态
 
-Status: taskbook prepared；coding not started。
+Status: implemented locally；targeted build/MTR passed；independent code review
+in progress。
 
 ## 背景
 
@@ -231,3 +232,86 @@ Add PQ void worker pull fullscan smoke
   worker-side cloned ICP 生命周期，放到 F6f/F6g 后续任务。
 - visible fullscan 默认路径切换到 `ha_pq_next(void *)` 必须等 D1.7 smoke、
   review、targeted MTR 均通过后再单独设计。
+
+## 完成报告
+
+### 实现摘要
+
+- 新增 D1.7 状态变量：
+  `Parallel_worker_void_pull_attempts`、
+  `Parallel_worker_void_pull_success`、
+  `Parallel_worker_void_pull_rows`、
+  `Parallel_worker_void_pull_eofs`、
+  `Parallel_worker_void_pull_unsupported`、
+  `Parallel_worker_void_pull_failures`、
+  `Parallel_worker_void_pull_cleanup`。
+- 在 `PQTableScanIterator::Init()` 增加
+  `pq_worker_void_pull_fullscan_smoke` DBUG-only hook；默认 production iterator
+  行为不变。
+- 在 `Gather_operator::run_worker_void_pull_fullscan_smoke()` 中显式执行：
+  `ha_pq_init(1, MAX_KEY)`、worker TABLE/THD open、typed
+  `pq_worker_scan_init(PQ_Worker_open_context*, PQ_Worker_context**)`、
+  `ha_pq_next(worker_record, leader_pq_ctx)` 循环、typed worker cleanup、
+  leader `ha_pq_end()`。
+- 在 InnoDB `pq_worker_scan_next(void*, uchar*)` 中保留默认
+  `HA_ERR_UNSUPPORTED`；只有 DBUG hook 启用时才复用当前 typed
+  `PQ_Worker_context` 和 callback-backed pull bridge。
+- smoke harness 在调用 `ha_pq_init()` 前把 handler PQ 状态归一化为
+  clustered fullscan，避免旧的 ref/range/reverse 状态阻断 DBUG-only
+  contract；该归一化只发生在 smoke harness 中。
+
+### RED/GREEN 证据
+
+- RED：实现前运行
+  `pq_commercial_fullscan`，失败点为 7 个新增状态变量不存在，
+  smoke delta 为 `NULL`，证明测试能捕获缺失功能。
+- 调试确认：首轮 GREEN 失败发生在 `ha_pq_init()` 前置 gate；临时分支标记显示
+  failure stage 为 leader init，root cause 是旧 handler PQ shape 状态未归一化。
+  临时诊断已移除。
+- GREEN：
+
+```bash
+cmake --build build-ninja --target mysqld -j 8
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats \
+  --vardir=/tmp/pq-d17-targeted2-vardir \
+  --tmpdir=/tmp/pq-d17-targeted2-tmpdir
+```
+
+结果：全部通过。
+
+### 当前风险
+
+- D1.7 只证明 debug-only `ha_pq_next(void*)` fullscan pull bridge；默认可见
+  fullscan 尚未切换到 commercial void-pull 路径。
+- `m_pq_void_pull_smoke_worker_ctx` 是 handler-local smoke carrier，由 typed
+  worker init 设置，并在 typed worker cleanup、legacy worker cleanup、
+  leader cleanup 中清理；独立 review 仍需确认是否有遗漏路径。
+
+### Code Review 处理记录
+
+独立 review 提出 1 个 Important 和 1 个 Minor，均已处理：
+
+- Important：`pq_worker_scan_next(void*, uchar*)` 必须验证 `scan_ctx` 是 typed
+  InnoDB leader adapter，不能只依赖 handler-local worker context。已补充
+  `PQ_Leader_context::kind() == INNODB`、`InnoDB_pq_sql_leader_context::innodb_ctx()`
+  非空、worker context 绑定的 InnoDB leader 与 `scan_ctx` 一致的校验。
+- Minor：测试需要直接证明 DBUG smoke 不污染 visible PQWR counters。已在
+  `pq_commercial_fullscan` 中 snapshot
+  `Parallel_visible_pqwr_record_gather_selected` 和
+  `Parallel_visible_pqwr_record_gather_rows`，DBUG smoke 后断言 delta 为 0。
+
+复核验证：
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 8
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats \
+  --vardir=/tmp/pq-d17-reviewfix-vardir \
+  --tmpdir=/tmp/pq-d17-reviewfix-tmpdir
+```
+
+结果：全部通过。

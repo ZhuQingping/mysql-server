@@ -591,6 +591,7 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
   if (worker_ctx != nullptr) {
     *worker_ctx = sql_worker;
   }
+  m_pq_void_pull_smoke_worker_ctx = sql_worker;
   return 0;
 }
 
@@ -708,6 +709,53 @@ int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
 
 int ha_innobase::pq_worker_scan_next(void *scan_ctx [[maybe_unused]],
                                      uchar *buf [[maybe_unused]]) {
+  DBUG_EXECUTE_IF("pq_worker_void_pull_fullscan_smoke", {
+    if (scan_ctx == nullptr || buf == nullptr ||
+        m_pq_void_pull_smoke_worker_ctx == nullptr ||
+        m_pq_void_pull_smoke_worker_ctx->kind() !=
+            PQ_Worker_context_kind::INNODB) {
+      pq_global_stats.worker_void_pull_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return HA_ERR_UNSUPPORTED;
+    }
+
+    auto *leader_ctx = static_cast<PQ_Leader_context *>(scan_ctx);
+    if (leader_ctx->kind() != PQ_Leader_context_kind::INNODB) {
+      pq_global_stats.worker_void_pull_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return HA_ERR_UNSUPPORTED;
+    }
+
+    auto *sql_leader =
+        static_cast<InnoDB_pq_sql_leader_context *>(leader_ctx);
+    auto *sql_worker = static_cast<InnoDB_pq_sql_worker_context *>(
+        m_pq_void_pull_smoke_worker_ctx);
+    auto *innodb_worker = sql_worker->innodb_ctx();
+    if (sql_leader->innodb_ctx() == nullptr || innodb_worker == nullptr ||
+        innodb_worker->leader_ctx() != sql_leader->innodb_ctx()) {
+      pq_global_stats.worker_void_pull_unsupported.fetch_add(
+          1, std::memory_order_relaxed);
+      return HA_ERR_UNSUPPORTED;
+    }
+
+    bool eof = false;
+    const int error =
+        pq_worker_scan_next(m_pq_void_pull_smoke_worker_ctx, buf, &eof);
+    if (error != 0) {
+      pq_global_stats.worker_void_pull_failures.fetch_add(
+          1, std::memory_order_relaxed);
+      return error;
+    }
+    if (eof) {
+      pq_global_stats.worker_void_pull_eofs.fetch_add(
+          1, std::memory_order_relaxed);
+      return HA_ERR_END_OF_FILE;
+    }
+
+    pq_global_stats.worker_void_pull_rows.fetch_add(
+        1, std::memory_order_relaxed);
+    return 0;
+  });
   return HA_ERR_UNSUPPORTED;
 }
 
@@ -2770,6 +2818,10 @@ int ha_innobase::pq_worker_scan_end(PQ_Worker_context *worker_ctx) {
       static_cast<InnoDB_pq_sql_worker_context *>(worker_ctx);
   auto innodb_worker = sql_worker->innodb_ctx();
 
+  if (m_pq_void_pull_smoke_worker_ctx == worker_ctx) {
+    m_pq_void_pull_smoke_worker_ctx = nullptr;
+  }
+
   auto it = std::find(m_pq_worker_ctxs.begin(), m_pq_worker_ctxs.end(),
                       innodb_worker);
   if (it != m_pq_worker_ctxs.end()) {
@@ -2794,6 +2846,7 @@ int ha_innobase::pq_worker_scan_end() {
   m_prebuilt->pq_worker = nullptr;
   m_prebuilt->pq_ref_info = {};
   m_prebuilt->is_attach_ctx = false;
+  m_pq_void_pull_smoke_worker_ctx = nullptr;
 
   m_prebuilt->n_fetch_cached = 0;
   m_prebuilt->fetch_cache_first = 0;
@@ -2820,6 +2873,7 @@ int ha_innobase::pq_leader_scan_end(PQ_Leader_context *leader_ctx) {
     }
   }
   m_pq_worker_ctxs.clear();
+  m_pq_void_pull_smoke_worker_ctx = nullptr;
 
   /* Clean up the leader context. */
   if (m_pq_leader_ctx != nullptr) {
