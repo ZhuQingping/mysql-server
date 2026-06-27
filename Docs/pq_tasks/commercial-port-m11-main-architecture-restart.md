@@ -129,9 +129,13 @@ M11-F0-F5 已完成 design / diagnostic / negative guard / closure。M11-F6
 contract、F6a-1 context shape 和 F6a-2 cleanup diagnostics 已完成。F6b-0
 source inventory / contract confirmation 已完成；F6b-1 local constant-ref
 token transport helper 已提交；F6b-2 constant-ref context to token smoke 已
-完成本地实现和 targeted 验证，等待独立 review。仍不打开 worker row/MQ、
-`PQRefIterator::Read()` 或
-`pq_worker_scan_next()`。
+完成、review accepted、提交。F6c user-visible migration decision 已完成
+docs-only 决策并通过独立 review：暂不把 M9-C2 leader-local visible ref gate
+迁移到 worker-side visible execution，下一步先做 F6d / F6c-1 worker TABLE /
+handler source inventory and contract。仍不改变 worker row/MQ、
+`PQRefIterator::Read()`、
+`PQblockScanIterator::Read()`、`handler::ha_pq_next()` 或
+`pq_worker_scan_next()` 的 production 行为。
 
 ## 验收边界
 
@@ -151,12 +155,16 @@ token transport helper 已提交；F6b-2 constant-ref context to token smoke 已
 4. F6a-1/F6a-2 diagnostics 已完成；F6b-0 source inventory / contract
    confirmation 已完成并提交；F6b-1 local constant-ref token transport
    helper 已提交；
-5. F6b-2 constant-ref context to token smoke 已完成本地实现和 targeted
-   验证，等待 review；
+5. F6b-2 constant-ref context to token smoke 已完成、review accepted、提交；
 6. F6b-2 只把 F6a-owned constant-ref key bytes 接到 F6b-1 private token
    helper，不得把 constant-ref key bytes 当作 handler row-id / stable-ref；
-7. F6b-2 review 通过后的下一步是 F6c user-visible migration decision；
-8. 仍不得打开 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+7. F6c user-visible migration decision 已完成 docs-only 决策并通过独立
+   review；结论是暂不打开 visible worker-side constant covering ref execution；
+8. F6c review 通过后的下一步是 F6d / F6c-1 worker-side ref execution source
+   inventory and contract；该任务必须明确区分 typed
+   `pq_worker_scan_next(PQ_Worker_context*, ...)` 与 commercial
+   `pq_worker_scan_next(void*, ...)` / `handler::ha_pq_next()` 路径；
+9. 仍不得打开 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
    `pq_worker_scan_next()`、`ha_pq_next()`、worker MQ production row 或
    production `Query_result_mq::send_data()` 行为。
 

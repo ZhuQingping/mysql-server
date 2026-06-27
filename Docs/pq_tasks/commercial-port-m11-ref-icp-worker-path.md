@@ -14,9 +14,10 @@ M11-F5 closure accepted；M11-F6 positive-path phase selection design committed
 as `31bdc66fb36`；M11-F6a worker-side constant covering ref contract design and
 F6a-1/F6a-2 diagnostics completed；M11-F6b-0 source inventory / contract
 confirmation completed；M11-F6b-1 local constant-ref token transport helper
-completed and committed；M11-F6b-2 constant-ref context to token smoke completed
-locally and pending independent review。Real worker-side ICP positive row
-production remains blocked。
+completed and committed；M11-F6b-2 constant-ref context to token smoke completed,
+review accepted, and committed；M11-F6c user-visible migration decision
+completed locally and review accepted。Real worker-side ICP positive row
+production and visible worker-side ref execution remain blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -2629,8 +2630,8 @@ Completion Report - M11-F6a-2 Coding:
 
 Status: F6b-0 source inventory completed and committed；F6b-1 local
 constant-ref token transport helper completed and committed；F6b-2
-constant-ref context to token smoke completed locally；pending independent
-code/docs/test review。
+constant-ref context to token smoke completed、review accepted、committed；
+F6c user-visible migration decision completed locally and review accepted。
 
 Goal:
 
@@ -2958,6 +2959,116 @@ Completion Report - M11-F6b-2 Coding:
     worker-side path or require another worker TABLE/handler source inventory；
   - do not open visible worker-side ref execution until this decision is
     accepted。
+
+#### M11-F6c: User-visible Migration Decision
+
+Status: completed locally；independent docs/source/test review accepted；
+docs-only。
+
+Decision:
+
+- Do not open or migrate to a user-visible worker-side constant covering ref
+  execution path in F6c；
+- keep the current M9-C2 / M9-D / M9-E leader-local visible ref/range/ICP gates
+  as the only user-visible ref / ICP behavior for now；
+- treat F6b-1/F6b-2 as private token ownership / decode evidence only, not as
+  worker TABLE / handler row execution evidence；
+- start the next task as F6d / F6c-1 Worker-side Ref Execution Source Inventory
+  and Contract before any visible worker-side ref coding。
+
+Evidence:
+
+- F6a-1/F6a-2 proved the owned constant-ref key context shape and scoped cleanup
+  diagnostics；
+- F6b-1 proved local private constant-ref token transport through the existing
+  `PQWR` stable-ref slot as an opaque transport-only mechanism；
+- F6b-2 proved F6a-owned constant-ref key bytes can be fed into that private
+  token helper and immediately deep-copied；
+- none of F6a/F6b proves worker TABLE open semantics for a visible ref path,
+  worker handler/prebuilt ownership, row materialization, `PQWR` row production,
+  read-view lifetime, ERROR/KILL behavior, or fallback-after-row safety；
+- the current source already has worker iterator / handler skeletons such as
+  `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+  `handler::ha_pq_next()` and `pq_worker_scan_next()` entry points, but F6b
+  deliberately did not change their production behavior or make them the
+  visible constant-ref gate。
+
+Why F6c Does Not Open the Visible Worker-side Path:
+
+- F6a-owned bytes are lookup key material, not handler row-id / stable-ref bytes；
+- passing those bytes through a local token smoke does not define how a worker
+  TABLE should perform the actual ref lookup or emit rows；
+- the `PQWR` stable-ref slot reuse remains a diagnostic/private transport
+  compromise and must not become production wire-format by accident；
+- current leader-local M9-C2 behavior already provides a user-visible covering
+  constant-ref gate, so replacing it without a worker TABLE/handler contract
+  would mix two different execution models；
+- `ha_pq_next()` / `pq_worker_scan_next()` semantics for constant covering ref
+  must be scoped separately before any production row path relies on them。
+
+Required Next Task - F6d / F6c-1:
+
+- read-only inventory of current `PQRefIterator::Init()` / `Read()`、
+  `PQblockScanIterator::Init()` / `Read()`、`handler::ha_pq_next()`、
+  `ha_innobase::pq_worker_scan_next()`、worker TABLE open helpers,
+  `Query_result_mq` row production, and current M9-C2 leader-local ref gate；
+- explicitly separate the typed `pq_worker_scan_next(PQ_Worker_context*, ...)`
+  callback-backed bridge from the commercial `pq_worker_scan_next(void*, ...)`
+  overload used by `handler::ha_pq_next()`；do not treat one overload's evidence
+  as proof for the other；
+- define whether the next coding task should be a no-row worker TABLE/handler
+  contract smoke, or a minimal positive worker-side constant covering ref row
+  path；
+- define how a constant-ref lookup token becomes worker-side lookup input
+  without being treated as a row-id；
+- define read-view, handler/prebuilt ownership, cleanup, fallback-before-row,
+  ERROR/KILL, and no-row / unsupported contracts；
+- define exact MTR windows for normal OFF behavior, DBUG contract windows,
+  visible row correctness, fallback, and status counters。
+
+Hard Stops for F6c:
+
+- docs-only；no source or MTR changes；
+- no changes to `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+  `handler::ha_pq_next()`、`pq_worker_scan_next()` or storage/InnoDB source；
+- no production `Query_result_mq::send_data()` or `PQWR` wire-format behavior
+  changes；
+- no optimizer / AccessPath / visible ref gate migration；
+- no worker MQ row production, no native `Record_buffer` positive path, no
+  worker-side ICP clone/refix/pushdown, no ORDER BY positive path。
+
+Review Prompt - M11-F6c:
+
+请作为 M11-F6c Docs / Source / Test Review Agent，只读审查当前 F6c 决策：
+
+1. F6c 是否基于 F6a/F6b 证据准确决策，避免把 private token smoke 当作
+   user-visible worker-side ref execution；
+2. 是否正确承认当前已有 `PQRefIterator::Read()` / `PQblockScanIterator::Read()`
+   / `pq_worker_scan_next()` 骨架，但没有误判它们已经满足 visible ref path；
+3. F6d / F6c-1 的 source inventory 范围是否覆盖 worker TABLE、handler、
+   row production、read-view、cleanup、fallback、ERROR/KILL；
+4. hard stops 是否足够阻止 F6c 直接改源码、改 MTR、打开 optimizer gate 或改
+   production MQ 行为；
+5. 文档状态是否和 README / M11 main taskbook 一致。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Required fixes
+- Safe next task recommendation
+
+F6c Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Required fixes: none；
+- Non-blocking risk carried into F6d / F6c-1: `pq_worker_scan_next()` wording is
+  overloaded, so the next inventory must separate the typed
+  `PQ_Worker_context*` row bridge from the commercial `void*` /
+  `handler::ha_pq_next()` path；
+- Safe next task: F6d / F6c-1 read-only worker-side ref execution inventory and
+  contract。
 
 Required Future MTR Windows:
 
