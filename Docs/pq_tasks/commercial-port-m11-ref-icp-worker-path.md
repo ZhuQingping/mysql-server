@@ -11,9 +11,10 @@ reject diagnostic completed and committed；F5-B MVI inventory / design accepted
 F5-B1 debug-only MVI reject diagnostic completed and committed；F5-E ICP +
 native `Record_buffer` combined path design accepted；F5-E1/E2 completed；
 M11-F5 closure accepted；M11-F6 positive-path phase selection design committed
-as `31bdc66fb36`；M11-F6a worker-side constant covering ref contract design is
-the current next step。Real worker-side ICP positive row production remains
-blocked。
+as `31bdc66fb36`；M11-F6a worker-side constant covering ref contract design and
+F6a-1/F6a-2 diagnostics completed；M11-F6b-0 source inventory / contract
+confirmation is the current docs-only step before any F6b source coding。Real
+worker-side ICP positive row production remains blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -2624,7 +2625,8 @@ Completion Report - M11-F6a-2 Coding:
 
 #### M11-F6b: Worker Constant-ref Private Row-token Handoff
 
-Status: design-only taskbook created；pending design review；no source edits yet。
+Status: design-only taskbook created；F6b-0 source inventory completed locally；
+pending independent review；no source edits yet。
 
 Goal:
 
@@ -2717,6 +2719,99 @@ Proposed Coding Split After F6b Review:
    - only after F6b review；
    - decide whether to migrate current M9-C2 leader-local constant covering ref
      toward worker-side path or add further worker TABLE/handler source inventory。
+
+#### M11-F6b-0 Source Inventory / Contract Confirmation
+
+Status: completed locally；pending independent docs/source/test review；docs-only。
+
+Source Inventory Findings:
+
+- F6a-1/F6a-2 的 `PQ_worker_constant_ref_context_shape` 是 private
+  constant-ref key shape：它保存 `m_ref->key_buff` 派生的 owned key bytes、
+  `keyno`、`keypart_map`、`key_length`、`exact_read=true`、
+  `reverse=false`、`constant_ref=true`，用于表示等值 ref lookup 的查找 key；
+- F6a key bytes 不是 handler row-id，不是 handler stable ref，也不是
+  ORDER BY stable-ref tie-break input；它们只能作为 private ref lookup token
+  的输入材料；
+- `query_result_mq.*` 当前已有 `PQWR` stable-ref local-MQ helper：
+  payload layout 是 `handler_ref_len + handler_ref bytes + field_payload`，
+  decode 结果暴露为 `PQ_worker_result_stable_ref::row_id`；
+- existing stable-ref smokes 已经证明 local MQ send / decode / immediate
+  deep-copy mechanics：发送后修改 source bytes，decode 仍得到原始 bytes，
+  并可复制为 owned vector；
+- 因为 helper 和结构名都使用 `stable_ref` / `handler_ref` / `row_id`，
+  F6b-1 如果复用它，只能把它当作 local opaque transport slot，不得继承
+  handler row identity 语义。
+
+Semantic Contract:
+
+- constant-ref key bytes: index equality lookup key material，用来描述一次
+  ref 查找的 search predicate / range boundary；
+- handler stable-ref / row-id bytes: handler-owned row identity，用于 row
+  lookup、cached-record identity、ORDER BY stable tie-break 或 `cmp_ref()`；
+- F6b 严禁把 constant-ref key bytes 传给 `cmp_ref()`、ORDER BY stable-ref
+  comparator、cached-record row-id、handler position/ref consumer、row-position
+  API，或任何假设 row identity 的代码。
+
+Decision:
+
+- F6b-1 可以复用现有 `PQWR` stable-ref local-MQ helper 的 transport /
+  decode / deep-copy mechanics；
+- F6b-1 必须在命名、注释和 status counters 上声明它是 private
+  constant-ref token transport，例如：
+  `pq_run_query_result_mq_constant_ref_token_transport_smoke`、
+  `PQ_private_constant_ref_token`、
+  `Parallel_worker_constant_ref_token_transport_*`；
+- 如果实现需要把 token 称为 stable ref、row id、handler ref，或需要让
+  downstream 以 row identity 解释这些 bytes，则不得复用该 helper，必须回到
+  design review；
+- F6b-1 只允许做 local helper / smoke，不桥接 F6a context；F6a context
+  到 token 的 DBUG-only bridge 留给 F6b-2。
+
+Allowed Files for F6b-1 Coding:
+
+- `sql/parallel_query/query_result_mq.h`；
+- `sql/parallel_query/query_result_mq.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/mysqld.cc`；
+- one focused MTR window, preferably `pq_commercial_ref_icp` or an existing
+  worker-result / MQ smoke test；
+- corresponding `.result` and `pq_stats.result`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`。
+
+Forbidden Files for F6b-1 Coding:
+
+- `sql/parallel_query/pq_iterators.cc` unless the explicit task is F6b-2；
+- `sql/parallel_query/exchange_sort.*`；
+- optimizer / access-path files；
+- `sql/handler.*`；
+- all `storage/**` files；
+- `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+  `ha_pq_next()`、`pq_worker_scan_next()`；
+- production `Query_result_mq::send_data()` or `m_stable_output` behavior；
+- any `PQWR` header / flag / production wire-format change；
+- visible ref / ICP gate migration from current M9-C2 leader-local path。
+
+Required F6b-1 MTR Windows:
+
+- no-DBUG zero delta for new F6b token counters；
+- DBUG local token success: owned bytes survive MQ cleanup and source mutation；
+- invalid / mismatched token reject；
+- existing normal `PQWR` row decode still rejects stable-ref-only frame where
+  expected；
+- `Parallel_workers_launched`、`Parallel_ranges_dispatched`、worker result
+  rows、callback rows、visible executed counters stay zero；
+- current M9-C2 `c2_ref_rows_produced_delta` and visible result rows remain
+  unchanged。
+
+Safe Next Task:
+
+- M11-F6b-1 Local Constant-ref Token Transport Helper；
+- source changes are justified only for the explicit wrapper / counters / MTR
+  described above；
+- no worker TABLE / handler execution proof, no user SQL row materialization,
+  no worker-side ICP or native `Record_buffer` work。
 
 Required Future MTR Windows:
 
