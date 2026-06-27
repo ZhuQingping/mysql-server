@@ -371,6 +371,18 @@ class InnoDB_pq_scan_ctx {
       const dtuple_t *end, uint max_rows, PQ_row_sink *row_sink,
       uint *row_count) const;
 
+  /** Produce a bounded non-covering secondary range into row_sink.
+
+  The method performs clustered lookup for each visible secondary record,
+  materializes the clustered record, and restores the secondary cursor before
+  continuing the drain. Any cap hit, restore failure, or unsupported state
+  fails the whole call with row_count reset to 0.
+  */
+  dberr_t produce_secondary_clustered_range_for_user_gate(
+      byte *mysql_rec, row_prebuilt_t *prebuilt, const dtuple_t *start,
+      const dtuple_t *end, uint max_rows, PQ_row_sink *row_sink,
+      uint *row_count) const;
+
   /** Check visibility of a record.
 
   V2-8F placeholder: real visibility must follow upstream Parallel_reader

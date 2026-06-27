@@ -1,0 +1,110 @@
+# Test: pq_commercial_sec_index_min
+# Commercial pq_sec_index_min subset: non-covering secondary range scans can
+# use the leader-local PQ path for non-null integer row shapes; nullable keys
+# remain fail-closed.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS pq_sec_index_min_t1, pq_sec_index_min_t2,
+                     pq_sec_index_min_t3, pq_sec_index_min_nullable;
+--enable_warnings
+
+CREATE TABLE pq_sec_index_min_t1 (
+  i INT NOT NULL,
+  j INT NOT NULL,
+  KEY i_idx(i),
+  KEY j_idx(j)
+) ENGINE=InnoDB;
+
+CREATE TABLE pq_sec_index_min_t2 (
+  id INT NOT NULL PRIMARY KEY,
+  i INT NOT NULL,
+  j INT NOT NULL,
+  KEY i_idx(i),
+  KEY j_idx(j)
+) ENGINE=InnoDB;
+
+CREATE TABLE pq_sec_index_min_t3 (
+  i INT NOT NULL PRIMARY KEY,
+  j INT NOT NULL,
+  payload INT NOT NULL,
+  KEY j_idx(j)
+) ENGINE=InnoDB;
+
+CREATE TABLE pq_sec_index_min_nullable (
+  id INT,
+  payload INT NOT NULL,
+  KEY id_idx(id)
+) ENGINE=InnoDB;
+
+INSERT INTO pq_sec_index_min_t1 VALUES (1,1),(2,2),(4,4);
+INSERT INTO pq_sec_index_min_t2 VALUES (1,1,1),(2,2,2),(3,4,4);
+INSERT INTO pq_sec_index_min_t3 VALUES (1,1,10),(2,2,20),(3,5,50);
+INSERT INTO pq_sec_index_min_nullable VALUES (NULL,0),(1,1),(2,2);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+
+SET @executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+--sorted_result
+SELECT * FROM pq_sec_index_min_t1 FORCE INDEX(i_idx) WHERE i < 3;
+--sorted_result
+SELECT * FROM pq_sec_index_min_t2 FORCE INDEX(i_idx) WHERE i < 3;
+--sorted_result
+SELECT * FROM pq_sec_index_min_t3 FORCE INDEX(j_idx) WHERE j < 3;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_executed') - @executed_before
+    AS noncovering_sec_range_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_workers_launched') - @workers_before
+    AS noncovering_sec_range_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @secondary_rows_before
+    AS noncovering_sec_range_secondary_rows_delta;
+
+SET @nullable_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @nullable_secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+--sorted_result
+SELECT * FROM pq_sec_index_min_nullable FORCE INDEX(id_idx)
+  WHERE id <=> NULL OR id > 0;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_executed') -
+     @nullable_executed_before AS nullable_key_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @nullable_secondary_rows_before AS nullable_key_secondary_rows_delta;
+
+DROP TABLE pq_sec_index_min_t1, pq_sec_index_min_t2, pq_sec_index_min_t3,
+           pq_sec_index_min_nullable;

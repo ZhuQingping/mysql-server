@@ -2541,6 +2541,66 @@ Notes:
 - 当前仍未迁移商用 `pq_range_sec` 的字符串 range、LIKE、大量数据和
   ORDER BY 矩阵，这些归入后续 secondary range/string/order-by 批次。
 
+#### Batch D1.6af - Commercial non-covering secondary range subset
+
+Status: completed; independent review accepted.
+
+目标：
+
+- 向商用 `pq_sec_index_min` 靠拢，补齐安全整数行形态下
+  `SELECT * ... FORCE INDEX(secondary_key) WHERE secondary_key <const range>`
+  的 non-covering secondary range 回表路径；
+- 当前仍保持 leader-local bounded row-sink 模型，不引入 worker
+  secondary range dispatch；
+- 只开放 non-null integer 字段、单 range、非 reverse、非 multi-range 的
+  小规模代表子集；
+- nullable/NULL-safe、字符串、LIKE、prefix、reverse、ORDER BY、大量数据、
+  多 range 等仍 fail-closed 或留给后续迁移批次。
+
+Implementation:
+
+- `handler` 增加 `pq_secondary_noncovering_range_produce()` 默认
+  unsupported contract；
+- `ha_innobase` 实现 no-ICP secondary range producer，复用
+  `pq_seek_primary_range_boundary()` 处理真实 endpoint，并保存/恢复
+  `active_index`、pushed ICP 状态、`row_prebuilt_t` template 状态；
+- `InnoDB_pq_scan_ctx` 增加
+  `produce_secondary_clustered_range_for_user_gate()`，在 secondary cursor 上
+  做 bounded scan，并通过 clustered lookup materialize MySQL row；
+- `pq_iterators.cc` 增加 `PQSecondaryNoncoveringRangeIterator`，在 covering
+  read-set 不满足但 clustered read-set 安全时接入 no-ICP 回表路径；
+- no-ICP non-covering factory 增加 table upper-bound rows gate，超过 64
+  行或上界未知时不创建 PQ iterator，避免 bounded leader-local producer
+  对 larger shape 返回用户可见 internal error；
+- 新增 `pq_commercial_sec_index_min` MTR，覆盖无显式 PK、显式 PK、PK 作为
+  查询列的三个正向回表场景，并验证 nullable key / NULL-safe OR 仍不进入
+  PQ path；
+- 更新 `pq_commercial_ref_icp` 注释：该 probe 超出当前 bounded
+  upper-row gate 时仍不进入 PQ path。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- `./mtr --suite=parallel_query --parallel=1 pq_commercial_sec_index_min`
+  passed；
+- targeted MTR passed:
+  `pq_commercial_sec_index_min`
+  `pq_commercial_range_sec`
+  `pq_commercial_ref_icp`；
+- `--record pq_commercial_sec_index_min` 实际刷新 result，但 MTR harness
+  在复制 result 时返回 errno 1；已用非 record 模式复跑通过确认。
+
+Notes:
+
+- 开发阶段未运行 full `parallel_query` suite；
+- 64 行 bounded cap 保留，超过 table upper-bound gate 的 no-ICP
+  non-covering secondary range 仍留给后续完整 worker/large-range 迁移；
+- independent review 首轮发现 cap-hit 后 partial row buffer 不能安全
+  fallback；当前修复为 factory 前置 upper-bound gate，并在 iterator
+  非 OOM/kill producer error 时保守 fallback；
+- independent re-review accepted; no Critical/Important/Minor findings。
+
 #### Batch D1.6ae - Primary clustered range endpoint flags
 
 Status: completed; independent review accepted.

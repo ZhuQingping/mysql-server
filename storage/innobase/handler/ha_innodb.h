@@ -673,6 +673,17 @@ class ha_innobase : public handler {
       uint *row_count) override;
 
   /**
+    Experimental non-covering secondary range row producer.
+
+    Pushes bounded clustered rows for a secondary range without pushed ICP into
+    row_sink.
+  */
+  int pq_secondary_noncovering_range_produce(
+      THD *leader_thd, uint keyno, const key_range *start_key,
+      const key_range *end_key, PQ_row_sink *row_sink,
+      uint *row_count) override;
+
+  /**
     End a PQ worker scan. Cleans up worker cursor state and resources.
     Idempotent: safe to call multiple times or with nullptr.
   */

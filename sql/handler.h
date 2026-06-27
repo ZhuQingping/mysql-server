@@ -5167,6 +5167,22 @@ class handler {
     return HA_ERR_UNSUPPORTED;
   }
 
+  /** Experimental non-covering secondary range row producer.
+
+    This is a user-visible but narrowly gated leader-local bridge for secondary
+    range scans without pushed ICP. It fetches the clustered record for each
+    visible secondary record and pushes clustered MySQL row images into a
+    SQL-owned sink. It must not support ref access, dependent ref access,
+    worker execution, or unsafe row templates.
+  */
+  virtual int pq_secondary_noncovering_range_produce(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *start_key [[maybe_unused]],
+      const key_range *end_key [[maybe_unused]],
+      PQ_row_sink *row_sink [[maybe_unused]], uint *row_count [[maybe_unused]]) {
+    return HA_ERR_UNSUPPORTED;
+  }
+
   /** End worker-side PQ scan context. Idempotent. */
   virtual int pq_worker_scan_end() { return 0; }
 
