@@ -9978,6 +9978,10 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_probe_attempts,
                                     secondary_range_probe_attempts)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_probe_unsupported,
                                     secondary_range_probe_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(primary_range_probe_attempts,
+                                    primary_range_probe_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(primary_range_probe_unsupported,
+                                    primary_range_probe_unsupported)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_clone_attempts,
                                     secondary_range_clone_attempts)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_clone_failed,
@@ -12576,6 +12580,12 @@ SHOW_VAR status_vars[] = {
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_empty_worker_ranges", (char *)&show_pq_empty_worker_ranges,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_primary_range_probe_attempts",
+     (char *)&show_pq_primary_range_probe_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_primary_range_probe_unsupported",
+     (char *)&show_pq_primary_range_probe_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_range_clone_attempts",
      (char *)&show_pq_secondary_range_clone_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

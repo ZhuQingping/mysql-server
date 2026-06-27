@@ -2146,26 +2146,34 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
     if (access_type == JT_RANGE && candidate_range_scan != nullptr &&
         candidate_range_scan->type == AccessPath::INDEX_RANGE_SCAN) {
       candidate_index = candidate_range_scan->index_range_scan().index;
-      if (candidate_table != nullptr && candidate_table->s != nullptr &&
+      const bool candidate_index_available =
+          candidate_table != nullptr && candidate_table->s != nullptr &&
           candidate_index != MAX_KEY &&
-          candidate_index < candidate_table->s->keys &&
-          candidate_index != candidate_table->s->primary_key) {
-        pq_global_stats.secondary_range_probe_attempts.fetch_add(
-            1, std::memory_order_relaxed);
-        pq_global_stats.secondary_range_probe_unsupported.fetch_add(
-            1, std::memory_order_relaxed);
-        pq_maybe_run_secondary_range_partition_smoke(
-            join->thd, candidate_table, candidate_range_scan, candidate_index);
-        pq_maybe_run_secondary_visibility_smoke(
-            join->thd, candidate_table, candidate_range_scan, candidate_index);
-        pq_maybe_run_secondary_visibility_one_record_smoke(
-            join->thd, candidate_table, candidate_range_scan, candidate_index);
-        pq_maybe_run_secondary_covering_one_row_smoke(
-            join->thd, candidate_table, candidate_range_scan, candidate_index);
-        pq_maybe_run_secondary_covering_range_smoke(
-            join->thd, candidate_table, candidate_range_scan, candidate_index);
-        pq_maybe_run_secondary_noncovering_icp_one_row_smoke(
-            join->thd, candidate_table, candidate_range_scan, candidate_index);
+          candidate_index < candidate_table->s->keys;
+      if (candidate_index_available) {
+        if (candidate_index == candidate_table->s->primary_key) {
+          pq_global_stats.primary_range_probe_attempts.fetch_add(
+              1, std::memory_order_relaxed);
+          pq_global_stats.primary_range_probe_unsupported.fetch_add(
+              1, std::memory_order_relaxed);
+        } else {
+          pq_global_stats.secondary_range_probe_attempts.fetch_add(
+              1, std::memory_order_relaxed);
+          pq_global_stats.secondary_range_probe_unsupported.fetch_add(
+              1, std::memory_order_relaxed);
+          pq_maybe_run_secondary_range_partition_smoke(
+              join->thd, candidate_table, candidate_range_scan, candidate_index);
+          pq_maybe_run_secondary_visibility_smoke(
+              join->thd, candidate_table, candidate_range_scan, candidate_index);
+          pq_maybe_run_secondary_visibility_one_record_smoke(
+              join->thd, candidate_table, candidate_range_scan, candidate_index);
+          pq_maybe_run_secondary_covering_one_row_smoke(
+              join->thd, candidate_table, candidate_range_scan, candidate_index);
+          pq_maybe_run_secondary_covering_range_smoke(
+              join->thd, candidate_table, candidate_range_scan, candidate_index);
+          pq_maybe_run_secondary_noncovering_icp_one_row_smoke(
+              join->thd, candidate_table, candidate_range_scan, candidate_index);
+        }
       }
     } else if (access_type == JT_REF) {
       pq_maybe_run_secondary_covering_ref_smoke(join->thd, candidate_table,

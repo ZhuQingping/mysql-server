@@ -200,6 +200,9 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   `PQTableScanIterator::Read()` debug-only gate：leader 通过
   `MQ_record_gather -> Exchange_nosort -> table->record[0]` 消费
   `Query_result_mq` worker-result row；
+- 当前正在收口 clustered primary-key range preflight 诊断：primary range 仍保持
+  fail-closed，不进入 worker scan，但新增用户可见计数用于证明 optimizer 已识别
+  primary clustered range 风险点；
 - 下一步：继续缩小商用 `ParallelScanIterator` 主路径差距，优先把
   worker-thread producer、leader record gather 和可见 fullscan gate 的
   生命周期顺序对齐；开发阶段仍只跑相关模块 MTR，不跑全量 MTR。

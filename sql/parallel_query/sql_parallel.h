@@ -359,6 +359,8 @@ struct PQ_global_stats {
   std::atomic<uint64> ranges_built{0};        ///< Total InnoDB PQ ranges planned
   std::atomic<uint64> ranges_dispatched{0};   ///< InnoDB PQ ranges assigned
   std::atomic<uint64> empty_worker_ranges{0}; ///< Workers assigned no range
+  std::atomic<uint64> primary_range_probe_attempts{0};  ///< Primary range probes
+  std::atomic<uint64> primary_range_probe_unsupported{0};  ///< Unsupported probes
   std::atomic<uint64> secondary_range_probe_attempts{0};  ///< Secondary range probes
   std::atomic<uint64> secondary_range_probe_unsupported{0};  ///< Unsupported probes
   std::atomic<uint64> secondary_range_clone_attempts{0};  ///< Range clone probes
@@ -836,6 +838,8 @@ struct PQ_global_stats {
     ranges_built.store(0, std::memory_order_relaxed);
     ranges_dispatched.store(0, std::memory_order_relaxed);
     empty_worker_ranges.store(0, std::memory_order_relaxed);
+    primary_range_probe_attempts.store(0, std::memory_order_relaxed);
+    primary_range_probe_unsupported.store(0, std::memory_order_relaxed);
     secondary_range_probe_attempts.store(0, std::memory_order_relaxed);
     secondary_range_probe_unsupported.store(0, std::memory_order_relaxed);
     secondary_range_clone_attempts.store(0, std::memory_order_relaxed);
