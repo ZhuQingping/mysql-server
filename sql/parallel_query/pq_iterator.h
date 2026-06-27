@@ -163,7 +163,7 @@ class PQTableScanIterator final : public TableRowIterator {
   /** @return true when the debug-only threaded shadow Read path may run. */
   bool should_enter_threaded_read_shadow_path(uint requested_dop) const;
 
-  /** @return true when the debug-only threaded PQWR Read path may run. */
+  /** @return true when the threaded PQWR record-gather path may run. */
   bool should_enter_threaded_pqwr_record_gather_path(uint requested_dop) const;
 
   /** @return true while serial fallback is still allowed. */

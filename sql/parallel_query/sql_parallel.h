@@ -127,9 +127,9 @@ void EstimatePQGatherOperatorCost(AccessPath *path, THD *thd);
 
   Commercial PQ routes worker SQL projection rows through
   MQ_record_gather -> Exchange_nosort -> TABLE::record[0]. This 8.0.46 port
-  starts with a debug-only facade for Query_result_mq/PQWR rows; it does not
-  support Filesort, ORDER BY, QEP_TAB ownership, or the commercial Field_raw_data
-  protocol yet.
+  currently consumes Query_result_mq/PQWR rows for the visible DOP2 fullscan
+  gate; it does not support Filesort, ORDER BY, QEP_TAB ownership, or the
+  commercial Field_raw_data protocol yet.
 */
 class MQ_record_gather {
  public:
@@ -483,6 +483,8 @@ struct PQ_global_stats {
   std::atomic<uint64> leader_row_stream_smoke_attempts{0};  ///< Read smoke
   std::atomic<uint64> leader_row_stream_smoke_selected{0};  ///< Read selected
   std::atomic<uint64> leader_row_stream_smoke_rows{0};  ///< Read smoke rows
+  std::atomic<uint64> visible_pqwr_record_gather_selected{0};  ///< PQWR path
+  std::atomic<uint64> visible_pqwr_record_gather_rows{0};  ///< PQWR rows
   std::atomic<uint64> worker_result_smoke_rows{0};  ///< Worker result frames
   std::atomic<uint64> worker_result_smoke_finishes{0};  ///< FINISH frames
   std::atomic<uint64> worker_result_smoke_errors{0};  ///< ERROR frames
@@ -983,6 +985,8 @@ struct PQ_global_stats {
     leader_row_stream_smoke_attempts.store(0, std::memory_order_relaxed);
     leader_row_stream_smoke_selected.store(0, std::memory_order_relaxed);
     leader_row_stream_smoke_rows.store(0, std::memory_order_relaxed);
+    visible_pqwr_record_gather_selected.store(0, std::memory_order_relaxed);
+    visible_pqwr_record_gather_rows.store(0, std::memory_order_relaxed);
     worker_result_smoke_rows.store(0, std::memory_order_relaxed);
     worker_result_smoke_finishes.store(0, std::memory_order_relaxed);
     worker_result_smoke_errors.store(0, std::memory_order_relaxed);
@@ -2081,7 +2085,7 @@ class Gather_operator {
   /**
     Start worker-thread callback producers that send rows as PQWR frames.
 
-    This debug-only bridge keeps the same worker open/scan lifecycle as
+    This guarded DOP2 bridge keeps the same worker open/scan lifecycle as
     run_worker_callback_threaded_producer(), but workers write through
     Query_result_mq and the leader is expected to consume via MQ_record_gather.
   */

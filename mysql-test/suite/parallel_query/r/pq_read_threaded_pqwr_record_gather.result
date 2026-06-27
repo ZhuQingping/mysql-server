@@ -16,8 +16,6 @@ INSERT INTO t1 VALUES
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
 SET SESSION parallel_default_dop=2;
-SET @old_debug=@@session.debug;
-SET SESSION debug="d,pq_read_threaded_pqwr_record_gather_path";
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -34,6 +32,14 @@ SET @pq_workers_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_workers_launched');
+SET @pqwr_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected');
+SET @pqwr_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
 SELECT id, nullable_i FROM t1;
 id	nullable_i
 1	NULL
@@ -53,9 +59,15 @@ WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
 AS subset_rows_delta,
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
-AS subset_workers_delta;
-subset_executed_delta	subset_fallback_delta	subset_rows_delta	subset_workers_delta
-1	0	5	2
+AS subset_workers_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected') -
+@pqwr_selected_before AS subset_pqwr_selected_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
+@pqwr_rows_before AS subset_pqwr_rows_delta;
+subset_executed_delta	subset_fallback_delta	subset_rows_delta	subset_workers_delta	subset_pqwr_selected_delta	subset_pqwr_rows_delta
+1	0	5	2	1	5
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -72,6 +84,14 @@ SET @pq_workers_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_workers_launched');
+SET @pqwr_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected');
+SET @pqwr_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
 SELECT wide_v, d FROM t1;
 wide_v	d
 NULL	2038-01-19
@@ -91,9 +111,15 @@ WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
 AS nonprefix_rows_delta,
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
-AS nonprefix_workers_delta;
-nonprefix_executed_delta	nonprefix_fallback_delta	nonprefix_rows_delta	nonprefix_workers_delta
-1	0	5	2
+AS nonprefix_workers_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected') -
+@pqwr_selected_before AS nonprefix_pqwr_selected_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
+@pqwr_rows_before AS nonprefix_pqwr_rows_delta;
+nonprefix_executed_delta	nonprefix_fallback_delta	nonprefix_rows_delta	nonprefix_workers_delta	nonprefix_pqwr_selected_delta	nonprefix_pqwr_rows_delta
+1	0	5	2	1	5
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -110,6 +136,14 @@ SET @pq_workers_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_workers_launched');
+SET @pqwr_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected');
+SET @pqwr_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
 SELECT id FROM t1 WHERE wide_v = 'alpha' OR d = '2038-01-19';
 id
 2
@@ -126,9 +160,15 @@ WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
 AS predicate_rows_delta,
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
-AS predicate_workers_delta;
-predicate_executed_delta	predicate_fallback_delta	predicate_rows_delta	predicate_workers_delta
-1	0	5	2
+AS predicate_workers_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected') -
+@pqwr_selected_before AS predicate_pqwr_selected_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
+@pqwr_rows_before AS predicate_pqwr_rows_delta;
+predicate_executed_delta	predicate_fallback_delta	predicate_rows_delta	predicate_workers_delta	predicate_pqwr_selected_delta	predicate_pqwr_rows_delta
+1	0	5	2	1	5
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -145,6 +185,14 @@ SET @pq_workers_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_workers_launched');
+SET @pqwr_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected');
+SET @pqwr_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
 SELECT id, nullable_i, wide_v, fixed_c, amount, d FROM t1;
 id	nullable_i	wide_v	fixed_c	amount	d
 1	NULL	NULL	NULL	NULL	NULL
@@ -164,10 +212,15 @@ WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
 AS rows_delta,
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
-AS workers_delta;
-executed_delta	fallback_delta	rows_delta	workers_delta
-1	0	5	2
-SET SESSION debug=@old_debug;
+AS workers_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected') -
+@pqwr_selected_before AS pqwr_selected_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
+@pqwr_rows_before AS pqwr_rows_delta;
+executed_delta	fallback_delta	rows_delta	workers_delta	pqwr_selected_delta	pqwr_rows_delta
+1	0	5	2	1	5
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;
 SET SESSION parallel_cost_threshold=10000;

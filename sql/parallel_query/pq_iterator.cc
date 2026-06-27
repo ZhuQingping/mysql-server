@@ -74,6 +74,38 @@ bool pq_table_has_read_fields(const TABLE *table) {
   return false;
 }
 
+bool pq_table_has_only_supported_pqwr_fields(const TABLE *table) {
+  if (table == nullptr || table->s == nullptr || table->field == nullptr) {
+    return false;
+  }
+
+  for (uint i = 0; i < table->s->fields; ++i) {
+    const Field *field = table->field[i];
+    if (field == nullptr) return false;
+    switch (field->type()) {
+      case MYSQL_TYPE_TINY:
+      case MYSQL_TYPE_SHORT:
+      case MYSQL_TYPE_LONG:
+      case MYSQL_TYPE_INT24:
+      case MYSQL_TYPE_LONGLONG:
+      case MYSQL_TYPE_FLOAT:
+      case MYSQL_TYPE_DOUBLE:
+      case MYSQL_TYPE_NEWDECIMAL:
+      case MYSQL_TYPE_DATE:
+      case MYSQL_TYPE_TIME:
+      case MYSQL_TYPE_DATETIME:
+      case MYSQL_TYPE_TIMESTAMP:
+      case MYSQL_TYPE_STRING:
+      case MYSQL_TYPE_VAR_STRING:
+      case MYSQL_TYPE_VARCHAR:
+        break;
+      default:
+        return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 PQTableScanIterator::PQTableScanIterator(THD *thd, MEM_ROOT *mem_root,
@@ -328,13 +360,14 @@ bool PQTableScanIterator::Init() {
   uint actual_dop = 0;
   uint requested_dop = thd()->variables.parallel_default_dop;
   if (requested_dop == 0) requested_dop = 1;
+  const bool threaded_pqwr_record_gather_path =
+      should_enter_threaded_pqwr_record_gather_path(requested_dop);
   const bool threaded_read_shadow_path =
+      !threaded_pqwr_record_gather_path &&
       should_enter_threaded_read_shadow_path(requested_dop);
   const bool read_shadow_path =
-      !threaded_read_shadow_path && should_enter_read_shadow_path(requested_dop);
-  const bool threaded_pqwr_record_gather_path =
-      !threaded_read_shadow_path && !read_shadow_path &&
-      should_enter_threaded_pqwr_record_gather_path(requested_dop);
+      !threaded_read_shadow_path && !threaded_pqwr_record_gather_path &&
+      should_enter_read_shadow_path(requested_dop);
   pq_global_stats.probe_attempts.fetch_add(1, std::memory_order_relaxed);
   int error = table()->file->pq_leader_scan_init(
       thd(), &m_leader_ctx, PQ_leader_scan_mode::PROBE, requested_dop,
@@ -456,7 +489,8 @@ bool PQTableScanIterator::Init() {
       }
     });
 
-    if (!read_shadow_path && !threaded_read_shadow_path) {
+    if (!read_shadow_path && !threaded_read_shadow_path &&
+        !threaded_pqwr_record_gather_path) {
       PQ_Leader_context *partial_execute_ctx = nullptr;
       uint partial_execute_dop = 0;
       error = table()->file->pq_leader_scan_init(
@@ -556,6 +590,8 @@ bool PQTableScanIterator::Init() {
         return true;
       }
       m_use_worker_result_record_gather = true;
+      pq_global_stats.visible_pqwr_record_gather_selected.fetch_add(
+          1, std::memory_order_relaxed);
       DEBUG_SYNC(thd(), "pq_read_threaded_worker_started");
     } else if (threaded_read_shadow_path) {
       if (m_gather->run_worker_callback_threaded_producer(
@@ -651,7 +687,8 @@ bool PQTableScanIterator::should_enter_threaded_read_shadow_path(
 
 bool PQTableScanIterator::should_enter_threaded_pqwr_record_gather_path(
     uint requested_dop) const {
-  bool enabled = false;
+  bool enabled = thd() != nullptr && m_join != nullptr && m_join->pq_eligible &&
+                 thd()->variables.parallel_query && requested_dop == 2;
   DBUG_EXECUTE_IF("pq_read_threaded_pqwr_record_gather_path", {
     enabled = true;
   });
@@ -659,7 +696,8 @@ bool PQTableScanIterator::should_enter_threaded_pqwr_record_gather_path(
          m_join->pq_eligible && thd()->variables.parallel_query &&
          requested_dop == 2 && table() != nullptr && table()->s != nullptr &&
          table()->s->blob_fields == 0 && table()->s->fields >= 2 &&
-         table()->s->reclength > 0 && pq_table_has_read_fields(table());
+         table()->s->reclength > 0 && pq_table_has_read_fields(table()) &&
+         pq_table_has_only_supported_pqwr_fields(table());
 }
 
 int PQTableScanIterator::Read() {
@@ -726,6 +764,10 @@ int PQTableScanIterator::Read() {
         m_executed_counted = true;
       }
       pq_global_stats.rows_scanned.fetch_add(1, std::memory_order_relaxed);
+      if (m_use_worker_result_record_gather) {
+        pq_global_stats.visible_pqwr_record_gather_rows.fetch_add(
+            1, std::memory_order_relaxed);
+      }
       DBUG_EXECUTE_IF("pq_leader_row_stream_smoke", {
         pq_global_stats.leader_row_stream_smoke_rows.fetch_add(
             1, std::memory_order_relaxed);

@@ -10324,6 +10324,11 @@ DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(leader_row_stream_smoke_selected,
                                       leader_row_stream_smoke_selected)
 DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(leader_row_stream_smoke_rows,
                                       leader_row_stream_smoke_rows)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(
+    visible_pqwr_record_gather_selected,
+    visible_pqwr_record_gather_selected)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_pqwr_record_gather_rows,
+                                      visible_pqwr_record_gather_rows)
 
 #undef DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC
 
@@ -12497,6 +12502,12 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_leader_row_stream_smoke_selected",
      (char *)&show_pq_leader_row_stream_smoke_selected, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_pqwr_record_gather_rows",
+     (char *)&show_pq_visible_pqwr_record_gather_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_pqwr_record_gather_selected",
+     (char *)&show_pq_visible_pqwr_record_gather_selected, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_workers_launched", (char *)&show_pq_workers_launched, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

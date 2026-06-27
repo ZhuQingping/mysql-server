@@ -2492,3 +2492,71 @@ Notes:
 - source code unchanged；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6t - Visible DOP2 PQWR record_gather gate
+
+Status: completed; independent re-review accepted after fixing review findings.
+
+目标：
+
+- 将 D1.6r/D1.6s 已验证的 `PQWR` subset field-index record_gather 路径从
+  DBUG-only gate 提升为普通 `parallel_query=ON` + DOP2 visible fullscan
+  子路径；
+- 让 visible DOP2 fullscan 优先走更接近商用的
+  `MQ_record_gather -> Exchange_nosort -> TABLE::record[0]` worker-result
+  消费路径；
+- 保留 DOP1/DOP4/legacy row-image 路径，不打开 ORDER BY、range/ref/ICP 或
+  BLOB/TEXT。
+
+Implementation:
+
+- `PQTableScanIterator::Init()` 中优先选择
+  `should_enter_threaded_pqwr_record_gather_path()`；
+- 只有 PQWR gate 不满足时才继续进入旧 threaded row-image path；
+- visible PQWR path 跳过 unrelated partial-group/callback smoke block，避免
+  在真实执行路径前额外增长 smoke counters；
+- `should_enter_threaded_pqwr_record_gather_path()` 现在允许普通 visible
+  DOP2：仍要求 `parallel_query=ON`、`JOIN::pq_eligible`、
+  `parallel_default_dop=2`、non-BLOB、read_set 非空；
+- visible PQWR 暂时只允许当前已验证的简单字段类型集合；包含 BIT 等未验证
+  类型的表继续走旧 row-image path，避免字符串化 PQWR frame 造成类型警告；
+- 新增 `Parallel_visible_pqwr_record_gather_selected` /
+  `Parallel_visible_pqwr_record_gather_rows` status counters，使 MTR 能证明
+  走的是 PQWR record_gather 而不是旧 row-image path；
+- `pq_read_threaded_pqwr_record_gather` MTR 移除 DBUG gate，作为 visible
+  DOP2 PQWR record_gather 正例，并断言 PQWR-specific counters。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_commercial_fullscan`
+  `pq_read_threaded_pqwr_record_gather`
+  `pq_read_threaded_pqwr_worker_error`
+  `pq_leader_pqwr_record_gather_smoke`
+  `pq_commercial_worker_result_adapter`
+  `pq_read_threaded_projection_where`
+  `pq_read_threaded_row_image_datatypes`
+  `pq_not_equal`
+  `pq_fullscan`
+  `pq_blob`
+  `pq_read_view`
+  `pq_read_threaded_dop2_guard`
+  `pq_read_threaded_experimental_vars_noop`
+  `pq_exchange_rows_dop1`
+  `pq_stats`。
+
+Review:
+
+- initial independent Review Agent requested fixes for unrelated smoke counter
+  side effects and PQWR-specific observability；
+- fixes applied: PQWR visible path now skips the unrelated smoke block, and
+  MTR asserts dedicated visible PQWR selected/row counters；
+- re-review accepted after updating the remaining stale debug-only producer
+  comment。
+
+Notes:
+
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
