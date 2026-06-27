@@ -64,10 +64,23 @@ struct PQ_worker_result_decoded_field {
   bool is_null{false};
 };
 
+struct PQ_worker_result_decoded_raw_field {
+  /*
+    Borrowed pointer into the validated worker-result frame payload. The raw
+    bytes use the same Field_raw_data shape as the commercial MQ path.
+  */
+  const uchar *value{nullptr};
+  uint32 value_len{0};
+  uchar var_len{0};
+  uint32 field_index{0};
+  bool is_null{false};
+};
+
 constexpr uint32 PQ_WORKER_RESULT_FRAME_MAGIC = 0x50515752;  // "PQWR"
 constexpr uint16 PQ_WORKER_RESULT_FRAME_VERSION = 1;
 constexpr uint32 PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF = 1U << 0;
 constexpr uint32 PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES = 1U << 1;
+constexpr uint32 PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS = 1U << 2;
 
 struct PQ_worker_result_stable_ref {
   const uchar *row_id{nullptr};
@@ -93,6 +106,10 @@ bool pq_decode_worker_result_row(
     const void *raw_data, uint32 raw_len,
     std::vector<PQ_worker_result_decoded_field> *fields);
 
+bool pq_decode_worker_result_raw_row(
+    const void *raw_data, uint32 raw_len,
+    std::vector<PQ_worker_result_decoded_raw_field> *fields);
+
 bool pq_decode_worker_result_stable_ref_row(
     const void *raw_data, uint32 raw_len,
     PQ_worker_result_stable_ref *stable_ref);
@@ -109,6 +126,12 @@ bool pq_run_query_result_mq_adapter_smoke(THD *thd, uint32 *rows_read,
 
 bool pq_run_query_result_mq_wiring_smoke(THD *thd, uint32 *rows_read,
                                          uint32 *finishes_read);
+
+bool pq_run_query_result_mq_raw_field_smoke(uint32 *rows_read,
+                                            uint32 *fields_read,
+                                            uint32 *bytes_read,
+                                            uint32 *normal_decode_rejects,
+                                            uint32 *invalid_rejects);
 
 bool pq_run_query_result_mq_stable_ref_smoke(const uchar *handler_ref,
                                              uint32 handler_ref_len,

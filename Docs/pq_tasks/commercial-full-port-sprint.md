@@ -2560,3 +2560,50 @@ Notes:
 
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6u - PQWR raw Field_raw_data frame smoke
+
+Status: completed; independent review accepted after documentation refresh.
+
+目标：
+
+- 在 D1.6t visible DOP2 PQWR record_gather 之后，继续向商用
+  `Field_raw_data` worker-result 协议靠拢；
+- 新增 `PQWR` raw-field frame adapter smoke，验证 fixed raw bytes、
+  VARCHAR `length_bytes`、NULL 字段和 field-index 映射；
+- 保持现有 visible PQWR path 使用已验证的 string payload materializer，
+  不在本批次替换用户可见执行路径。
+
+Implementation:
+
+- 新增 `PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS` wire flag；
+- raw-field frame 只能用于 `ROW`，不能和 `STABLE_REF` 混用；
+- 普通 `pq_decode_worker_result_row()` 明确拒绝 raw-field frame，避免
+  当前 string materializer 误消费 raw payload；
+- 新增 `pq_decode_worker_result_raw_row()` 和
+  `pq_run_query_result_mq_raw_field_smoke()`；
+- `Gather_operator::run_query_result_mq_raw_field_smoke()` 记录专用 status
+  counters；
+- `pq_commercial_worker_result_adapter` MTR 断言 raw-field smoke 的 rows、
+  fields、bytes、normal-decoder reject 和 invalid-frame reject。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_commercial_worker_result_adapter`
+  `pq_stats`
+  `pq_read_threaded_pqwr_record_gather`
+  `pq_commercial_fullscan`。
+
+Review:
+
+- independent Review Agent found no Critical or Important issues；
+- one Minor issue was fixed: documentation status, validation, and review
+  sections were updated after the targeted verification run。
+
+Notes:
+
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。

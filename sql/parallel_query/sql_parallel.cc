@@ -2921,6 +2921,32 @@ bool Gather_operator::run_query_result_mq_wiring_smoke(THD *leader_thd) {
   return false;
 }
 
+bool Gather_operator::run_query_result_mq_raw_field_smoke(THD *leader_thd
+                                                          [[maybe_unused]]) {
+  uint32 rows_read = 0;
+  uint32 fields_read = 0;
+  uint32 bytes_read = 0;
+  uint32 normal_decode_rejects = 0;
+  uint32 invalid_rejects = 0;
+  if (pq_run_query_result_mq_raw_field_smoke(
+          &rows_read, &fields_read, &bytes_read, &normal_decode_rejects,
+          &invalid_rejects)) {
+    return true;
+  }
+
+  pq_global_stats.worker_result_raw_field_smoke_rows.fetch_add(
+      rows_read, std::memory_order_relaxed);
+  pq_global_stats.worker_result_raw_field_smoke_fields.fetch_add(
+      fields_read, std::memory_order_relaxed);
+  pq_global_stats.worker_result_raw_field_smoke_bytes.fetch_add(
+      bytes_read, std::memory_order_relaxed);
+  pq_global_stats.worker_result_raw_field_smoke_normal_rejects.fetch_add(
+      normal_decode_rejects, std::memory_order_relaxed);
+  pq_global_stats.worker_result_raw_field_smoke_invalid_rejects.fetch_add(
+      invalid_rejects, std::memory_order_relaxed);
+  return false;
+}
+
 bool Gather_operator::run_query_result_mq_threaded_probe_smoke(
     THD *leader_thd) {
   if (leader_thd == nullptr || m_dop != 1) return true;

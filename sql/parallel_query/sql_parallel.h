@@ -490,6 +490,11 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_result_smoke_errors{0};  ///< ERROR frames
   std::atomic<uint64> worker_result_smoke_workers{0};  ///< Smoke workers
   std::atomic<uint64> worker_result_smoke_prewait_drains{0};  ///< Drained before wait
+  std::atomic<uint64> worker_result_raw_field_smoke_rows{0};  ///< Raw frames
+  std::atomic<uint64> worker_result_raw_field_smoke_fields{0};  ///< Raw fields
+  std::atomic<uint64> worker_result_raw_field_smoke_bytes{0};  ///< Raw bytes
+  std::atomic<uint64> worker_result_raw_field_smoke_normal_rejects{0};
+  std::atomic<uint64> worker_result_raw_field_smoke_invalid_rejects{0};
   std::atomic<uint64> worker_execute_iterator_smoke_attempts{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_clone{0};
   std::atomic<uint64> worker_execute_iterator_smoke_blocked_readinfo{0};
@@ -992,6 +997,13 @@ struct PQ_global_stats {
     worker_result_smoke_errors.store(0, std::memory_order_relaxed);
     worker_result_smoke_workers.store(0, std::memory_order_relaxed);
     worker_result_smoke_prewait_drains.store(0, std::memory_order_relaxed);
+    worker_result_raw_field_smoke_rows.store(0, std::memory_order_relaxed);
+    worker_result_raw_field_smoke_fields.store(0, std::memory_order_relaxed);
+    worker_result_raw_field_smoke_bytes.store(0, std::memory_order_relaxed);
+    worker_result_raw_field_smoke_normal_rejects.store(
+        0, std::memory_order_relaxed);
+    worker_result_raw_field_smoke_invalid_rejects.store(
+        0, std::memory_order_relaxed);
     worker_execute_iterator_smoke_attempts.store(0,
                                                  std::memory_order_relaxed);
     worker_execute_iterator_smoke_blocked_clone.store(
@@ -1914,6 +1926,19 @@ class Gather_operator {
     @retval true   Smoke pass failed
   */
   bool run_query_result_mq_wiring_smoke(THD *leader_thd);
+
+  /**
+    Run a PQWR raw Field_raw_data adapter smoke.
+
+    This validates a commercial-shaped raw field frame through a local MQueue.
+    The normal string decoder must reject this frame, and the dedicated raw
+    decoder validates field-indexes, var-len metadata, raw bytes, NULL fields,
+    and invalid flag combinations. It does not change visible PQWR execution.
+
+    @retval false  Smoke pass completed
+    @retval true   Smoke pass failed
+  */
+  bool run_query_result_mq_raw_field_smoke(THD *leader_thd);
 
   /**
     Run an M11-B3c worker-thread Query_result_mq probe.

@@ -10378,6 +10378,30 @@ static int show_pq_worker_result_smoke_prewait_drains(THD *, SHOW_VAR *var,
   return 0;
 }
 
+#define DEFINE_PQ_WORKER_RESULT_RAW_FIELD_SHOW_FUNC(NAME, FIELD)       \
+  static int show_pq_##NAME(THD *, SHOW_VAR *var, char *buf) {         \
+    var->type = SHOW_LONGLONG;                                         \
+    var->value = buf;                                                  \
+    *((longlong *)buf) =                                               \
+        (longlong)(pq_global_stats.FIELD.load(std::memory_order_relaxed)); \
+    return 0;                                                          \
+  }
+
+DEFINE_PQ_WORKER_RESULT_RAW_FIELD_SHOW_FUNC(
+    worker_result_raw_field_smoke_rows, worker_result_raw_field_smoke_rows)
+DEFINE_PQ_WORKER_RESULT_RAW_FIELD_SHOW_FUNC(
+    worker_result_raw_field_smoke_fields, worker_result_raw_field_smoke_fields)
+DEFINE_PQ_WORKER_RESULT_RAW_FIELD_SHOW_FUNC(
+    worker_result_raw_field_smoke_bytes, worker_result_raw_field_smoke_bytes)
+DEFINE_PQ_WORKER_RESULT_RAW_FIELD_SHOW_FUNC(
+    worker_result_raw_field_smoke_normal_rejects,
+    worker_result_raw_field_smoke_normal_rejects)
+DEFINE_PQ_WORKER_RESULT_RAW_FIELD_SHOW_FUNC(
+    worker_result_raw_field_smoke_invalid_rejects,
+    worker_result_raw_field_smoke_invalid_rejects)
+
+#undef DEFINE_PQ_WORKER_RESULT_RAW_FIELD_SHOW_FUNC
+
 #define DEFINE_PQ_WORKER_EXECUTE_ITERATOR_SHOW_FUNC(NAME, FIELD)        \
   static int show_pq_##NAME(THD *, SHOW_VAR *var, char *buf) {          \
     var->type = SHOW_LONGLONG;                                          \
@@ -12882,6 +12906,21 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_result_smoke_prewait_drains",
      (char *)&show_pq_worker_result_smoke_prewait_drains, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_raw_field_smoke_bytes",
+     (char *)&show_pq_worker_result_raw_field_smoke_bytes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_raw_field_smoke_fields",
+     (char *)&show_pq_worker_result_raw_field_smoke_fields, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_raw_field_smoke_invalid_rejects",
+     (char *)&show_pq_worker_result_raw_field_smoke_invalid_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_raw_field_smoke_normal_rejects",
+     (char *)&show_pq_worker_result_raw_field_smoke_normal_rejects, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_result_raw_field_smoke_rows",
+     (char *)&show_pq_worker_result_raw_field_smoke_rows, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_execute_iterator_smoke_attempts",
      (char *)&show_pq_worker_execute_iterator_smoke_attempts, SHOW_FUNC,

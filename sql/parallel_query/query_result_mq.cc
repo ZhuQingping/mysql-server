@@ -47,7 +47,8 @@ bool pq_is_valid_worker_result_type(uint16 type) {
 
 bool pq_worker_result_has_unknown_flags(uint32 flags) {
   constexpr uint32 known_flags = PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF |
-                                 PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES;
+                                 PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES |
+                                 PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS;
   return (flags & ~known_flags) != 0;
 }
 
@@ -67,7 +68,15 @@ bool pq_send_worker_result_frame_with_flags(
       (flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0) {
     return true;
   }
+  if ((flags & PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0 &&
+      (flags & PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS) != 0) {
+    return true;
+  }
   if ((flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0 &&
+      type != PQ_worker_result_message_type::ROW) {
+    return true;
+  }
+  if ((flags & PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS) != 0 &&
       type != PQ_worker_result_message_type::ROW) {
     return true;
   }
@@ -195,6 +204,50 @@ bool pq_worker_result_decode_field(const uchar **cursor,
   return false;
 }
 
+bool pq_worker_result_decode_raw_field(const uchar **cursor,
+                                       const uchar *payload_end,
+                                       const uchar **value, uint32 *value_len,
+                                       uchar *var_len) {
+  if (cursor == nullptr || *cursor == nullptr || value == nullptr ||
+      value_len == nullptr || var_len == nullptr || payload_end < *cursor ||
+      static_cast<size_t>(payload_end - *cursor) <
+          sizeof(uint32) + sizeof(uchar)) {
+    return true;
+  }
+
+  const uint32 len = uint4korr(*cursor);
+  *cursor += sizeof(uint32);
+  *var_len = **cursor;
+  *cursor += sizeof(uchar);
+  if (*var_len > 2 || static_cast<size_t>(payload_end - *cursor) < len) {
+    return true;
+  }
+
+  *value = *cursor;
+  *value_len = len;
+  *cursor += len;
+  return false;
+}
+
+bool pq_worker_result_append_raw_field(std::vector<uchar> *payload,
+                                       const Field_raw_data &field_raw) {
+  if (payload == nullptr) return true;
+  if (field_raw.m_need_send && field_raw.m_len > 0 &&
+      field_raw.m_ptr == nullptr) {
+    return true;
+  }
+  if (field_raw.m_var_len > 2) return true;
+
+  pq_worker_result_append_uint32(
+      payload, field_raw.m_need_send ? field_raw.m_len : 0);
+  payload->push_back(field_raw.m_need_send ? field_raw.m_var_len : 0);
+  if (field_raw.m_need_send && field_raw.m_len > 0) {
+    payload->insert(payload->end(), field_raw.m_ptr,
+                    field_raw.m_ptr + field_raw.m_len);
+  }
+  return false;
+}
+
 bool pq_collect_table_read_set_fields(const TABLE *table,
                                       std::vector<uint32> *field_indexes) {
   if (table == nullptr || table->s == nullptr || table->read_set == nullptr ||
@@ -269,7 +322,16 @@ bool pq_validate_worker_result_frame(
       (decoded->flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0) {
     return true;
   }
+  if ((decoded->flags & PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0 &&
+      (decoded->flags & PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS) != 0) {
+    return true;
+  }
   if ((decoded->flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0 &&
+      decoded->type !=
+          static_cast<uint16>(PQ_worker_result_message_type::ROW)) {
+    return true;
+  }
+  if ((decoded->flags & PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS) != 0 &&
       decoded->type !=
           static_cast<uint16>(PQ_worker_result_message_type::ROW)) {
     return true;
@@ -319,6 +381,7 @@ bool pq_decode_worker_result_row(
       header->type !=
           static_cast<uint16>(PQ_worker_result_message_type::ROW) ||
       (header->flags & PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0 ||
+      (header->flags & PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS) != 0 ||
       null_bitmap == nullptr || payload == nullptr) {
     return true;
   }
@@ -358,6 +421,76 @@ bool pq_decode_worker_result_row(
     }
 
     fields->push_back({is_null ? nullptr : value, value_len,
+                       has_field_indexes ? field_indexes[i] : i, is_null});
+  }
+
+  if (cursor != payload_end) {
+    fields->clear();
+    return true;
+  }
+  return false;
+}
+
+bool pq_decode_worker_result_raw_row(
+    const void *raw_data, uint32 raw_len,
+    std::vector<PQ_worker_result_decoded_raw_field> *fields) {
+  if (fields == nullptr) return true;
+  fields->clear();
+
+  const PQ_worker_result_frame_header *header = nullptr;
+  const uchar *null_bitmap = nullptr;
+  const uchar *payload = nullptr;
+  if (pq_validate_worker_result_frame(raw_data, raw_len, &header, &null_bitmap,
+                                      &payload) ||
+      header == nullptr ||
+      header->type !=
+          static_cast<uint16>(PQ_worker_result_message_type::ROW) ||
+      (header->flags & PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS) == 0 ||
+      (header->flags & PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0 ||
+      null_bitmap == nullptr || payload == nullptr) {
+    return true;
+  }
+
+  const uchar *cursor = payload;
+  const uchar *payload_end = payload + header->payload_len;
+  std::vector<uint32> field_indexes;
+  const bool has_field_indexes =
+      (header->flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0;
+  if (has_field_indexes) {
+    field_indexes.reserve(header->field_count);
+    for (uint32 i = 0; i < header->field_count; ++i) {
+      if (static_cast<size_t>(payload_end - cursor) < sizeof(uint32)) {
+        fields->clear();
+        return true;
+      }
+      field_indexes.push_back(uint4korr(cursor));
+      cursor += sizeof(uint32);
+    }
+  }
+
+  fields->reserve(header->field_count);
+  for (uint32 i = 0; i < header->field_count; ++i) {
+    const uchar *value = nullptr;
+    uint32 value_len = 0;
+    uchar var_len = 0;
+    if (pq_worker_result_decode_raw_field(&cursor, payload_end, &value,
+                                          &value_len, &var_len)) {
+      fields->clear();
+      return true;
+    }
+
+    const bool is_null =
+        pq_worker_result_is_null(null_bitmap, header->null_bitmap_len, i);
+    if (is_null && (value_len != 0 || var_len != 0)) {
+      fields->clear();
+      return true;
+    }
+    if (!is_null && value_len == 0) {
+      fields->clear();
+      return true;
+    }
+
+    fields->push_back({is_null ? nullptr : value, value_len, var_len,
                        has_field_indexes ? field_indexes[i] : i, is_null});
   }
 
@@ -725,6 +858,152 @@ bool pq_run_query_result_mq_wiring_smoke(THD *thd, uint32 *rows_read,
 
   handle.cleanup();
   return failed || *rows_read != 2 || *finishes_read != 1;
+}
+
+bool pq_run_query_result_mq_raw_field_smoke(uint32 *rows_read,
+                                            uint32 *fields_read,
+                                            uint32 *bytes_read,
+                                            uint32 *normal_decode_rejects,
+                                            uint32 *invalid_rejects) {
+  if (rows_read == nullptr || fields_read == nullptr ||
+      bytes_read == nullptr || normal_decode_rejects == nullptr ||
+      invalid_rejects == nullptr) {
+    return true;
+  }
+  *rows_read = 0;
+  *fields_read = 0;
+  *bytes_read = 0;
+  *normal_decode_rejects = 0;
+  *invalid_rejects = 0;
+
+  PQ_mq_event sender_event;
+  PQ_mq_event receiver_event;
+  char ring[PQ_MQ_DEFAULT_RING_SIZE];
+  MQueue queue(&sender_event, &receiver_event, ring, sizeof(ring));
+  MQueue_handle handle(&queue, PQ_MQ_DEFAULT_BUFFER_SIZE);
+  if (handle.init()) return true;
+
+  uchar fixed_raw[] = {0x11, 0x22, 0x33, 0x44};
+  uchar var_raw[] = {5, 'h', 'e', 'l', 'l', 'o'};
+  Field_raw_data raw_fields[3];
+  raw_fields[0].m_ptr = fixed_raw;
+  raw_fields[0].m_len = sizeof(fixed_raw);
+  raw_fields[0].m_var_len = 0;
+  raw_fields[0].m_need_send = true;
+  raw_fields[1].m_ptr = var_raw;
+  raw_fields[1].m_len = sizeof(var_raw);
+  raw_fields[1].m_var_len = 1;
+  raw_fields[1].m_need_send = true;
+  raw_fields[2].m_need_send = false;
+
+  const uint32 field_indexes[] = {2, 4, 7};
+  std::vector<uchar> payload;
+  for (uint32 field_index : field_indexes) {
+    pq_worker_result_append_uint32(&payload, field_index);
+  }
+  bool failed = false;
+  for (const Field_raw_data &raw_field : raw_fields) {
+    if (pq_worker_result_append_raw_field(&payload, raw_field)) {
+      failed = true;
+      break;
+    }
+  }
+
+  const uchar null_bitmap[] = {static_cast<uchar>(1U << 2)};
+  failed = failed ||
+           pq_send_worker_result_frame_with_flags(
+               &handle, PQ_worker_result_message_type::ROW, 3, null_bitmap,
+               sizeof(null_bitmap), payload.data(),
+               static_cast<uint32>(payload.size()),
+               PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES |
+                   PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS);
+
+  void *raw_data = nullptr;
+  uint32 raw_len = 0;
+  if (!failed && handle.receive(&raw_data, &raw_len) != MQ_SUCCESS) {
+    failed = true;
+  }
+
+  std::vector<PQ_worker_result_decoded_field> decoded_string_fields;
+  if (!failed && pq_decode_worker_result_row(raw_data, raw_len,
+                                             &decoded_string_fields)) {
+    ++(*normal_decode_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  std::vector<PQ_worker_result_decoded_raw_field> decoded_raw_fields;
+  if (!failed &&
+      pq_decode_worker_result_raw_row(raw_data, raw_len, &decoded_raw_fields)) {
+    failed = true;
+  }
+  if (!failed) {
+    failed = decoded_raw_fields.size() != 3 ||
+             decoded_raw_fields[0].is_null ||
+             decoded_raw_fields[0].field_index != 2 ||
+             decoded_raw_fields[0].var_len != 0 ||
+             decoded_raw_fields[0].value_len != sizeof(fixed_raw) ||
+             memcmp(decoded_raw_fields[0].value, fixed_raw,
+                    sizeof(fixed_raw)) != 0 ||
+             decoded_raw_fields[1].is_null ||
+             decoded_raw_fields[1].field_index != 4 ||
+             decoded_raw_fields[1].var_len != 1 ||
+             decoded_raw_fields[1].value_len != sizeof(var_raw) ||
+             memcmp(decoded_raw_fields[1].value, var_raw, sizeof(var_raw)) !=
+                 0 ||
+             !decoded_raw_fields[2].is_null ||
+             decoded_raw_fields[2].field_index != 7 ||
+             decoded_raw_fields[2].value != nullptr ||
+             decoded_raw_fields[2].value_len != 0 ||
+             decoded_raw_fields[2].var_len != 0;
+  }
+  if (!failed) {
+    *rows_read = 1;
+    *fields_read = static_cast<uint32>(decoded_raw_fields.size());
+    *bytes_read = decoded_raw_fields[0].value_len +
+                  decoded_raw_fields[1].value_len +
+                  decoded_raw_fields[2].value_len;
+  }
+
+  PQ_worker_result_frame_header invalid_raw_finish{};
+  invalid_raw_finish.magic = PQ_WORKER_RESULT_FRAME_MAGIC;
+  invalid_raw_finish.version = PQ_WORKER_RESULT_FRAME_VERSION;
+  invalid_raw_finish.type =
+      static_cast<uint16>(PQ_worker_result_message_type::FINISH);
+  invalid_raw_finish.flags = PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS;
+  const PQ_worker_result_frame_header *bad_header = nullptr;
+  const uchar *bad_null_bitmap = nullptr;
+  const uchar *bad_payload = nullptr;
+  if (!failed &&
+      pq_validate_worker_result_frame(&invalid_raw_finish,
+                                      sizeof(invalid_raw_finish), &bad_header,
+                                      &bad_null_bitmap, &bad_payload)) {
+    ++(*invalid_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  PQ_worker_result_frame_header invalid_raw_stable = invalid_raw_finish;
+  invalid_raw_stable.type =
+      static_cast<uint16>(PQ_worker_result_message_type::ROW);
+  invalid_raw_stable.field_count = 1;
+  invalid_raw_stable.null_bitmap_len = 1;
+  invalid_raw_stable.payload_len = sizeof(uint32);
+  invalid_raw_stable.flags = PQ_WORKER_RESULT_FRAME_FLAG_RAW_FIELDS |
+                             PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF;
+  if (!failed &&
+      pq_validate_worker_result_frame(&invalid_raw_stable,
+                                      sizeof(invalid_raw_stable), &bad_header,
+                                      &bad_null_bitmap, &bad_payload)) {
+    ++(*invalid_rejects);
+  } else if (!failed) {
+    failed = true;
+  }
+
+  handle.cleanup();
+  return failed || *rows_read != 1 || *fields_read != 3 ||
+         *bytes_read != sizeof(fixed_raw) + sizeof(var_raw) ||
+         *normal_decode_rejects != 1 || *invalid_rejects != 2;
 }
 
 bool pq_run_query_result_mq_stable_ref_smoke(const uchar *handler_ref,
