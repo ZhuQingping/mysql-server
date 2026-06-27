@@ -3973,6 +3973,181 @@ F6e-4 Review Result:
   zero unsupported / failures, and zero workers / ranges / worker-result /
   callback growth。
 
+#### M11-F6e-5a: Visible Worker-side Constant-ref Gate Contract
+
+Status: design-only taskbook created；independent Design Review accepted。
+
+Decision:
+
+- F6e-5 can start, but the first task must be **design-only**；
+- do not directly code a visible worker-side constant covering ref gate yet；
+- current branch already has a user-visible constant covering ref path, but it
+  is leader-local and ends in `pq_secondary_covering_ref_produce()`；
+- F6e-1/F6e-2 prove worker-local exact ref reads；
+- F6e-4 proves a DBUG-only typed `Exchange_nosort` / `PQRM` record-image
+  carrier；
+- neither proves commercial visible worker-side ref execution because the
+  commercial path is `PQRefIterator::Read()` + `pq_ref_build_ranges()` +
+  `handler::ha_pq_next()` + `pq_worker_scan_next(void*, uchar*)`。
+
+Explorer Results:
+
+- Code Explorer verdict: F6e-5 should be design-only；
+  - current `PQRefIterator::Read()` calls typed
+    `pq_worker_scan_next(PQ_Worker_context*, ...)` after `construct_lookup()`；
+  - it does not bind ref key/range into worker dispatch the way commercial
+    `PQRefIterator::Read()` does；
+  - current InnoDB commercial `pq_worker_scan_next(void*, uchar*)` remains
+    `HA_ERR_UNSUPPORTED`；
+  - current branch lacks a reviewed positive `pq_ref_build_ranges()` equivalent
+    with duplicate-key map, owned ref-key bytes and ICP suppression semantics；
+  - production worker MQ / cloned worker JOIN row output is not yet an approved
+    visible ref carrier。
+- Test Explorer verdict: if visible gate is not safe yet, the next source task
+  should be closer to commercial `pq_ref_build_ranges()` risk；
+  - current `pq_commercial_ref_icp` already protects leader-local ref/range,
+    debug-only worker local row, F6e-4 carrier, and hostile MVI/reverse/
+    partition/secondary MIN/record-buffer shapes；
+  - visible gate RED must use dedicated visible worker-ref counters, not reuse
+    F6e local/carrier debug counters；
+  - a safer pre-visible source task is a debug-only `pq_ref_build_ranges()`
+    contract probe for the commercial `pq_ref_build_range.test` ICP bug shape,
+    proving range-build suppresses pushed ICP and does not lose rows。
+
+Allowed Files:
+
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+- optionally `Docs/pq_tasks/commercial-full-port-sprint.md` if the main
+  sprint board needs the same decision；
+
+Forbidden Files:
+
+- `sql/**`
+- `storage/**`
+- `mysql-test/**`
+- build files or generated result files
+
+Hard Stops:
+
+- do not switch `AccessPath::REF` or `PQSecondaryCoveringRefIterator` to a
+  production worker path in F6e-5a；
+- do not copy commercial `PQRefIterator::Read()` yet；
+- do not enable `handler::ha_pq_next()` or
+  `pq_worker_scan_next(void*, uchar*)` positive row production；
+- do not modify production `Query_result_mq::send_data()`、`PQWR` wire format、
+  `Exchange_nosort` / `PQRM` behavior or visible MQ row carrier；
+- do not mix ICP、dependent ref、non-covering ref、partition、MVI、reverse、
+  ORDER BY or native `Record_buffer` positive path；
+- once any future worker-visible row is emitted, later error / kill must be an
+  explicit ERROR + cleanup / detach outcome, never silent serial fallback or
+  FINISH-as-EOF。
+
+Required Contract Before Source Coding:
+
+1. Choose the visible row carrier:
+   - either a narrow typed `PQRM` record-image carrier based on F6e-4；
+   - or the commercial `ha_pq_next(void*)` / `Parallel_worker` route；
+   - do not mix both in one source batch。
+2. Define dedicated visible worker-ref counters:
+   - selected / attempts；
+   - executed / success；
+   - rows；
+   - empty；
+   - finishes；
+   - errors；
+   - cleanup；
+   - fallback / unsupported。
+3. Define pre-row failure semantics:
+   - fail-closed or fallback is allowed only before any worker-visible row；
+   - counters must prove no executed / rows growth。
+4. Define post-row failure semantics:
+   - must surface explicit ERROR and cleanup / detach；
+   - no serial fallback；
+   - no FINISH-as-EOF。
+5. Define the legacy M9-C2 leader-local relationship:
+   - either keep leader-local path as labelled legacy noise while worker-visible
+     counters prove the new path；
+   - or require leader-local `Parallel_secondary_rows_produced` to stop growing
+     in the visible worker-ref window。
+6. Define the pre-visible commercial ref range-build task if direct visible
+   gate remains too risky:
+   - debug-only `pq_ref_build_ranges()` contract probe；
+   - derived from commercial `pq_ref_build_range.test`；
+   - range-build must suppress pushed ICP；
+   - no visible rows, no workers/ranges/MQ growth unless explicitly labelled。
+
+RED MTR Contract For The Future Source Task:
+
+- location: extend `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+  after the F6e-4 block and before final aggregate deltas；
+- visible constant covering ref hit/miss/duplicate/last-key should use:
+  - `SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 20`；
+  - `SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 999`；
+  - `SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx) WHERE k = 50`；
+- expected SQL result must match serial；
+- future worker-visible counters must grow；
+- debug-only F6e local/carrier counters must not be reused as the only proof；
+- `Parallel_callback_smoke_rows` and `Parallel_worker_result_smoke_rows` must
+  stay zero unless that exact source task explicitly chooses those carriers；
+- hostile shapes must continue not to open worker-visible ref execution。
+
+If Direct Visible Gate Remains Unsafe:
+
+- implement F6e-5b as a debug-only commercial ref range-build contract probe；
+- use a simplified version of commercial `pq_ref_build_range.test` with inner
+  ref + ICP / remainder shape；
+- assert serial result correctness；
+- assert visible worker-ref counters stay zero；
+- assert new range-build probe counters show:
+  `attempts > 0`、`idx_cond_suppressed > 0`、`success > 0`；
+- assert no workers/ranges/MQ visible row path grows。
+
+Review Prompt - M11-F6e-5a:
+
+请作为 M11-F6e-5a Design / Source-Boundary / Test-Contract Review Agent，只读
+审查当前 design：
+
+1. F6e-5a 是否正确阻止直接打开 visible worker-side ref gate；
+2. 是否准确区分当前 leader-local constant ref、F6e worker-local smoke、
+   F6e-4 typed carrier、commercial `ha_pq_next(void*)` route；
+3. Required Contract 是否足以指导后续 source coding；
+4. RED MTR contract 是否能证明未来 worker-visible ref 不是 leader-local
+   shortcut，也不是 debug-only smoke；
+5. 是否应该先做 F6e-5b `pq_ref_build_ranges()` contract probe，而不是直接
+   visible gate；
+6. hard stops 是否足够防止提前打开 `PQRefIterator::Read()`、
+   `pq_worker_scan_next(void*)`、production `Query_result_mq::send_data()`、
+   ICP/dependent-ref/MVI/reverse/partition/ORDER BY 或 native
+   `Record_buffer`。
+
+输出：
+
+- Verdict: `ACCEPT` or `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Safe next source task recommendation
+
+F6e-5a Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Required fixes: none；
+- Non-blocking risks:
+  - future RED MTR depends on dedicated worker-visible counters being
+    incremented exclusively by the real worker-visible path；the source task
+    must enforce this so M9-C2 leader-local noise cannot mask proof；
+  - future MTR edit must spell out exact row cardinality for hit/miss/duplicate/
+    last-key queries；
+- Safe next source task: proceed with F6e-5b as a debug-only
+  `pq_ref_build_ranges()` contract probe, not a visible gate；
+- Rationale:
+  - current visible constant ref remains leader-local；
+  - current `PQRefIterator::Read()` lacks commercial ref range binding；
+  - current `pq_worker_scan_next(void*, uchar*)` remains unsupported；
+  - commercial parity requires `pq_ref_build_ranges()` plus
+    `ha_pq_next(void*)` before a visible worker-side ref gate。
+
 Required Future MTR Windows:
 
 - no-DBUG zero deltas for F6b counters；
