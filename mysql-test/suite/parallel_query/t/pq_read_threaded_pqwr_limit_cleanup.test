@@ -1,5 +1,5 @@
 # Test: pq_read_threaded_pqwr_limit_cleanup
-# Visible DOP2 PQWR record_gather must cleanly detach workers on LIMIT early stop.
+# Commercial default: LIMIT without ORDER BY is serial; later PQWR still works.
 
 --source include/have_innodb_16k.inc
 
@@ -53,7 +53,7 @@ SET @pqwr_rows_before = (
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
 
-# LIMIT/OFFSET stops the leader before EOF; cleanup must detach/abort worker MQs.
+# LIMIT/OFFSET without ORDER BY must not enter visible PQWR by default.
 --disable_result_log
 SELECT id, nullable_i FROM t1 LIMIT 2 OFFSET 1;
 --enable_result_log
@@ -103,8 +103,8 @@ SET @pqwr_rows_before = (
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
 
-# A later PQWR query in the same session proves early-stop cleanup left no
-# stale gather/exchange state.
+# A later PQWR query in the same session proves the LIMIT guard did not leave
+# stale eligibility or execution state behind.
 --sorted_result
 SELECT id, wide_v FROM t1;
 

@@ -71,6 +71,7 @@ static const char *pq_unsuite_reason_names[] = {
     "HAS_WINDOW",                // PQUnsuiteReason::HAS_WINDOW
     "HAS_DISTINCT",              // PQUnsuiteReason::HAS_DISTINCT
     "HAS_ORDER_BY",              // PQUnsuiteReason::HAS_ORDER_BY
+    "LIMIT_NO_ORDER_BY",         // PQUnsuiteReason::LIMIT_NO_ORDER_BY
     "HAS_HAVING",                // PQUnsuiteReason::HAS_HAVING
     "HAS_GROUP_BY",              // PQUnsuiteReason::HAS_GROUP_BY
     "GROUP_BY_ROLLUP",           // PQUnsuiteReason::GROUP_BY_ROLLUP
@@ -2357,6 +2358,16 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
     // back to serial execution because TryCreatePQTableScanIterator
     // returns nullptr in Phase 8 (no real workers). Phase 6+ will
     // activate parallel aggregation when InnoDB PQ scan is ready.
+  }
+
+  // ================================================================
+  // 11a. Match the commercial default: LIMIT/OFFSET without ORDER BY is
+  //      not a stable row-returning PQ shape. Aggregate queries without
+  //      GROUP BY still return a single logical row and are handled above.
+  // ================================================================
+  if (query_block->has_limit() && !query_block->is_implicitly_grouped()) {
+    return pq_reject(info, PQUnsuiteReason::LIMIT_NO_ORDER_BY,
+                     "LIMIT without ORDER BY is disabled for PQ");
   }
 
   // ================================================================

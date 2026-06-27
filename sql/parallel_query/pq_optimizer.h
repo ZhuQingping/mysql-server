@@ -72,6 +72,7 @@ enum class PQUnsuiteReason {
   HAS_WINDOW,               // Has window functions
   HAS_DISTINCT,             // Has DISTINCT
   HAS_ORDER_BY,             // Has ORDER BY
+  LIMIT_NO_ORDER_BY,        // LIMIT without ORDER BY on row-returning query
   HAS_HAVING,               // Has HAVING clause (conservative reject)
   HAS_GROUP_BY,             // Has GROUP BY (explicit or implicit)
   GROUP_BY_ROLLUP,          // GROUP BY WITH ROLLUP is not supported

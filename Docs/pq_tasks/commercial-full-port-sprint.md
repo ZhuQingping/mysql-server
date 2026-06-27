@@ -2493,6 +2493,52 @@ Notes:
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
 
+#### Batch D1.6y - Commercial LIMIT without ORDER BY guard
+
+Status: completed; independent review accepted.
+
+目标：
+
+- 对齐商用默认语义：row-returning `LIMIT`/`OFFSET` 且无 `ORDER BY` 的查询
+  不进入 PQ；
+- 避免当前 visible PQWR fullscan 对无序 LIMIT 查询做并行 early-stop，导致与
+  商用 `pq_limit_no_order_by` 的默认行为不一致；
+- 聚合无 `GROUP BY` 的单行逻辑结果不在本批次扩大或收缩；
+- 不启用 ORDER BY、derived/subquery、JOIN、range/ref/ICP。
+
+Implementation:
+
+- 新增 `PQUnsuiteReason::LIMIT_NO_ORDER_BY` 和对应 EXPLAIN reason；
+- `pq_check_query_block_eligible()` 在非隐式聚合且 `has_limit()` 时
+  fail-closed；
+- 更新 `pq_explain_fallback`、`pq_read_threaded_limit_counters`、
+  `pq_read_threaded_pqwr_limit_cleanup`，确认 LIMIT no ORDER BY 默认 serial；
+- 保留 follow-up visible PQWR fullscan 正例，证明 guard 不影响普通 fullscan。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_explain_fallback`
+  `pq_read_threaded_limit_counters`
+  `pq_read_threaded_pqwr_limit_cleanup`
+  `pq_read_threaded_pqwr_record_gather`
+  `pq_stats`。
+
+Review:
+
+- independent Review Agent accepted with no Critical or Important findings；
+- reviewer confirmed enum/string mapping, guard placement, WHERE fullscan
+  positive coverage, LIMIT counters, PQWR follow-up coverage, and documentation
+  scope。
+
+Notes:
+
+- full commercial `pq_limit_no_order_by` still contains derived/subquery/JOIN/
+  UNION/ORDER BY/hash join cases and remains a larger migration item；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
+
 #### Batch D1.6w - ORDER BY preflight blocked-eligibility diagnostic
 
 Status: completed; independent review accepted after fixing review finding.

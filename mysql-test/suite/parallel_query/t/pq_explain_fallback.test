@@ -23,13 +23,13 @@ EXPLAIN SELECT val, COUNT(*) FROM t1 GROUP BY val;
 # 3. DISTINCT causes fallback (HAS_DISTINCT)
 EXPLAIN SELECT DISTINCT val FROM t1;
 
-# 4. LIMIT without ORDER BY is eligible for PQ in theory,
-#    but cost threshold may block it for small tables
+# 4. Commercial default: LIMIT without ORDER BY is not a stable
+#    row-returning PQ shape.
+SET SESSION parallel_cost_threshold=0;
 EXPLAIN SELECT * FROM t1 LIMIT 2;
 
 # 5. WHERE clause on non-PK column (should still be full scan eligible
 #    if cost threshold is lowered)
-SET SESSION parallel_cost_threshold=0;
 EXPLAIN SELECT * FROM t1 WHERE val > 20;
 
 # Reset
