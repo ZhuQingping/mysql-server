@@ -1649,6 +1649,30 @@ SET @worker_ref_carrier_failures_nodebug_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_worker_ref_carrier_failures');
+SET @worker_ref_range_build_attempts_nodebug_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_attempts');
+SET @worker_ref_range_build_success_nodebug_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_success');
+SET @worker_ref_range_build_idx_cond_nodebug_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_idx_cond_suppressed');
+SET @worker_ref_range_build_unsupported_nodebug_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_unsupported');
+SET @worker_ref_range_build_failures_nodebug_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_failures');
+SET @worker_ref_range_build_bytes_nodebug_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_key_bytes');
 SET @secondary_rows_produced_ref_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -1887,6 +1911,39 @@ WHERE variable_name = 'Parallel_worker_ref_carrier_failures') -
 AS f6e4_nodebug_failures_delta;
 f6e4_nodebug_attempts_delta	f6e4_nodebug_success_delta	f6e4_nodebug_rows_delta	f6e4_nodebug_finishes_delta	f6e4_nodebug_errors_delta	f6e4_nodebug_cleanup_delta	f6e4_nodebug_unsupported_delta	f6e4_nodebug_failures_delta
 0	0	0	0	0	0	0	0
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_attempts') -
+@worker_ref_range_build_attempts_nodebug_before
+AS f6e5b_nodebug_attempts_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_success') -
+@worker_ref_range_build_success_nodebug_before
+AS f6e5b_nodebug_success_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_idx_cond_suppressed') -
+@worker_ref_range_build_idx_cond_nodebug_before
+AS f6e5b_nodebug_idx_cond_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_unsupported') -
+@worker_ref_range_build_unsupported_nodebug_before
+AS f6e5b_nodebug_unsupported_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_failures') -
+@worker_ref_range_build_failures_nodebug_before
+AS f6e5b_nodebug_failures_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_key_bytes') -
+@worker_ref_range_build_bytes_nodebug_before
+AS f6e5b_nodebug_key_bytes_delta;
+f6e5b_nodebug_attempts_delta	f6e5b_nodebug_success_delta	f6e5b_nodebug_idx_cond_delta	f6e5b_nodebug_unsupported_delta	f6e5b_nodebug_failures_delta	f6e5b_nodebug_key_bytes_delta
+0	0	0	0	0	0
 SET @worker_ref_ctx_attempts_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -2612,6 +2669,145 @@ WHERE variable_name = 'Parallel_callback_smoke_rows') -
 AS f6e4_callback_rows_delta;
 f6e4_attempts_seen	f6e4_success_seen	f6e4_rows_seen	f6e4_finishes_seen	f6e4_errors_seen	f6e4_cleanup_seen	f6e4_unsupported_delta	f6e4_failures_delta	f6e4_workers_delta	f6e4_ranges_dispatched_delta	f6e4_worker_result_rows_delta	f6e4_callback_rows_delta
 1	1	1	1	1	1	0	0	0	0	0	0
+CREATE TABLE pq_ref_build_range_t1 (
+id_col INT NOT NULL AUTO_INCREMENT,
+int_col INT DEFAULT NULL,
+bigint_col BIGINT NOT NULL,
+char_col CHAR(4) DEFAULT NULL,
+varbinary_col VARBINARY(255) DEFAULT NULL,
+enum_col ENUM('aaa','bbb','ccc') DEFAULT NULL,
+PRIMARY KEY (id_col),
+KEY ddm_bigint_col__id_col (bigint_col, id_col),
+KEY ddm_bigint_enum_col__id_col (bigint_col, enum_col, id_col),
+KEY uniq_ndx_bigint_col (bigint_col)
+) ENGINE=InnoDB;
+INSERT INTO pq_ref_build_range_t1 VALUES
+(79,84,92,'ab','a','aaa'),
+(80,84,92,'ab','a','aaa'),
+(81,84,92,'ab','d','aaa'),
+(82,84,92,'ab','d','bbb'),
+(83,84,92,'ab','d','ccc');
+ANALYZE TABLE pq_ref_build_range_t1;
+Table	Op	Msg_type	Msg_text
+test.pq_ref_build_range_t1	analyze	status	OK
+SET @worker_ref_range_build_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_attempts');
+SET @worker_ref_range_build_success_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_success');
+SET @worker_ref_range_build_idx_cond_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_idx_cond_suppressed');
+SET @worker_ref_range_build_unsupported_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_unsupported');
+SET @worker_ref_range_build_failures_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_failures');
+SET @worker_ref_range_build_bytes_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_key_bytes');
+SET @f6e5b_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SET @f6e5b_ranges_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_dispatched');
+SET @f6e5b_worker_result_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_result_smoke_rows');
+SET @f6e5b_callback_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_callback_smoke_rows');
+SET @old_debug = @@session.debug;
+SET SESSION debug = 'd,pq_worker_ref_range_build_contract_smoke';
+EXPLAIN SELECT A.varbinary_col, B.int_col
+FROM pq_ref_build_range_t1 A FORCE INDEX (ddm_bigint_col__id_col)
+STRAIGHT_JOIN pq_ref_build_range_t1 B
+FORCE INDEX (ddm_bigint_enum_col__id_col)
+ON A.bigint_col = B.bigint_col
+WHERE B.enum_col >= 'ccc';
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	A	NULL	ALL	ddm_bigint_col__id_col	NULL	NULL	NULL	#	100.00	Not parallel MULTI_TABLE
+1	SIMPLE	B	NULL	ref	ddm_bigint_enum_col__id_col	ddm_bigint_enum_col__id_col	8	test.A.bigint_col	#	33.33	Using index condition; Not parallel MULTI_TABLE
+SELECT A.varbinary_col, B.int_col
+FROM pq_ref_build_range_t1 A FORCE INDEX (ddm_bigint_col__id_col)
+STRAIGHT_JOIN pq_ref_build_range_t1 B
+FORCE INDEX (ddm_bigint_enum_col__id_col)
+ON A.bigint_col = B.bigint_col
+WHERE B.enum_col >= 'ccc';
+varbinary_col	int_col
+a	84
+a	84
+d	84
+d	84
+d	84
+SET SESSION debug = @old_debug;
+SELECT
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_attempts') -
+@worker_ref_range_build_attempts_before) > 0
+AS f6e5b_attempts_seen,
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_success') -
+@worker_ref_range_build_success_before) > 0
+AS f6e5b_success_seen,
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_idx_cond_suppressed') -
+@worker_ref_range_build_idx_cond_before) > 0
+AS f6e5b_idx_cond_suppressed_seen,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_unsupported') -
+@worker_ref_range_build_unsupported_before
+AS f6e5b_unsupported_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_failures') -
+@worker_ref_range_build_failures_before
+AS f6e5b_failures_delta,
+((SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_ref_range_build_key_bytes') -
+@worker_ref_range_build_bytes_before) > 0
+AS f6e5b_key_bytes_seen,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') -
+@f6e5b_workers_before
+AS f6e5b_workers_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_ranges_dispatched') -
+@f6e5b_ranges_before
+AS f6e5b_ranges_dispatched_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_worker_result_smoke_rows') -
+@f6e5b_worker_result_rows_before
+AS f6e5b_worker_result_rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_callback_smoke_rows') -
+@f6e5b_callback_rows_before
+AS f6e5b_callback_rows_delta;
+f6e5b_attempts_seen	f6e5b_success_seen	f6e5b_idx_cond_suppressed_seen	f6e5b_unsupported_delta	f6e5b_failures_delta	f6e5b_key_bytes_seen	f6e5b_workers_delta	f6e5b_ranges_dispatched_delta	f6e5b_worker_result_rows_delta	f6e5b_callback_rows_delta
+1	1	1	0	0	1	0	0	0	0
+DROP TABLE pq_ref_build_range_t1;
 SELECT k FROM pq_ref_icp_t1 FORCE INDEX(k_idx)
 WHERE k >= 20 AND k < 40;
 k

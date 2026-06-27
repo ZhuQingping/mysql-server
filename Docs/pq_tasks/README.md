@@ -5,6 +5,15 @@
 ## Current Summary
 
 - Last synced: 2026-06-24
+- Latest local update: 2026-06-28 F6e-5b debug-only ref range-build contract
+  probe 已完成本地实现和 targeted 验证。新增
+  `pq_worker_ref_range_build_contract_smoke` DBUG hook，仅位于
+  `RefIterator<false>::Read()` 首行读取的 `construct_lookup()` 之后、
+  `ha_index_read_map()` 之前；它只验证 pushed ICP 条件可临时 suppress 并在
+  serial ref read 前恢复，不调用 `pq_ref_build_ranges()`、`ha_pq_next()`、
+  `pq_worker_scan_next()` 或 worker/MQ row producer。独立 review accepted；
+  post-review `mysqld` build 和 `pq_commercial_ref_icp pq_stats` targeted MTR
+  passed。
 - Current M11-F update: F6d-1 no-row worker TABLE / handler contract smoke 已
   提交为 `1a75dea8a67`，targeted build/MTR passed，独立 review accepted。
   F6d-2 positive ref path design split 已完成本地文档：下一步 F6e-1 不直接

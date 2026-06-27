@@ -52,6 +52,7 @@
 #include "sql/mysqld.h"     // stage_executing
 #include "sql/opt_trace.h"  // Opt_trace_object
 #include "sql/opt_trace_context.h"
+#include "sql/parallel_query/sql_parallel.h"
 #include "sql/psi_memory_key.h"
 #include "sql/range_optimizer/path_helpers.h"
 #include "sql/range_optimizer/range_optimizer.h"
@@ -73,6 +74,59 @@ using std::pair;
 
 static inline pair<uchar *, key_part_map> FindKeyBufferAndMap(
     const Index_lookup *ref);
+
+#ifndef NDEBUG
+static void pq_ref_range_build_contract_smoke(TABLE *table,
+                                              const Index_lookup *ref,
+                                              uchar *key,
+                                              key_part_map keypart_map) {
+  pq_global_stats.worker_ref_range_build_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (table == nullptr || table->file == nullptr || ref == nullptr ||
+      ref->key < 0 || static_cast<uint>(ref->key) >= table->s->keys ||
+      key == nullptr || keypart_map == 0 ||
+      table->file->pushed_idx_cond == nullptr ||
+      table->file->pushed_idx_cond_keyno != static_cast<uint>(ref->key)) {
+    pq_global_stats.worker_ref_range_build_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return;
+  }
+
+  const uint key_len =
+      calculate_key_len(table, static_cast<uint>(ref->key), keypart_map);
+  if (key_len == 0 || key_len > ref->key_length) {
+    pq_global_stats.worker_ref_range_build_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return;
+  }
+
+  Item *const saved_idx_cond = table->file->pushed_idx_cond;
+  const uint saved_idx_cond_keyno = table->file->pushed_idx_cond_keyno;
+
+  table->file->pushed_idx_cond = nullptr;
+  table->file->pushed_idx_cond_keyno = MAX_KEY;
+  const bool suppressed = table->file->pushed_idx_cond == nullptr &&
+                          table->file->pushed_idx_cond_keyno == MAX_KEY;
+
+  table->file->pushed_idx_cond = saved_idx_cond;
+  table->file->pushed_idx_cond_keyno = saved_idx_cond_keyno;
+
+  if (!suppressed || table->file->pushed_idx_cond != saved_idx_cond ||
+      table->file->pushed_idx_cond_keyno != saved_idx_cond_keyno) {
+    pq_global_stats.worker_ref_range_build_failures.fetch_add(
+        1, std::memory_order_relaxed);
+    return;
+  }
+
+  pq_global_stats.worker_ref_range_build_idx_cond_suppressed.fetch_add(
+      1, std::memory_order_relaxed);
+  pq_global_stats.worker_ref_range_build_key_bytes.fetch_add(
+      key_len, std::memory_order_relaxed);
+  pq_global_stats.worker_ref_range_build_success.fetch_add(
+      1, std::memory_order_relaxed);
+}
+#endif
 
 ConstIterator::ConstIterator(THD *thd, TABLE *table, Index_lookup *table_ref,
                              ha_rows *examined_rows)
@@ -378,6 +432,12 @@ int RefIterator<false>::Read() {  // Forward read.
     }
 
     pair<uchar *, key_part_map> key_buff_and_map = FindKeyBufferAndMap(m_ref);
+#ifndef NDEBUG
+    DBUG_EXECUTE_IF("pq_worker_ref_range_build_contract_smoke", {
+      pq_ref_range_build_contract_smoke(
+          table(), m_ref, key_buff_and_map.first, key_buff_and_map.second);
+    });
+#endif
     int error = table()->file->ha_index_read_map(
         table()->record[0], key_buff_and_map.first, key_buff_and_map.second,
         HA_READ_KEY_EXACT);

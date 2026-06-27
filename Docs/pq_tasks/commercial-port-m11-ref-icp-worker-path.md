@@ -4148,6 +4148,149 @@ F6e-5a Review Result:
   - commercial parity requires `pq_ref_build_ranges()` plus
     `ha_pq_next(void*)` before a visible worker-side ref gate。
 
+#### M11-F6e-5b: Debug-only Ref Range-build Contract Probe
+
+Status: implemented；targeted build/MTR passed；independent review accepted。
+
+Goal:
+
+- move one step closer to commercial `PQRefIterator::Read()` /
+  `pq_ref_build_ranges()` semantics without opening visible worker-side ref；
+- add a DBUG-only contract probe for ref range-build with pushed ICP present；
+- prove the contract can scoped-suppress `pushed_idx_cond` during range-build
+  preparation and restore it before the normal serial ref read continues；
+- use the commercial `pq_ref_build_range.test` bug shape as the SQL oracle so
+  serial results prove no rows are lost；
+- keep all worker-visible, MQ, commercial `ha_pq_next(void*)`, and
+  `pq_worker_scan_next(void*)` row paths closed。
+
+Allowed Files:
+
+- `sql/iterators/ref_row_iterators.cc`
+- `sql/parallel_query/sql_parallel.h`
+- `sql/mysqld.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`
+- `Docs/pq_tasks/README.md`
+
+Forbidden Files:
+
+- `sql/parallel_query/pq_iterators.cc`
+- `sql/parallel_query/query_result_mq.*`
+- `sql/parallel_query/exchange.*`
+- `sql/handler.h` / `sql/handler.cc`
+- `storage/innobase/**`
+- `sql/join_optimizer/access_path.cc`
+- production `PQRefIterator::Read()` / `PQblockScanIterator::Read()`
+  behavior changes
+
+Implementation Contract:
+
+- add F6e-5b counters:
+  `Parallel_worker_ref_range_build_attempts`,
+  `Parallel_worker_ref_range_build_success`,
+  `Parallel_worker_ref_range_build_idx_cond_suppressed`,
+  `Parallel_worker_ref_range_build_unsupported`,
+  `Parallel_worker_ref_range_build_failures`,
+  `Parallel_worker_ref_range_build_key_bytes`；
+- hook only under `DBUG_EXECUTE_IF("pq_worker_ref_range_build_contract_smoke")`
+  in the normal serial `RefIterator<false>::Read()` first-row path after
+  `construct_lookup()` and before `ha_index_read_map()`；
+- require:
+  - `table()->file->pushed_idx_cond != nullptr`；
+  - pushed condition key matches `m_ref->key`；
+  - key buffer and keypart map are present；
+  - key length computed from `calculate_key_len()` is nonzero；
+- save `pushed_idx_cond` / `pushed_idx_cond_keyno`；
+- set them to null / `MAX_KEY` only inside the DBUG helper to model commercial
+  range-build ICP suppression；
+- immediately restore the saved values before the real serial
+  `ha_index_read_map()` executes；
+- count success only if the saved pushed condition is restored exactly；
+- do not call `pq_ref_build_ranges()`、`handler::ha_pq_next()`、
+  `pq_worker_scan_next()`、`Query_result_mq::send_data()` or worker/MQ row
+  producers。
+
+RED MTR:
+
+- extends `pq_commercial_ref_icp` after the F6e-4 block；
+- creates a simplified `pq_ref_build_range_t1` table based on commercial
+  `pq_ref_build_range.test`；
+- runs the join/ref + ICP/remainder query under
+  `pq_worker_ref_range_build_contract_smoke`；
+- asserts:
+  - result rows match serial；
+  - attempts / success / idx-cond-suppressed / key-bytes counters grow；
+  - unsupported / failures stay zero；
+  - workers / ranges / worker-result rows / callback rows stay zero；
+  - no-DBUG counters stay zero。
+
+Validation:
+
+- RED:
+  `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 pq_commercial_ref_icp --vardir=/tmp/pq_f6e5b_red_vardir --tmpdir=/tmp/pq_f6e5b_red_tmp`
+  failed before source implementation because F6e-5b status variables did not
+  exist；
+- GREEN:
+  `cmake --build build-ninja --target mysqld -j 8`；
+  `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 pq_commercial_ref_icp pq_stats --vardir=/tmp/pq_f6e5b_final_vardir --tmpdir=/tmp/pq_f6e5b_final_tmp` passed；
+- post-review:
+  `cmake --build build-ninja --target mysqld -j 8 && cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 pq_commercial_ref_icp pq_stats --vardir=/tmp/pq_f6e5b_postreview_vardir --tmpdir=/tmp/pq_f6e5b_postreview_tmp` passed。
+
+Implementation Notes:
+
+- added `pq_ref_range_build_contract_smoke()` in
+  `sql/iterators/ref_row_iterators.cc`；
+- the helper is reachable only through
+  `DBUG_EXECUTE_IF("pq_worker_ref_range_build_contract_smoke")` in
+  `RefIterator<false>::Read()` after `construct_lookup()` and before
+  `ha_index_read_map()`；
+- the helper validates ref key shape and pushed ICP ownership, temporarily
+  clears `pushed_idx_cond` / `pushed_idx_cond_keyno`, and restores both before
+  normal serial execution continues；
+- the MTR query uses a dedicated `(bigint_col, enum_col, id_col)` key so the
+  outer ref consumes `bigint_col` and leaves `enum_col` as a visible pushed
+  index condition；
+- `pq_stats` now expects 460 `Parallel%` status variables, including the six
+  F6e-5b counters。
+
+Validation Evidence:
+
+- RED:
+  `parallel_query.pq_commercial_ref_icp` failed with NULL F6e-5b status
+  variables before source implementation；
+- build:
+  `cmake --build build-ninja --target mysqld -j 8` passed；
+- final targeted MTR:
+  `pq_commercial_ref_icp` and `pq_stats` passed with
+  `/tmp/pq_f6e5b_final_vardir`；
+- F6e-5b debug window observed:
+  attempts / success / idx-cond-suppressed / key-bytes are positive, while
+  unsupported / failures / workers / ranges / worker-result rows / callback
+  rows remain zero。
+
+Review Result:
+
+- independent review reported no blocking findings and recommended commit；
+- non-blocking feedback: the helper was compiled even when
+  `DBUG_EXECUTE_IF` is compiled out；
+- follow-up fix: wrapped both the helper and call site in `#ifndef NDEBUG`,
+  matching local debug-only code style；
+- post-review build and targeted MTR passed。
+
+Hard Stops:
+
+- no visible worker-side ref gate；
+- no commercial `ha_pq_next(void*)` or `pq_worker_scan_next(void*)` positive
+  row production；
+- no production worker MQ / `Query_result_mq::send_data()`；
+- no `AccessPath::REF` rewrite；
+- no worker-side ICP clone / refix / pushdown；
+- no dependent ref、non-covering ref、partition、MVI、reverse、ORDER BY、
+  native `Record_buffer` positive path。
+
 Required Future MTR Windows:
 
 - no-DBUG zero deltas for F6b counters；

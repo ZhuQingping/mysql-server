@@ -10116,6 +10116,19 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_unsupported,
                                     worker_ref_carrier_unsupported)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_failures,
                                     worker_ref_carrier_failures)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_range_build_attempts,
+                                    worker_ref_range_build_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_range_build_success,
+                                    worker_ref_range_build_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(
+    worker_ref_range_build_idx_cond_suppressed,
+    worker_ref_range_build_idx_cond_suppressed)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_range_build_unsupported,
+                                    worker_ref_range_build_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_range_build_failures,
+                                    worker_ref_range_build_failures)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_range_build_key_bytes,
+                                    worker_ref_range_build_key_bytes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_reject_probes,
                                     secondary_reverse_reject_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_ref_reject_probes,
@@ -12803,6 +12816,24 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_carrier_unsupported",
      (char *)&show_pq_worker_ref_carrier_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_range_build_attempts",
+     (char *)&show_pq_worker_ref_range_build_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_range_build_failures",
+     (char *)&show_pq_worker_ref_range_build_failures, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_range_build_idx_cond_suppressed",
+     (char *)&show_pq_worker_ref_range_build_idx_cond_suppressed, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_range_build_key_bytes",
+     (char *)&show_pq_worker_ref_range_build_key_bytes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_range_build_success",
+     (char *)&show_pq_worker_ref_range_build_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_range_build_unsupported",
+     (char *)&show_pq_worker_ref_range_build_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_local_row_attempts",
      (char *)&show_pq_worker_ref_local_row_attempts, SHOW_FUNC,
