@@ -203,6 +203,10 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
 - 当前正在收口 clustered primary-key range preflight 诊断：primary range 仍保持
   fail-closed，不进入 worker scan，但新增用户可见计数用于证明 optimizer 已识别
   primary clustered range 风险点；
+- 当前正在推进 ORDER BY 商用路径的 sidecar preflight：simple ORDER BY 的
+  saved ORDER/GROUP 与 Filesort/Sort_param contract 可在 preflight 中标记
+  ready，但 worker producer、Exchange_sort heap read 和 leader materialization
+  仍保持执行阻断；
 - 下一步：继续缩小商用 `ParallelScanIterator` 主路径差距，优先把
   worker-thread producer、leader record gather 和可见 fullscan gate 的
   生命周期顺序对齐；开发阶段仍只跑相关模块 MTR，不跑全量 MTR。
@@ -2495,6 +2499,49 @@ Notes:
 - source code unchanged；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6aa - ORDER BY sidecar preflight readiness
+
+Status: completed; independent re-review accepted.
+
+目标：
+
+- 继续对齐商用 ORDER BY PQ 路径，但不打开用户可见 ORDER BY 并行执行；
+- simple single-table ORDER BY 的 saved ORDER/GROUP sidecar contract 不再
+  固定 fail-closed；
+- `pq_build_orderby_execution_preflight()` 能识别 saved ORDER/GROUP、
+  Filesort 和 Sort_param 前置 contract 已 ready；
+- worker ORDER frame producer、`Exchange_sort` heap read、leader
+  materialization、rowid tie-break、ordered read 和错误诊断仍保持缺失，
+  因此 central preflight blocker 继续阻止 ORDER BY 进入 PQ 执行。
+
+Implementation:
+
+- `pq_build_saved_order_group_contract()` 对 simple single-table ORDER BY
+  返回 READY；
+- `pq_copy_saved_order_group_contract()` 对 READY sidecar 返回 true；
+- saved ORDER/GROUP restore/clone smoke 支持 READY contract 的稳定重建和
+  复制；
+- ORDER BY execution preflight 复用 saved/filesort contract，前三个
+  readiness flag 置为 true，其余执行链路 readiness 仍为 false。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_commercial_order_by`
+  `pq_saved_order_group_contract`
+  `pq_explain_fallback`
+  `pq_stats`。
+
+Review:
+
+- initial independent Review Agent requested narrowing the READY sidecar shape；
+- fix applied: saved ORDER/GROUP READY now shares a fail-closed helper requiring
+  simple ASC fullscan ORDER BY, no DISTINCT/window/GROUP/HAVING, no ordered-index
+  shortcut, and no skipped filesort；
+- independent re-review accepted with no Critical or Important findings。
 
 #### Batch D1.6y - Commercial LIMIT without ORDER BY guard
 

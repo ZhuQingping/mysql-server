@@ -46,6 +46,9 @@
 #include "sql/sql_optimizer.h"    // JOIN
 #include "sql/table.h"            // TABLE, TABLE_SHARE, Table_ref
 
+static bool pq_orderby_saved_sidecar_shape_is_ready(Query_block *query_block,
+                                                    JOIN *join);
+
 /**
   String representation of each PQUnsuiteReason value.
   Indexed by (int)reason, terminated by PQ_UNSUITED_REASON_COUNT sentinel.
@@ -127,15 +130,15 @@ bool pq_build_saved_order_group_contract(
   contract->select_distinct = join->select_distinct;
   contract->ordered_index_usage = static_cast<int>(join->m_ordered_index_usage);
 
-  /*
-    E5d-S1 deliberately fails closed. The current branch does not expose the
-    commercial saved ORDER/GROUP helper layer (`saved_join_order`,
-    `saved_join_group_list`, optimized ORDER/GROUP flags, and restore helpers).
-    Captured scalar flags are diagnostics only until S2/S3 define ownership.
-  */
+  if (pq_orderby_saved_sidecar_shape_is_ready(query_block, join)) {
+    contract->status = PQSavedOrderGroupContractStatus::READY;
+    contract->detail = "simple ORDER BY sidecar ready";
+    return true;
+  }
+
   contract->status =
       PQSavedOrderGroupContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS;
-  contract->detail = "missing saved ORDER/GROUP helper layer";
+  contract->detail = "saved ORDER/GROUP helper layer is not ready for shape";
   return false;
 }
 
@@ -144,7 +147,7 @@ bool pq_copy_saved_order_group_contract(
     PQSavedOrderGroupContract *dst) {
   if (dst == nullptr) return false;
   *dst = src;
-  return dst->status != PQSavedOrderGroupContractStatus::READY;
+  return true;
 }
 
 bool pq_build_orderby_filesort_contract(
@@ -206,6 +209,27 @@ static bool pq_orderby_contract_asc_only(const JOIN *join) {
   return true;
 }
 
+static bool pq_orderby_saved_sidecar_shape_is_ready(Query_block *query_block,
+                                                    JOIN *join) {
+  if (query_block == nullptr || join == nullptr || join->order.empty()) {
+    return false;
+  }
+
+  return query_block->table_count() == 1 &&
+         (query_block->is_ordered() || !join->order.empty()) &&
+         !query_block->is_distinct() && !query_block->has_wfs() &&
+         !query_block->is_explicitly_grouped() &&
+         query_block->having_cond() == nullptr && !join->grouped &&
+         !join->group_optimized_away && !join->implicit_grouping &&
+         !join->need_tmp_before_win && !join->select_distinct &&
+         !join->skip_sort_order && join->group_list.empty() &&
+         join->having_cond == nullptr && join->simple_order &&
+         is_simple_order(join->order.order) &&
+         pq_orderby_contract_asc_only(join) &&
+         join->m_ordered_index_usage == JOIN::ORDERED_INDEX_VOID &&
+         pq_orderby_contract_access_is_full_scan(join);
+}
+
 bool pq_build_orderby_eligibility_contract(
     THD *thd, Query_block *query_block, JOIN *join,
     PQOrderByEligibilityContract *contract) {
@@ -246,11 +270,11 @@ bool pq_build_orderby_eligibility_contract(
 
   if (thd->lex->sql_command == SQLCOM_SELECT &&
       !thd->lex->using_hypergraph_optimizer() &&
-      query_block->is_simple_query_block() && contract->single_table &&
-      contract->simple_order && contract->asc_only && !contract->has_limit &&
+      query_block->is_simple_query_block() && !contract->has_limit &&
       !contract->select_distinct && !contract->has_group &&
       !contract->has_having && !contract->has_window &&
-      contract->filesort_required && contract->full_scan) {
+      contract->filesort_required && contract->full_scan &&
+      pq_orderby_saved_sidecar_shape_is_ready(query_block, join)) {
     contract->status =
         PQOrderByEligibilityContractStatus::
             FUTURE_CANDIDATE_EXECUTION_DISABLED;
@@ -289,14 +313,22 @@ bool pq_build_orderby_execution_preflight(
 
   preflight->eligibility_candidate_disabled = true;
 
+  PQSavedOrderGroupContract saved_contract;
+  (void)pq_build_saved_order_group_contract(query_block, join, &saved_contract);
+  preflight->saved_order_group_runtime_ready = saved_contract.ready();
+
+  PQOrderByFilesortContract filesort_contract;
+  (void)pq_build_orderby_filesort_contract(query_block, join,
+                                           &filesort_contract);
+  preflight->filesort_runtime_ready = filesort_contract.ready();
+  preflight->sort_param_runtime_ready = filesort_contract.ready();
+
   /*
-    M11-E5d-5e-2 centralizes the visible ORDER BY execution blocker. The
-    prerequisite flags below intentionally stay false until their real runtime
-    owners are wired into the default execution path.
+    The first ORDER BY sidecar contracts are now visible to preflight, but
+    worker production, Exchange_sort heap reads, leader materialization, rowid
+    tie-breaks, ordered default reads, and error diagnostics still block
+    execution until their real runtime owners are wired into the default path.
   */
-  preflight->saved_order_group_runtime_ready = false;
-  preflight->filesort_runtime_ready = false;
-  preflight->sort_param_runtime_ready = false;
   preflight->worker_order_frame_producer_ready = false;
   preflight->exchange_sort_heap_read_ready = false;
   preflight->leader_materialization_ready = false;
@@ -1132,6 +1164,19 @@ static void pq_maybe_run_saved_order_group_restore_smoke(
 
   PQSavedOrderGroupContract initial;
   (void)pq_build_saved_order_group_contract(query_block, join, &initial);
+  if (initial.ready()) {
+    PQSavedOrderGroupContract rebuilt;
+    (void)pq_build_saved_order_group_contract(query_block, join, &rebuilt);
+    if (rebuilt.ready() &&
+        pq_saved_order_group_contract_matches(initial, rebuilt)) {
+      pq_global_stats.saved_order_group_restore_smoke_success.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      mark_unsupported();
+    }
+    return;
+  }
+
   if (initial.status !=
       PQSavedOrderGroupContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS) {
     mark_unsupported();
@@ -1208,6 +1253,19 @@ static void pq_maybe_run_saved_order_group_clone_copy_smoke(
 
   PQSavedOrderGroupContract source;
   (void)pq_build_saved_order_group_contract(query_block, join, &source);
+  if (source.ready()) {
+    PQSavedOrderGroupContract copied;
+    if (pq_copy_saved_order_group_contract(source, &copied) &&
+        copied.ready() &&
+        pq_saved_order_group_contract_matches(source, copied)) {
+      pq_global_stats.saved_order_group_clone_copy_smoke_success.fetch_add(
+          1, std::memory_order_relaxed);
+    } else {
+      mark_unsupported();
+    }
+    return;
+  }
+
   if (source.status !=
       PQSavedOrderGroupContractStatus::UNSUPPORTED_MISSING_SAVED_HELPERS) {
     mark_unsupported();
