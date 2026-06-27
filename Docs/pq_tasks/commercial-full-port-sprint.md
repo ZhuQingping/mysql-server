@@ -2388,3 +2388,65 @@ Notes:
 - commit: `8b7e3221537` Support multi-field PQWR materialization；
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6r - PQWR subset field-index frame
+
+Status: completed, reviewed, committed, and pushed.
+
+目标：
+
+- 移除 D1.6q 为规避 positional frame 风险引入的 all-column read_set gate；
+- 为 `PQWR` ROW frame 增加 read_set field-index 映射，使 worker 能发送
+  subset/projection 字段，而不是只能发送 TABLE 前 N 列；
+- leader materialize 按 frame 中携带的 base table field index 写回
+  `table->record[0]`；
+- 保持旧 `flags=0` positional frame 和 `STABLE_REF` frame 兼容。
+
+Implementation:
+
+- `PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES` 新增 indexed-row frame flag；
+- `pq_decode_worker_result_row()` 在该 flag 下先解析
+  `field_count * uint32 field_index` 前缀，再解析原有 length-prefixed
+  value payload；
+- `Query_result_mq::send_table_read_set_row()` 按 worker `TABLE::read_set`
+  收集字段号并发送 indexed `PQWR` ROW frame；
+- `PQ_worker_result_mq_row_sink` 的 metadata count 和发送路径改为按
+  worker read_set 字段数对齐；
+- `pq_materialize_worker_result_smoke_row()` 按 decoded `field_index`
+  写回 leader TABLE，并拒绝越界或重复字段号；
+- `pq_read_threaded_pqwr_record_gather_path` gate 从 all-column read_set
+  放宽为 read_set 非空，同时继续要求 debug gate、DOP=2、eligible、
+  non-BLOB table。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_read_threaded_pqwr_record_gather`
+  `pq_read_threaded_pqwr_worker_error`
+  `pq_leader_pqwr_record_gather_smoke`
+  `pq_commercial_worker_result_adapter`
+  `pq_read_threaded_projection_where`。
+
+Review:
+
+- independent Review Agent accepted with no Critical or Important findings；
+- one Minor wire-contract note was fixed: receiver-side validation now rejects
+  `FIELD_INDEXES` on non-ROW frames, matching sender-side validation；
+- remaining Minor coverage note: projection + WHERE where `read_set` includes
+  predicate-only fields should be covered as a follow-up task。
+
+Test coverage:
+
+- prefix subset projection: `SELECT id, nullable_i FROM t1`；
+- non-prefix subset projection: `SELECT wide_v, d FROM t1`；
+- all-column typed/NULL regression: `SELECT id, nullable_i, wide_v, fixed_c,
+  amount, d FROM t1`；
+- worker error and legacy PQWR smoke paths retained。
+
+Notes:
+
+- commit: this commit (`Support PQWR subset field mapping`)；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。

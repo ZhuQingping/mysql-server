@@ -34,21 +34,66 @@ SET @pq_workers_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_workers_launched');
-SET @pq_fallback_before_subset = @pq_fallback_before;
-SET @pq_workers_before_subset = @pq_workers_before;
-SELECT id, nullable_i FROM t1 WHERE id <= 2;
+SELECT id, nullable_i FROM t1;
 id	nullable_i
 1	NULL
 2	20
+3	NULL
+4	40
+5	-50
 SELECT
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
-WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before_subset
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS subset_executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
 AS subset_fallback_delta,
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
-WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before_subset
+WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+AS subset_rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
 AS subset_workers_delta;
-subset_fallback_delta	subset_workers_delta
-0	0
+subset_executed_delta	subset_fallback_delta	subset_rows_delta	subset_workers_delta
+1	0	5	2
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SELECT wide_v, d FROM t1;
+wide_v	d
+NULL	2038-01-19
+NULL	NULL
+alpha	2024-01-02
+nullable-int	1999-12-31
+omega	NULL
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS nonprefix_executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+AS nonprefix_fallback_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+AS nonprefix_rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS nonprefix_workers_delta;
+nonprefix_executed_delta	nonprefix_fallback_delta	nonprefix_rows_delta	nonprefix_workers_delta
+1	0	5	2
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status

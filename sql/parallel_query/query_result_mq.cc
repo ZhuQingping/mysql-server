@@ -46,7 +46,9 @@ bool pq_is_valid_worker_result_type(uint16 type) {
 }
 
 bool pq_worker_result_has_unknown_flags(uint32 flags) {
-  return (flags & ~PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0;
+  constexpr uint32 known_flags = PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF |
+                                 PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES;
+  return (flags & ~known_flags) != 0;
 }
 
 bool pq_send_worker_result_frame_with_flags(
@@ -58,6 +60,14 @@ bool pq_send_worker_result_frame_with_flags(
   if (payload_len > 0 && payload == nullptr) return true;
   if (pq_worker_result_has_unknown_flags(flags)) return true;
   if ((flags & PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0 &&
+      type != PQ_worker_result_message_type::ROW) {
+    return true;
+  }
+  if ((flags & PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0 &&
+      (flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0) {
+    return true;
+  }
+  if ((flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0 &&
       type != PQ_worker_result_message_type::ROW) {
     return true;
   }
@@ -185,6 +195,21 @@ bool pq_worker_result_decode_field(const uchar **cursor,
   return false;
 }
 
+bool pq_collect_table_read_set_fields(const TABLE *table,
+                                      std::vector<uint32> *field_indexes) {
+  if (table == nullptr || table->s == nullptr || table->read_set == nullptr ||
+      field_indexes == nullptr) {
+    return true;
+  }
+
+  field_indexes->clear();
+  field_indexes->reserve(table->s->fields);
+  for (uint32 i = 0; i < table->s->fields; ++i) {
+    if (bitmap_is_set(table->read_set, i)) field_indexes->push_back(i);
+  }
+  return field_indexes->empty();
+}
+
 bool pq_worker_result_validate_test_row(const PQ_worker_result_frame_header *h,
                                         const uchar *null_bitmap,
                                         const uchar *payload) {
@@ -240,6 +265,15 @@ bool pq_validate_worker_result_frame(
       pq_worker_result_has_unknown_flags(decoded->flags)) {
     return true;
   }
+  if ((decoded->flags & PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF) != 0 &&
+      (decoded->flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0) {
+    return true;
+  }
+  if ((decoded->flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0 &&
+      decoded->type !=
+          static_cast<uint16>(PQ_worker_result_message_type::ROW)) {
+    return true;
+  }
 
   constexpr uint32 header_size =
       static_cast<uint32>(sizeof(PQ_worker_result_frame_header));
@@ -291,6 +325,21 @@ bool pq_decode_worker_result_row(
 
   const uchar *cursor = payload;
   const uchar *payload_end = payload + header->payload_len;
+  std::vector<uint32> field_indexes;
+  const bool has_field_indexes =
+      (header->flags & PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES) != 0;
+  if (has_field_indexes) {
+    field_indexes.reserve(header->field_count);
+    for (uint32 i = 0; i < header->field_count; ++i) {
+      if (static_cast<size_t>(payload_end - cursor) < sizeof(uint32)) {
+        fields->clear();
+        return true;
+      }
+      field_indexes.push_back(uint4korr(cursor));
+      cursor += sizeof(uint32);
+    }
+  }
+
   fields->reserve(header->field_count);
   for (uint32 i = 0; i < header->field_count; ++i) {
     const char *value = nullptr;
@@ -308,7 +357,8 @@ bool pq_decode_worker_result_row(
       return true;
     }
 
-    fields->push_back({is_null ? nullptr : value, value_len, is_null});
+    fields->push_back({is_null ? nullptr : value, value_len,
+                       has_field_indexes ? field_indexes[i] : i, is_null});
   }
 
   if (cursor != payload_end) {
@@ -1078,6 +1128,69 @@ bool Query_result_mq::send_table_row(THD *thd, TABLE *table,
           m_handler, PQ_worker_result_message_type::ROW, field_count,
           null_bitmap.data(), null_bitmap_len, payload.data(),
           static_cast<uint32>(payload.size()))) {
+    return true;
+  }
+
+  thd->inc_sent_row_count(1);
+  return false;
+}
+
+bool Query_result_mq::send_table_read_set_row(THD *thd, TABLE *table) {
+  if (thd == nullptr || table == nullptr || table->s == nullptr ||
+      table->field == nullptr || !result_contract_ready()) {
+    return true;
+  }
+
+  std::vector<uint32> field_indexes;
+  if (pq_collect_table_read_set_fields(table, &field_indexes) ||
+      field_indexes.size() > UINT32_MAX ||
+      (send_fields_size != 0 && field_indexes.size() != send_fields_size)) {
+    return true;
+  }
+
+  const uint32 field_count = static_cast<uint32>(field_indexes.size());
+  const uint32 null_bitmap_len = pq_worker_result_null_bitmap_len(field_count);
+  std::vector<uchar> null_bitmap(null_bitmap_len, 0);
+  std::vector<uchar> payload;
+  String tmp1;
+  String tmp2;
+
+  for (uint32 field_index : field_indexes) {
+    pq_worker_result_append_uint32(&payload, field_index);
+  }
+
+  for (uint32 i = 0; i < field_count; ++i) {
+    const uint32 field_index = field_indexes[i];
+    if (field_index >= table->s->fields) return true;
+    Field *field = table->field[field_index];
+    if (field == nullptr) return true;
+
+    if (field->is_null()) {
+      pq_worker_result_set_null_bit(&null_bitmap, i);
+      pq_worker_result_append_uint32(&payload, 0);
+      continue;
+    }
+
+    tmp1.length(0);
+    tmp2.length(0);
+    String *value = field->val_str(&tmp1, &tmp2);
+    if (value == nullptr || value->length() > UINT32_MAX) return true;
+
+    const auto value_len = static_cast<uint32>(value->length());
+    const uint64 next_size =
+        static_cast<uint64>(payload.size()) + sizeof(uint32) + value_len;
+    if (next_size > UINT32_MAX) return true;
+
+    pq_worker_result_append_uint32(&payload, value_len);
+    const char *value_ptr = value->ptr();
+    payload.insert(payload.end(), value_ptr, value_ptr + value_len);
+  }
+
+  if (pq_send_worker_result_frame_with_flags(
+          m_handler, PQ_worker_result_message_type::ROW, field_count,
+          null_bitmap.data(), null_bitmap_len, payload.data(),
+          static_cast<uint32>(payload.size()),
+          PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES)) {
     return true;
   }
 

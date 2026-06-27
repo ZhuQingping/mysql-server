@@ -60,12 +60,14 @@ struct PQ_worker_result_decoded_field {
   */
   const char *value{nullptr};
   uint32 value_len{0};
+  uint32 field_index{0};
   bool is_null{false};
 };
 
 constexpr uint32 PQ_WORKER_RESULT_FRAME_MAGIC = 0x50515752;  // "PQWR"
 constexpr uint16 PQ_WORKER_RESULT_FRAME_VERSION = 1;
 constexpr uint32 PQ_WORKER_RESULT_FRAME_FLAG_STABLE_REF = 1U << 0;
+constexpr uint32 PQ_WORKER_RESULT_FRAME_FLAG_FIELD_INDEXES = 1U << 1;
 
 struct PQ_worker_result_stable_ref {
   const uchar *row_id{nullptr};
@@ -151,6 +153,7 @@ class Query_result_mq : public Query_result {
                                 uint flags) override;
   bool send_data(THD *thd, const mem_root_deque<Item *> &) override;
   bool send_table_row(THD *thd, TABLE *table, uint32 field_count);
+  bool send_table_read_set_row(THD *thd, TABLE *table);
   bool send_eof(THD *thd MY_ATTRIBUTE((unused))) override;
   void cleanup() override;
   MQueue_handle *get_mq_handler() { return m_handler; }

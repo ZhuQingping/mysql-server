@@ -164,6 +164,18 @@ void EstimatePQGatherOperatorCost(AccessPath *path [[maybe_unused]],
 
 namespace {
 
+uint32 pq_count_read_set_fields(const TABLE *table) {
+  if (table == nullptr || table->s == nullptr || table->read_set == nullptr) {
+    return 0;
+  }
+
+  uint32 count = 0;
+  for (uint32 i = 0; i < table->s->fields; ++i) {
+    if (bitmap_is_set(table->read_set, i)) ++count;
+  }
+  return count;
+}
+
 struct PQ_worker_thread_arg {
   PQ_worker_info *worker{nullptr};
   Gather_operator *gather{nullptr};
@@ -3515,8 +3527,7 @@ class PQ_worker_result_mq_row_sink final : public PQ_row_sink {
       m_started = true;
     }
 
-    m_failed = m_result.send_table_row(m_worker_thd, source_table,
-                                       m_field_count);
+    m_failed = m_result.send_table_read_set_row(m_worker_thd, source_table);
     if (!m_failed) ++m_rows_sent;
     return m_failed;
   }
@@ -3781,7 +3792,7 @@ bool pq_run_callback_pqwr_producer_task(PQ_worker_info *worker,
 
   const uint32 field_count =
       worker->m_open_ctx.worker_table != nullptr
-          ? worker->m_open_ctx.worker_table->s->fields
+          ? pq_count_read_set_fields(worker->m_open_ctx.worker_table)
           : 0;
   PQ_worker_result_mq_row_sink row_sink(worker->m_worker_thd,
                                         worker->m_mq_handle,

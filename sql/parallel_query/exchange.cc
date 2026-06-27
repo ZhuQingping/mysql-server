@@ -167,8 +167,15 @@ bool pq_materialize_worker_result_smoke_row(TABLE *table, const void *raw_data,
 
   bool failed = false;
   restore_record(table, s->default_values);
+  std::vector<bool> materialized_fields(table->s->fields, false);
   for (uint32 i = 0; i < fields.size(); ++i) {
-    Field *field = table->field[i];
+    const uint32 field_index = fields[i].field_index;
+    if (field_index >= table->s->fields || materialized_fields[field_index]) {
+      failed = true;
+      break;
+    }
+    materialized_fields[field_index] = true;
+    Field *field = table->field[field_index];
     if (field == nullptr) {
       failed = true;
       break;
@@ -187,11 +194,13 @@ bool pq_materialize_worker_result_smoke_row(TABLE *table, const void *raw_data,
   }
 
   if (!failed) {
-    if (fields.size() >= 1 && table->field[0] != nullptr &&
+    if (table->field[0] != nullptr &&
+        (table->read_set == nullptr || bitmap_is_set(table->read_set, 0)) &&
         !table->field[0]->is_null()) {
       *id_value = static_cast<uint64>(table->field[0]->val_int());
     }
-    if (fields.size() >= 2 && table->field[1] != nullptr &&
+    if (table->s->fields > 1 && table->field[1] != nullptr &&
+        (table->read_set == nullptr || bitmap_is_set(table->read_set, 1)) &&
         !table->field[1]->is_null()) {
       *v_value = static_cast<uint64>(table->field[1]->val_int());
     }
