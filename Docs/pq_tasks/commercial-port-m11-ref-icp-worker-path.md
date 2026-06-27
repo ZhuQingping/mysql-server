@@ -18,10 +18,10 @@ completed and committed；M11-F6b-2 constant-ref context to token smoke complete
 review accepted, and committed；M11-F6c user-visible migration decision
 completed locally and review accepted；M11-F6d worker-side ref execution
 inventory / contract completed locally and review accepted；M11-F6d-1 no-row
-worker TABLE / handler contract smoke completed locally and review accepted。
-Real
-worker-side ICP positive row production and visible worker-side ref execution
-remain blocked。
+worker TABLE / handler contract smoke completed locally and review accepted；
+M11-F6d-2 positive ref path design split in progress locally。Real
+worker-side ICP positive row production, worker-side visible ref execution, and
+commercial `ha_pq_next(void*)` positive ref path remain blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -3336,6 +3336,168 @@ Safe Next Task After Review:
   covering ref row path；
 - before coding, explicitly decide whether to use typed bridge or commercial
   `ha_pq_next()` / `void*` path。
+
+#### M11-F6d-2: Positive Worker-side Ref Path Design Split
+
+Status: docs-only design completed locally；independent review accepted。
+
+Goal:
+
+- choose the next positive worker-side constant covering ref route before
+  editing source；
+- distinguish current typed `PQ_Worker_context*` bridge from the commercial
+  `handler::ha_pq_next()` / `pq_worker_scan_next(void*)` route；
+- define the smallest F6e coding task that can prove worker-local row
+  production without changing visible SQL result, MQ wire format, or production
+  `PQRefIterator::Read()` behavior。
+
+Explorer Inputs:
+
+- Commercial Ref Path Inventory Agent:
+  - commercial `PQRefIterator::Read()` builds `Key_ref`, calls
+    `pq_ref_build_ranges()`, then reads via `handler::ha_pq_next(record,
+    m_pq_ctx)`；
+  - commercial `handler::ha_pq_next()` delegates to
+    `pq_worker_scan_next(void*, uchar*)`；
+  - commercial range-build semantics worth migrating are worker-owned
+    `PQ_ref_key` bytes, per-ref key range mapping, exact ref boundary build, and
+    no ICP filtering during range build；
+  - direct commercial `void*` migration would also open handler mutable state,
+    worker dispatch, and MQ/worker-result row production。
+- Current Typed Bridge Inventory Agent:
+  - current `PQRefIterator::Read()` uses typed
+    `pq_worker_scan_next(PQ_Worker_context*, ...)` but does not pass
+    `m_ref->key_buff` / key range / keypart map into worker range state；
+  - F6d-1 proves worker TABLE / handler ownership and worker-owned lookup
+    bytes only；
+  - typed InnoDB scan init / next currently consumes dispatched scan ranges,
+    not ref lookup input；
+  - visible M9-C2 ref correctness remains leader-local through
+    `PQSecondaryCoveringRefIterator`。
+- Test / MQ Boundary Agent:
+  - first positive step should be worker-local and DBUG-only, not MQ；
+  - MQ / `PQWR` visible worker row production must be a separate F6e follow-up
+    after pre-row fallback and post-row error cleanup are explicitly defined；
+  - MTR should prove hit, miss, last-key, cleanup, ownership, and protected
+    zero deltas for MQ / worker-thread / range counters。
+
+Decision:
+
+- F6e will use the current typed bridge as the immediate implementation
+  carrier and migrate the commercial ref range-build semantics into that
+  contract；
+- F6e will not directly switch to the commercial `ha_pq_next(void*)` route；
+- the commercial `void*` route remains the long-term parity target, but it is
+  larger than the next safe task because it couples `PQRefIterator::Read()`,
+  handler mutable fields, InnoDB `pq_worker_scan_next(void*)`, worker dispatch,
+  and MQ row output；
+- F6e will not change visible SQL behavior first. The first source task must be
+  DBUG-only and worker-local。
+
+Planned Coding Split:
+
+1. F6e-1: Worker-local constant-ref row smoke.
+   - Add a DBUG-only worker-local positive smoke using the F6d-1 worker
+     TABLE / handler ownership path；
+   - deep-copy constant ref lookup bytes into worker-owned storage；
+   - apply commercial exact ref boundary semantics in a typed contract, not via
+     `handler::ha_pq_next(void*)`；
+   - produce rows into a local smoke sink/vector only；
+   - no MQ, no worker thread launch, no visible SQL result change。
+2. F6e-2: Worker-local edge coverage.
+   - Cover duplicate-key hit, empty/miss, last-key, cleanup, and injected
+     failure；
+   - add status counters such as
+     `Parallel_worker_ref_local_row_attempts`,
+     `Parallel_worker_ref_local_row_success`,
+     `Parallel_worker_ref_local_row_rows`,
+     `Parallel_worker_ref_local_row_empty`,
+     `Parallel_worker_ref_local_row_cleanup`,
+     `Parallel_worker_ref_local_row_unsupported`, and
+     `Parallel_worker_ref_local_row_failures`；
+   - protect zero deltas for F6b token counters, MQ row smoke counters,
+     workers launched, ranges built, ranges dispatched, and visible executed
+     counters unless the test window explicitly expects existing leader-local
+     M9-C2 noise。
+3. F6e-3: Visible / MQ route design.
+   - Only after F6e-1/F6e-2 pass and review；
+   - define whether worker-produced ref rows enter `PQWR` row frames,
+     existing typed row image, or a reviewed leader adapter；
+   - define pre-row fallback and post-row error drain/detach/cleanup。
+
+Hard Stops:
+
+- Do not edit `sql/join_optimizer/access_path.cc` to redirect ordinary
+  `AccessPath::REF` into worker-side visible PQ；
+- do not change production `PQRefIterator::Read()` or
+  `PQblockScanIterator::Read()` semantics；
+- do not enable `handler::ha_pq_next()` or
+  `pq_worker_scan_next(void*)` positive behavior in F6e-1；
+- do not modify production `Query_result_mq::send_data()` or `PQWR` wire
+  format；
+- do not open worker-side ICP, non-covering ref, dependent ref, partition, MVI,
+  reverse, ORDER BY, native `Record_buffer`, or user-visible worker-side ref
+  execution；
+- do not treat ref key bytes as handler row-id / stable-ref / ORDER BY
+  tie-break bytes。
+
+Targeted MTR Window:
+
+- extend `pq_commercial_ref_icp` around the existing constant ref C1 window；
+- use hit / miss / last-key shapes equivalent to keys such as `k=20`,
+  `k=999`, and `k=50`；
+- assert F6e local counters grow only for the DBUG windows；
+- assert protected worker / MQ / range / token counters do not grow in F6e-1；
+- assert existing typed fullscan pull counters do not grow unless a later task
+  explicitly reuses that path；
+- update `pq_stats.result` only for new status variables。
+
+Validation:
+
+- F6d-2 itself is docs-only: `git diff --check`；
+- F6e source tasks must run:
+  - `cmake --build build-ninja --target mysqld -j 8`；
+  - targeted MTR:
+    `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+    --parallel=1 pq_commercial_ref_icp pq_stats --vardir=/tmp/<vardir>
+    --tmpdir=/tmp/<tmpdir>`。
+
+Review Prompt - M11-F6d-2:
+
+请作为 M11-F6d-2 Design / Source / Test Review Agent，只读审查当前 F6d-2
+设计拆分和相关源码 / 测试：
+
+1. 当前结论是否正确区分 commercial `ha_pq_next(void*)` route 与 current
+   typed `PQ_Worker_context*` route；
+2. F6e 先走 typed bridge + commercial range-build semantics，是否是当前
+   8.0.46 分支最小安全正向路线；
+3. F6e-1 worker-local/no-MQ/no-visible-row smoke 是否足以作为下一步编码；
+4. Hard Stops 是否足够防止误开 `PQRefIterator::Read()`、`ha_pq_next()`、
+   production MQ、worker-side ICP、dependent ref、reverse、ORDER BY 或
+   visible ref gate；
+5. MTR / counter 边界是否足够保护既有 F6b/F6d-1/M9-C2 语义。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`；
+- Blocking findings；
+- Non-blocking risks；
+- Safe next task recommendation。
+
+F6d-2 Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Required fixes: none；
+- Non-blocking risks:
+  - F6e-1 must keep the positive path in a DBUG-only helper / smoke, not
+    reachable through production `PQRefIterator::Read()`；
+  - F6e-1 MTR should explicitly protect existing typed fullscan pull counters
+    from unexpected growth if the new local ref smoke does not intentionally
+    exercise that path；
+- Safe next task: proceed with F6e-1 worker-local constant-ref row smoke under
+  the documented no-MQ / no-worker-thread / no-visible-result / no-production
+  iterator constraints。
 
 Required Future MTR Windows:
 

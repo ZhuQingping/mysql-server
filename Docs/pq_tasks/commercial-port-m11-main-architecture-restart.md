@@ -136,7 +136,10 @@ handler source inventory and contract。F6d worker-side ref execution
 inventory / contract 已完成 docs-only 任务书并通过独立 review；建议后续
 先做 F6d-1 no-row worker TABLE / handler contract smoke，再评估 positive
 visible worker-side ref row path。F6d-1 已完成本地编码和 targeted 验证，
-并通过独立 code/docs/test review。仍不改变 worker row/MQ、
+并通过独立 code/docs/test review。F6d-2 positive ref path design split 已
+完成本地文档：下一步不直接切 commercial `ha_pq_next(void*)`，而是先在当前
+typed `PQ_Worker_context*` bridge 中迁移商用 exact ref range-build 语义，
+做 worker-local / DBUG-only / no-MQ row smoke。仍不改变 worker row/MQ、
 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
 `handler::ha_pq_next()` 或 `pq_worker_scan_next()` 的 production 行为。
 
@@ -173,9 +176,15 @@ visible worker-side ref row path。F6d-1 已完成本地编码和 targeted 验�
 10. F6d-1 no-row worker TABLE / handler contract smoke 已完成本地编码、
     targeted 验证并通过独立 review；该 smoke 只 open/validate/cleanup worker
     TABLE，不调用 typed `pq_worker_scan_init()`，不 dispatch range，不生产 row；
-11. 仍不得打开 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
-   `pq_worker_scan_next()`、`ha_pq_next()`、worker MQ production row 或
-   production `Query_result_mq::send_data()` 行为。
+11. F6d-2 design split 已完成本地文档，决策为：F6e-1 先做 typed bridge +
+    commercial range-build semantics 的 worker-local row smoke，不直接打开
+    commercial `ha_pq_next(void*)`；
+12. 仍不得打开 production `PQRefIterator::Read()`、
+   `PQblockScanIterator::Read()`、`pq_worker_scan_next()`、
+   `ha_pq_next()`、worker MQ production row 或 production
+   `Query_result_mq::send_data()` 行为；
+13. F6d-2 independent design review accepted；当前下一步进入 F6e-1
+    worker-local constant-ref row smoke 编码。
 
 ## Review
 

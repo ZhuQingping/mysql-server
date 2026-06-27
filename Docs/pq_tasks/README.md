@@ -5,6 +5,16 @@
 ## Current Summary
 
 - Last synced: 2026-06-24
+- Current M11-F update: F6d-1 no-row worker TABLE / handler contract smoke 已
+  提交为 `1a75dea8a67`，targeted build/MTR passed，独立 review accepted。
+  F6d-2 positive ref path design split 已完成本地文档：下一步 F6e-1 不直接
+  打开 commercial `ha_pq_next(void*)`，先在当前 typed
+  `PQ_Worker_context*` bridge 中迁移商用 exact ref range-build 语义，做
+  worker-local / DBUG-only / no-MQ constant-ref row smoke。production
+  `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、`ha_pq_next()`、
+  `pq_worker_scan_next()`、worker MQ row 和 `Query_result_mq::send_data()`
+  仍保持关闭。F6d-2 independent design review accepted；当前下一步进入
+  F6e-1 worker-local constant-ref row smoke 编码。
 - Active update: 商用 Parallel Query 全量迁移冲刺已启动，权威任务板为
   [commercial-full-port-sprint.md](commercial-full-port-sprint.md)。当前目标
   已从 F6b 小步 contract/smoke 推进切换为：以
