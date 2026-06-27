@@ -2500,6 +2500,47 @@ Notes:
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
 
+#### Batch D1.6z - Commercial secondary range endpoint subset
+
+Status: completed; independent review accepted, pending commit.
+
+目标：
+
+- 向商用 `pq_range_sec` 靠拢，补齐单列 secondary covering range 的
+  `<`、`<=`、`>`、`>=`、开区间和闭区间端点语义；
+- 保持当前执行模型为 leader-local PQ path，不引入 worker secondary range
+  producer；
+- 显式保留 OR / multi-range secondary shape fail-closed，不进入 PQ 执行；
+- 不扩大到字符串 keypart、partition、MVI、reverse 或 ORDER BY 场景。
+
+Implementation:
+
+- `ha_innobase::pq_secondary_covering_range_produce()` 复用现有
+  `pq_seek_primary_range_boundary()` 边界定位逻辑，支持
+  `HA_READ_AFTER_KEY` / `HA_READ_KEY_EXACT` 端点；
+- `ha_innobase::pq_secondary_noncovering_icp_range_produce()` 同步使用相同
+  endpoint boundary 处理；
+- 新增 `pq_commercial_range_sec` MTR，覆盖商用 `pq_range_sec` 的单列
+  integer secondary range 代表子集和 OR multi-range fail-closed；
+- 更新 `pq_commercial_ref_icp` result：新增端点支持后一个已识别的
+  leader-local secondary range 形态会多计一次 PQ execution，但 worker、
+  range dispatch 和 secondary row 总数保持原有断言。
+
+Validation:
+
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_commercial_range_sec`
+  `pq_commercial_ref_icp`
+  `pq_commercial_range_clust`。
+
+Notes:
+
+- 开发阶段未运行 full `parallel_query` suite；
+- independent Review Agent found no Critical or Important issues；
+- 当前仍未迁移商用 `pq_range_sec` 的字符串 range、LIKE、大量数据和
+  ORDER BY 矩阵，这些归入后续 secondary range/string/order-by 批次。
+
 #### Batch D1.6ae - Primary clustered range endpoint flags
 
 Status: completed; independent review accepted.

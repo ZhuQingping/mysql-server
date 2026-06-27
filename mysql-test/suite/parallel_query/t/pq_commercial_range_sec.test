@@ -1,0 +1,102 @@
+# Test: pq_commercial_range_sec
+# Commercial secondary-index range subset. Single-range covering scans should
+# use the current leader-local PQ path; multi-range OR shapes stay fail-closed.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS pq_range_sec_t1;
+--enable_warnings
+
+CREATE TABLE pq_range_sec_t1 (
+  id INT PRIMARY KEY,
+  k INT NOT NULL,
+  payload INT NOT NULL,
+  KEY k_idx(k)
+) ENGINE=InnoDB;
+
+INSERT INTO pq_range_sec_t1 VALUES
+  (1,10,100),(2,20,200),(3,20,210),(4,30,300),
+  (5,40,400),(6,50,500),(7,60,600);
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_query_experimental_threaded_dop=ON;
+
+SET @executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+--sorted_result
+SELECT k FROM pq_range_sec_t1 FORCE INDEX(k_idx) WHERE k < 40;
+--sorted_result
+SELECT k FROM pq_range_sec_t1 FORCE INDEX(k_idx) WHERE k <= 40;
+--sorted_result
+SELECT k FROM pq_range_sec_t1 FORCE INDEX(k_idx) WHERE k > 20;
+--sorted_result
+SELECT k FROM pq_range_sec_t1 FORCE INDEX(k_idx) WHERE k >= 20;
+--sorted_result
+SELECT k FROM pq_range_sec_t1 FORCE INDEX(k_idx)
+  WHERE k > 20 AND k < 60;
+--sorted_result
+SELECT k FROM pq_range_sec_t1 FORCE INDEX(k_idx)
+  WHERE k >= 20 AND k <= 60;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_executed') - @executed_before
+    AS single_range_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_workers_launched') - @workers_before
+    AS single_range_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @secondary_rows_before
+    AS single_range_secondary_rows_delta;
+
+SET @or_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @or_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+SET @or_secondary_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_secondary_rows_produced');
+
+--sorted_result
+SELECT k FROM pq_range_sec_t1 FORCE INDEX(k_idx)
+  WHERE k < 20 OR k > 50;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_queries_executed') - @or_executed_before
+    AS multi_range_executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_workers_launched') - @or_workers_before
+    AS multi_range_workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED)
+     FROM performance_schema.global_status
+     WHERE variable_name = 'Parallel_secondary_rows_produced') -
+     @or_secondary_rows_before
+    AS multi_range_secondary_rows_delta;
+
+DROP TABLE pq_range_sec_t1;
