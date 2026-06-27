@@ -620,6 +620,170 @@ class PQ_record_buffer_sink final : public PQ_row_sink {
   bool m_failed{false};
 };
 
+bool pq_run_worker_ref_local_row_smoke(
+    THD *thd, TABLE *leader_table,
+    const PQ_worker_constant_ref_context_shape &ctx, bool inject_failure) {
+  pq_global_stats.worker_ref_local_row_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (thd == nullptr || leader_table == nullptr || leader_table->file == nullptr ||
+      !ctx.owned_key_bytes || !ctx.exact_read || !ctx.constant_ref ||
+      ctx.reverse || ctx.owned_key.empty() ||
+      ctx.owned_key.size() != ctx.key_length) {
+    pq_global_stats.worker_ref_local_row_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  Gather_operator gather(1);
+  PQ_worker_info *worker = nullptr;
+  bool cleanup_reached = false;
+  bool cleanup_error = false;
+  bool index_open = false;
+  auto cleanup = [&]() {
+    if (cleanup_reached) return;
+    cleanup_reached = true;
+    if (worker != nullptr) {
+      if (index_open && worker->m_open_ctx.worker_handler != nullptr) {
+        (void)worker->m_open_ctx.worker_handler->ha_index_end();
+        index_open = false;
+      }
+      if (worker->m_worker_ctx != nullptr &&
+          worker->m_open_ctx.worker_handler != nullptr) {
+        (void)worker->m_open_ctx.worker_handler->pq_worker_scan_end(
+            worker->m_worker_ctx);
+        worker->m_worker_ctx = nullptr;
+      }
+      if (worker->m_open_ctx.worker_table != nullptr) {
+        pq_close_worker_table(&worker->m_open_ctx, cleanup_error);
+      }
+      if (worker->m_worker_thd != nullptr) {
+        pq_destroy_worker_thd(worker);
+        thd->store_globals();
+      }
+    }
+    gather.destroy();
+    pq_global_stats.worker_ref_local_row_cleanup.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  bool failed = gather.init();
+  worker = gather.get_worker(0);
+  if (!failed && worker != nullptr) {
+    worker->m_open_ctx.leader_table = leader_table;
+    worker->m_open_ctx.actual_dop = 1;
+  }
+  failed = failed || worker == nullptr ||
+           pq_create_worker_thd(worker, &gather) == nullptr;
+  if (failed) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_local_row_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  failed = pq_open_worker_table(&worker->m_open_ctx);
+
+  TABLE *worker_table = worker->m_open_ctx.worker_table;
+  handler *worker_handler = worker->m_open_ctx.worker_handler;
+  const bool ownership_ok =
+      !failed && worker->m_open_ctx.worker_thd == worker->m_worker_thd &&
+      worker_table != nullptr && worker_handler != nullptr &&
+      worker_table != leader_table && worker_handler != leader_table->file &&
+      worker_table->file == worker_handler &&
+      worker_table->record[0] != leader_table->record[0] &&
+      worker_table->in_use == worker->m_worker_thd &&
+      worker->m_worker_ctx == nullptr;
+
+  if (failed || !ownership_ok) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_local_row_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  std::vector<uchar> worker_lookup(ctx.owned_key.begin(), ctx.owned_key.end());
+  if (worker_lookup.size() != ctx.key_length) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_local_row_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  if (inject_failure) {
+    pq_global_stats.worker_ref_local_row_failures.fetch_add(
+        1, std::memory_order_relaxed);
+    cleanup_error = true;
+    cleanup();
+    return false;
+  }
+
+  if (worker_handler->ha_index_init(ctx.keyno, false)) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_local_row_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+  index_open = true;
+
+  key_range worker_ref_key{};
+  worker_ref_key.key = worker_lookup.data();
+  worker_ref_key.length = ctx.key_length;
+  worker_ref_key.keypart_map = ctx.keypart_map;
+  worker_ref_key.flag = HA_READ_KEY_EXACT;
+
+  std::vector<std::vector<uchar>> local_rows;
+  PQ_record_buffer_sink sink(worker_table, &local_rows);
+  uint row_count = 0;
+  int error = worker_handler->ha_index_read_map(
+      worker_table->record[0], worker_ref_key.key, worker_ref_key.keypart_map,
+      worker_ref_key.flag);
+  while (error == 0) {
+    if (sink.send_row(worker_table)) {
+      error = HA_ERR_INTERNAL_ERROR;
+      break;
+    }
+    ++row_count;
+    if (row_count >= kPQSecondaryCoveringMaxEstimatedRows) {
+      break;
+    }
+    error = worker_handler->ha_index_next_same(
+        worker_table->record[0], worker_ref_key.key, worker_ref_key.length);
+  }
+
+  if (error == HA_ERR_KEY_NOT_FOUND || error == HA_ERR_END_OF_FILE) {
+    error = 0;
+  }
+
+  if (error != 0 || sink.should_abort() || row_count != local_rows.size()) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_local_row_failures.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  pq_global_stats.worker_ref_local_row_lookup_bytes.fetch_add(
+      worker_lookup.size(), std::memory_order_relaxed);
+  pq_global_stats.worker_ref_local_row_ownership_success.fetch_add(
+      1, std::memory_order_relaxed);
+  pq_global_stats.worker_ref_local_row_rows.fetch_add(
+      row_count, std::memory_order_relaxed);
+  if (row_count == 0) {
+    pq_global_stats.worker_ref_local_row_empty.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  pq_global_stats.worker_ref_local_row_success.fetch_add(
+      1, std::memory_order_relaxed);
+
+  cleanup();
+  return false;
+}
+
 class PQSecondaryCoveringRangeIterator final : public TableRowIterator {
  public:
   PQSecondaryCoveringRangeIterator(THD *thd, MEM_ROOT *mem_root, TABLE *table,
@@ -1318,6 +1482,26 @@ class PQSecondaryCoveringRefIterator final : public TableRowIterator {
             1, std::memory_order_relaxed);
       } else {
         (void)pq_run_worker_ref_contract_smoke(thd(), table(), ctx, true);
+      }
+    });
+    DBUG_EXECUTE_IF("pq_worker_ref_local_row_smoke", {
+      PQ_worker_constant_ref_context_shape ctx;
+      if (pq_build_worker_constant_ref_context_shape(table(), m_ref, ref_key,
+                                                     &ctx)) {
+        pq_global_stats.worker_ref_local_row_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+      } else {
+        (void)pq_run_worker_ref_local_row_smoke(thd(), table(), ctx, false);
+      }
+    });
+    DBUG_EXECUTE_IF("pq_worker_ref_local_row_fail_smoke", {
+      PQ_worker_constant_ref_context_shape ctx;
+      if (pq_build_worker_constant_ref_context_shape(table(), m_ref, ref_key,
+                                                     &ctx)) {
+        pq_global_stats.worker_ref_local_row_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+      } else {
+        (void)pq_run_worker_ref_local_row_smoke(thd(), table(), ctx, true);
       }
     });
 

@@ -19,9 +19,10 @@ review accepted, and committed；M11-F6c user-visible migration decision
 completed locally and review accepted；M11-F6d worker-side ref execution
 inventory / contract completed locally and review accepted；M11-F6d-1 no-row
 worker TABLE / handler contract smoke completed locally and review accepted；
-M11-F6d-2 positive ref path design split in progress locally。Real
-worker-side ICP positive row production, worker-side visible ref execution, and
-commercial `ha_pq_next(void*)` positive ref path remain blocked。
+M11-F6d-2 positive ref path design split completed and review accepted；
+M11-F6e-1 worker-local constant-ref row smoke completed locally and review
+accepted。Real worker-side ICP positive row production, worker-side visible ref
+execution, and commercial `ha_pq_next(void*)` positive ref path remain blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -3498,6 +3499,136 @@ F6d-2 Review Result:
 - Safe next task: proceed with F6e-1 worker-local constant-ref row smoke under
   the documented no-MQ / no-worker-thread / no-visible-result / no-production
   iterator constraints。
+
+#### M11-F6e-1: Worker-local Constant-ref Row Smoke
+
+Status: coding completed locally；independent code/docs/test review accepted。
+
+Goal:
+
+- add the first positive worker-local constant covering ref row smoke；
+- keep it DBUG-only and local to `PQSecondaryCoveringRefIterator::Init()`；
+- prove an independently opened worker TABLE / handler can execute exact ref
+  lookup with worker-owned key bytes and materialize rows into a local vector；
+- keep production `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+  `handler::ha_pq_next()`、`pq_worker_scan_next()`、worker thread launch,
+  production MQ, and visible worker-side ref execution unchanged。
+
+Changed Files:
+
+- `sql/parallel_query/pq_iterators.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/mysqld.cc`；
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`；
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md`；
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`。
+
+Implementation:
+
+- added nine F6e-1 counters:
+  `Parallel_worker_ref_local_row_attempts`,
+  `Parallel_worker_ref_local_row_success`,
+  `Parallel_worker_ref_local_row_rows`,
+  `Parallel_worker_ref_local_row_empty`,
+  `Parallel_worker_ref_local_row_cleanup`,
+  `Parallel_worker_ref_local_row_unsupported`,
+  `Parallel_worker_ref_local_row_failures`,
+  `Parallel_worker_ref_local_row_lookup_bytes`,
+  `Parallel_worker_ref_local_row_ownership_success`；
+- added `pq_run_worker_ref_local_row_smoke()` as an anonymous helper in
+  `pq_iterators.cc`；
+- the helper runs only from DBUG hooks:
+  `pq_worker_ref_local_row_smoke` and
+  `pq_worker_ref_local_row_fail_smoke`；
+- it reuses F6d-1 worker THD/TABLE open lifecycle and validates independent
+  worker TABLE / handler / record ownership；
+- it deep-copies the constant ref key into worker-owned storage；
+- it initializes the worker handler index with `ha_index_init()` and reads local
+  exact ref rows with `ha_index_read_map()` / `ha_index_next_same()`；
+- it writes row images only into a local `PQ_record_buffer_sink` vector and
+  always ends the index and closes the worker TABLE before returning；
+- the injected failure hook validates cleanup before any local row production。
+
+Scope Kept Closed:
+
+- no production `PQRefIterator::Read()` or `PQblockScanIterator::Read()`
+  change；
+- no `handler::ha_pq_next()` / `pq_worker_scan_next()` positive behavior；
+- no worker thread launch；
+- no production `Query_result_mq::send_data()` or `PQWR` wire-format change；
+- no visible worker-side ref gate；
+- no ICP, non-covering ref, dependent ref, partition, MVI, reverse, ORDER BY or
+  native `Record_buffer` positive path。
+
+TDD / Verification:
+
+- RED: targeted `pq_commercial_ref_icp` failed because new
+  `Parallel_worker_ref_local_row_*` variables returned `NULL` and the DBUG
+  hook produced no local row counters；
+- first GREEN attempt with worker-side `pq_secondary_covering_ref_produce()`
+  was rejected because it still returned unsupported on the worker handler；
+- final GREEN uses worker handler exact ref APIs and passed:
+  `cmake --build build-ninja --target mysqld -j 8`；
+- targeted MTR passed:
+  `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+  --parallel=1 pq_commercial_ref_icp pq_stats
+  --vardir=/tmp/pq_f6e1_green3_vardir
+  --tmpdir=/tmp/pq_f6e1_green3_tmp`。
+
+Residual Risk:
+
+- F6e-1 proves worker-local handler exact ref row access only. It still does
+  not prove production `PQRefIterator::Read()`、commercial
+  `ha_pq_next(void*)`、typed `pq_worker_scan_next()` ref dispatch, worker
+  thread scheduling, MQ row output, or visible worker-side ref execution；
+- the local smoke uses standard handler exact ref APIs rather than commercial
+  `pq_ref_build_ranges()` / `ha_pq_next(void*)`；
+- MTR positive assertions use boolean lower-bound checks because counters are
+  global；
+- user-visible result rows in the test still come from the existing
+  leader-local M9-C2 path。
+
+Review Prompt - M11-F6e-1:
+
+请作为 M11-F6e-1 Code / Docs / Test Review Agent，只读审查当前 patch：
+
+1. F6e-1 是否只在 DBUG-only helper 中打开 worker-local exact ref row smoke；
+2. worker TABLE / handler / record ownership、`ha_index_init()` /
+   `ha_index_end()` cleanup 是否足够安全；
+3. patch 是否没有改变 production `PQRefIterator::Read()`、
+   `PQblockScanIterator::Read()`、`ha_pq_next()`、`pq_worker_scan_next()`、
+   worker MQ 或 visible worker-side ref gate；
+4. MTR 是否覆盖 hit / miss / injected failure / cleanup，并保护 workers、
+   ranges、MQ rows、callback rows、typed pull counters 零增长；
+5. 文档是否准确说明 F6e-1 仍不是 commercial `void*` path 或 visible worker
+   ref execution。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`；
+- Blocking findings；
+- Non-blocking risks；
+- Required fixes；
+- Safe next task recommendation。
+
+F6e-1 Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Required fixes: none；
+- Non-blocking risks:
+  - F6e-1 MTR protects workers, ranges, worker-result MQ rows, callback rows
+    and typed pull counters；it does not repeat older ORDER BY / exchange-sort
+    MQ guards in the F6e block, and review accepted this because source
+    inspection shows F6e-1 does not call those paths；
+  - F6e-1 remains a DBUG-only worker-local smoke, not commercial
+    `ha_pq_next(void*)` and not visible worker-side ref execution；
+- Safe next task: proceed only through another narrow reviewed step；continue
+  to keep commercial `ha_pq_next(void*)`, visible worker-side ref execution,
+  and production MQ row output behind separate design/review gates。
 
 Required Future MTR Windows:
 

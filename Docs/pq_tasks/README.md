@@ -13,8 +13,11 @@
   worker-local / DBUG-only / no-MQ constant-ref row smoke。production
   `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、`ha_pq_next()`、
   `pq_worker_scan_next()`、worker MQ row 和 `Query_result_mq::send_data()`
-  仍保持关闭。F6d-2 independent design review accepted；当前下一步进入
-  F6e-1 worker-local constant-ref row smoke 编码。
+  仍保持关闭。F6d-2 independent design review accepted；F6e-1 worker-local
+  constant-ref row smoke 已完成本地编码和 targeted build/MTR，独立
+  code/docs/test review accepted。F6e-1 只证明 worker TABLE / handler 上的
+  DBUG-only exact ref local row access，不打开 commercial `ha_pq_next(void*)`
+  或 visible worker-side ref execution。
 - Active update: 商用 Parallel Query 全量迁移冲刺已启动，权威任务板为
   [commercial-full-port-sprint.md](commercial-full-port-sprint.md)。当前目标
   已从 F6b 小步 contract/smoke 推进切换为：以

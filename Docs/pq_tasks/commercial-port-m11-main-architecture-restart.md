@@ -139,7 +139,10 @@ visible worker-side ref row path。F6d-1 已完成本地编码和 targeted 验�
 并通过独立 code/docs/test review。F6d-2 positive ref path design split 已
 完成本地文档：下一步不直接切 commercial `ha_pq_next(void*)`，而是先在当前
 typed `PQ_Worker_context*` bridge 中迁移商用 exact ref range-build 语义，
-做 worker-local / DBUG-only / no-MQ row smoke。仍不改变 worker row/MQ、
+做 worker-local / DBUG-only / no-MQ row smoke。F6e-1 worker-local
+constant-ref row smoke 已完成本地编码和 targeted build/MTR，独立 code/docs/test
+review accepted；该 smoke 只使用 worker TABLE / handler 的标准 exact
+ref APIs 写入本地 vector。仍不改变 worker row/MQ、
 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
 `handler::ha_pq_next()` 或 `pq_worker_scan_next()` 的 production 行为。
 
@@ -183,8 +186,12 @@ typed `PQ_Worker_context*` bridge 中迁移商用 exact ref range-build 语义�
    `PQblockScanIterator::Read()`、`pq_worker_scan_next()`、
    `ha_pq_next()`、worker MQ production row 或 production
    `Query_result_mq::send_data()` 行为；
-13. F6d-2 independent design review accepted；当前下一步进入 F6e-1
-    worker-local constant-ref row smoke 编码。
+13. F6d-2 independent design review accepted；
+14. F6e-1 worker-local constant-ref row smoke 已完成本地编码和 targeted
+    build/MTR，独立 code/docs/test review accepted；
+15. F6e-1 只证明 worker TABLE / handler 上的 DBUG-only exact ref local
+    row access，不打开 commercial `ha_pq_next(void*)`、production
+    `PQRefIterator::Read()` 或 visible worker-side ref execution。
 
 ## Review
 

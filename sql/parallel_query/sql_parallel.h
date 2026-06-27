@@ -414,6 +414,15 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_ref_contract_lookup_bytes{0};  ///< F6d-1
   std::atomic<uint64> worker_ref_contract_ownership_success{0};  ///< F6d-1
   std::atomic<uint64> worker_ref_contract_no_row_success{0};  ///< F6d-1
+  std::atomic<uint64> worker_ref_local_row_attempts{0};  ///< F6e-1
+  std::atomic<uint64> worker_ref_local_row_success{0};  ///< F6e-1
+  std::atomic<uint64> worker_ref_local_row_rows{0};  ///< F6e-1
+  std::atomic<uint64> worker_ref_local_row_empty{0};  ///< F6e-1
+  std::atomic<uint64> worker_ref_local_row_cleanup{0};  ///< F6e-1
+  std::atomic<uint64> worker_ref_local_row_unsupported{0};  ///< F6e-1
+  std::atomic<uint64> worker_ref_local_row_failures{0};  ///< F6e-1
+  std::atomic<uint64> worker_ref_local_row_lookup_bytes{0};  ///< F6e-1
+  std::atomic<uint64> worker_ref_local_row_ownership_success{0};  ///< F6e-1
   std::atomic<uint64> secondary_reverse_reject_probes{0};  ///< Reverse ref rejects
   std::atomic<uint64> secondary_reverse_ref_reject_probes{0};  ///< Reverse ref
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
@@ -915,6 +924,25 @@ struct PQ_global_stats {
     worker_ref_ctx_token_normal_rejects.store(0, std::memory_order_relaxed);
     worker_ref_ctx_token_invalid_rejects.store(0, std::memory_order_relaxed);
     worker_ref_ctx_token_len_mismatch.store(0, std::memory_order_relaxed);
+    worker_ref_contract_attempts.store(0, std::memory_order_relaxed);
+    worker_ref_contract_success.store(0, std::memory_order_relaxed);
+    worker_ref_contract_unsupported.store(0, std::memory_order_relaxed);
+    worker_ref_contract_cleanup.store(0, std::memory_order_relaxed);
+    worker_ref_contract_failures.store(0, std::memory_order_relaxed);
+    worker_ref_contract_lookup_bytes.store(0, std::memory_order_relaxed);
+    worker_ref_contract_ownership_success.store(0,
+                                                std::memory_order_relaxed);
+    worker_ref_contract_no_row_success.store(0, std::memory_order_relaxed);
+    worker_ref_local_row_attempts.store(0, std::memory_order_relaxed);
+    worker_ref_local_row_success.store(0, std::memory_order_relaxed);
+    worker_ref_local_row_rows.store(0, std::memory_order_relaxed);
+    worker_ref_local_row_empty.store(0, std::memory_order_relaxed);
+    worker_ref_local_row_cleanup.store(0, std::memory_order_relaxed);
+    worker_ref_local_row_unsupported.store(0, std::memory_order_relaxed);
+    worker_ref_local_row_failures.store(0, std::memory_order_relaxed);
+    worker_ref_local_row_lookup_bytes.store(0, std::memory_order_relaxed);
+    worker_ref_local_row_ownership_success.store(
+        0, std::memory_order_relaxed);
     secondary_reverse_reject_probes.store(0, std::memory_order_relaxed);
     secondary_reverse_ref_reject_probes.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);
