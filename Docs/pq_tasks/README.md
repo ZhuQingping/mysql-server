@@ -4,7 +4,7 @@
 
 ## Current Summary
 
-- Last synced: 2026-06-24
+- Last synced: 2026-06-28
 - Latest local update: 2026-06-28 F6e-5b debug-only ref range-build contract
   probe 已完成本地实现和 targeted 验证。新增
   `pq_worker_ref_range_build_contract_smoke` DBUG hook，仅位于
@@ -14,6 +14,13 @@
   `pq_worker_scan_next()` 或 worker/MQ row producer。独立 review accepted；
   post-review `mysqld` build 和 `pq_commercial_ref_icp pq_stats` targeted MTR
   passed。
+- Next task selected: D1.7 商用 worker pull fullscan。两个只读 Explorer
+  确认继续只做 ref smoke 不足以贴近商用全量迁移；下一步应收敛
+  `ha_pq_next(void*) -> pq_worker_scan_next(void*, uchar*)` clustered fullscan
+  bridge。任务书见
+  [commercial-port-d1-worker-pull-fullscan.md](commercial-port-d1-worker-pull-fullscan.md)。
+  D1.7 必须保持 DBUG-only，不替换当前 visible PQWR fullscan 默认路径，不混入
+  ref/range/ICP/ORDER BY。
 - Current M11-F update: F6d-1 no-row worker TABLE / handler contract smoke 已
   提交为 `1a75dea8a67`，targeted build/MTR passed，独立 review accepted。
   F6d-2 positive ref path design split 已完成本地文档：下一步 F6e-1 不直接

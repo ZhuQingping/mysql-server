@@ -1,6 +1,6 @@
 # Parallel Query 商用全量迁移冲刺
 
-Last synced: 2026-06-24
+Last synced: 2026-06-28
 
 ## 目标
 
@@ -207,9 +207,13 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   saved ORDER/GROUP 与 Filesort/Sort_param contract 可在 preflight 中标记
   ready，但 worker producer、Exchange_sort heap read 和 leader materialization
   仍保持执行阻断；
-- 下一步：继续缩小商用 `ParallelScanIterator` 主路径差距，优先把
-  worker-thread producer、leader record gather 和可见 fullscan gate 的
-  生命周期顺序对齐；开发阶段仍只跑相关模块 MTR，不跑全量 MTR。
+- 下一步：D1.7 商用 worker pull fullscan。当前 visible fullscan 已可通过
+  PQWR record_gather 路径执行，但商用 `ha_pq_next(void*) ->
+  pq_worker_scan_next(void*, uchar*)` 正路径仍 fail-closed。D1.7 先以
+  DBUG-only smoke 建立 clustered fullscan void-pull bridge，复用当前 typed
+  worker context / callback-backed materialization，不替换默认 visible PQWR
+  fullscan，不混入 ref/range/ICP/ORDER BY。任务书见
+  [commercial-port-d1-worker-pull-fullscan.md](commercial-port-d1-worker-pull-fullscan.md)。
 
 ## Batch A 审计结果
 
