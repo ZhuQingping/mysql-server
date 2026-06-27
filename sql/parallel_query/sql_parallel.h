@@ -361,6 +361,10 @@ struct PQ_global_stats {
   std::atomic<uint64> empty_worker_ranges{0}; ///< Workers assigned no range
   std::atomic<uint64> primary_range_probe_attempts{0};  ///< Primary range probes
   std::atomic<uint64> primary_range_probe_unsupported{0};  ///< Unsupported probes
+  std::atomic<uint64> primary_range_partition_attempts{0};  ///< Range partition
+  std::atomic<uint64> primary_range_partition_success{0};  ///< Partition ok
+  std::atomic<uint64> primary_range_partition_failed{0};  ///< Partition failed
+  std::atomic<uint64> primary_ranges_built{0};  ///< Primary ranges built
   std::atomic<uint64> secondary_range_probe_attempts{0};  ///< Secondary range probes
   std::atomic<uint64> secondary_range_probe_unsupported{0};  ///< Unsupported probes
   std::atomic<uint64> secondary_range_clone_attempts{0};  ///< Range clone probes
@@ -840,6 +844,10 @@ struct PQ_global_stats {
     empty_worker_ranges.store(0, std::memory_order_relaxed);
     primary_range_probe_attempts.store(0, std::memory_order_relaxed);
     primary_range_probe_unsupported.store(0, std::memory_order_relaxed);
+    primary_range_partition_attempts.store(0, std::memory_order_relaxed);
+    primary_range_partition_success.store(0, std::memory_order_relaxed);
+    primary_range_partition_failed.store(0, std::memory_order_relaxed);
+    primary_ranges_built.store(0, std::memory_order_relaxed);
     secondary_range_probe_attempts.store(0, std::memory_order_relaxed);
     secondary_range_probe_unsupported.store(0, std::memory_order_relaxed);
     secondary_range_clone_attempts.store(0, std::memory_order_relaxed);

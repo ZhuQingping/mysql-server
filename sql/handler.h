@@ -5010,6 +5010,21 @@ class handler {
     return HA_ERR_UNSUPPORTED;
   }
 
+  /** Debug-only primary clustered range partition smoke.
+
+    This must not produce rows or open a user-visible PQ execution path. It is
+    used to validate that a copied clustered primary-key range can be converted
+    into storage-engine scan partitions before range row production is enabled.
+  */
+  virtual int pq_primary_range_partition_smoke(
+      THD *leader_thd [[maybe_unused]], uint keyno [[maybe_unused]],
+      const key_range *start_key [[maybe_unused]],
+      const key_range *end_key [[maybe_unused]],
+      uint requested_dop [[maybe_unused]], uint *ranges_built) {
+    if (ranges_built != nullptr) *ranges_built = 0;
+    return HA_ERR_UNSUPPORTED;
+  }
+
   /** Debug-only secondary visibility contract smoke.
 
     This must not read rows, produce rows, or open a user-visible PQ execution

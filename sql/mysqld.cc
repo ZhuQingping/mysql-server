@@ -9982,6 +9982,14 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(primary_range_probe_attempts,
                                     primary_range_probe_attempts)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(primary_range_probe_unsupported,
                                     primary_range_probe_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(primary_range_partition_attempts,
+                                    primary_range_partition_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(primary_range_partition_success,
+                                    primary_range_partition_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(primary_range_partition_failed,
+                                    primary_range_partition_failed)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(primary_ranges_built,
+                                    primary_ranges_built)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_clone_attempts,
                                     secondary_range_clone_attempts)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_range_clone_failed,
@@ -12586,6 +12594,17 @@ SHOW_VAR status_vars[] = {
     {"Parallel_primary_range_probe_unsupported",
      (char *)&show_pq_primary_range_probe_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
+    {"Parallel_primary_range_partition_attempts",
+     (char *)&show_pq_primary_range_partition_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_primary_range_partition_failed",
+     (char *)&show_pq_primary_range_partition_failed, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_primary_range_partition_success",
+     (char *)&show_pq_primary_range_partition_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_primary_ranges_built",
+     (char *)&show_pq_primary_ranges_built, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_secondary_range_clone_attempts",
      (char *)&show_pq_secondary_range_clone_attempts, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},

@@ -573,6 +573,11 @@ class ha_innobase : public handler {
       const key_range *end_key, uint requested_dop,
       uint *ranges_built) override;
 
+  int pq_primary_range_partition_smoke(
+      THD *leader_thd, uint keyno, const key_range *start_key,
+      const key_range *end_key, uint requested_dop,
+      uint *ranges_built) override;
+
   /**
     Debug-only secondary visibility contract smoke.
 

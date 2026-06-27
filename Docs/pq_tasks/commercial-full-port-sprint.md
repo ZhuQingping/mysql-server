@@ -2500,6 +2500,53 @@ Notes:
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
 
+#### Batch D1.6ab - Primary clustered range partition preflight
+
+Status: completed; independent review accepted after helper naming cleanup.
+
+目标：
+
+- 继续向商用 primary clustered range 并行扫描路径靠拢；
+- 在不开启用户可见 primary range PQ 执行的前提下，增加 debug-only
+  partition smoke；
+- 验证 SQL 层复制出的单段 PRIMARY range endpoint 可以传递到 InnoDB，
+  并通过 `InnoDB_pq_scan_ctx::partition()` 构建 scan ranges；
+- 保持 fail-closed：不生产行、不启动 worker、不改变当前
+  `NON_FULL_TABLE_SCAN` fallback 行为。
+
+Implementation:
+
+- 新增 handler debug-only API `pq_primary_range_partition_smoke()`，默认
+  返回 unsupported；
+- InnoDB 实现仅接受 clustered primary key、单段 range、无 ICP、无
+  partition table、正向扫描；
+- SQL 层只在 `DBUG_EXECUTE_IF("pq_primary_range_partition_smoke", ...)`
+  下触发 smoke，并继续在 optimizer eligibility 中拒绝 primary range；
+- 新增 status counters：
+  `Parallel_primary_range_partition_attempts`、
+  `Parallel_primary_range_partition_success`、
+  `Parallel_primary_range_partition_failed`、
+  `Parallel_primary_ranges_built`；
+- `pq_commercial_range_clust` 只对一个单段 PRIMARY range 打开 debug
+  flag，断言 partition smoke 成功且 execution/worker counters 不增长。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- targeted MTR passed:
+  `pq_commercial_range_clust`
+  `pq_commercial_ref_icp`
+  `pq_stats`。
+
+Notes:
+
+- primary clustered range 仍不是用户可见 PQ 执行路径；
+- review only reported a Minor helper naming concern; fixed by splitting a
+  generic key-shape helper from the secondary-specific wrapper；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
+
 #### Batch D1.6aa - ORDER BY sidecar preflight readiness
 
 Status: completed; independent re-review accepted.

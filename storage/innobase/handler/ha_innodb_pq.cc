@@ -782,6 +782,114 @@ int ha_innobase::pq_secondary_range_partition_smoke(
   return pq_map_dberr_to_handler_error(err, nullptr);
 }
 
+int ha_innobase::pq_primary_range_partition_smoke(
+    THD *leader_thd, uint keyno, const key_range *start_key,
+    const key_range *end_key, uint requested_dop, uint *ranges_built) {
+  if (ranges_built != nullptr) {
+    *ranges_built = 0;
+  }
+
+  if (leader_thd == nullptr || ranges_built == nullptr || requested_dop == 0 ||
+      table == nullptr || table->s == nullptr || keyno >= table->s->keys ||
+      m_prebuilt == nullptr || m_prebuilt->table == nullptr ||
+      m_prebuilt->trx == nullptr || m_prebuilt->idx_cond) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (keyno != table->s->primary_key) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  if (start_key != nullptr && start_key->flag != HA_READ_KEY_OR_NEXT) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+  if (end_key != nullptr && end_key->flag != HA_READ_BEFORE_KEY) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  dict_index_t *index = innobase_get_index(keyno);
+  if (index == nullptr || !index->is_clustered() ||
+      !index->is_usable(m_prebuilt->trx) || index->is_corrupted()) {
+    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
+  }
+
+  trx_t *trx = m_prebuilt->trx;
+  const bool had_active_read_view =
+      srv_read_only_mode ||
+      (trx->read_view != nullptr && MVCC::is_view_active(trx->read_view));
+  trx_start_if_not_started(trx, false, UT_LOCATION_HERE);
+  if (!srv_read_only_mode) {
+    trx_assign_read_view(trx);
+  }
+  const bool close_read_view_on_end =
+      !had_active_read_view &&
+      !thd_test_options(leader_thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+
+  auto cleanup_read_view = [&]() {
+    if (close_read_view_on_end && trx->read_view != nullptr &&
+        MVCC::is_view_active(trx->read_view)) {
+      mutex_enter(&trx_sys->mutex);
+      trx_sys->mvcc->view_close(trx->read_view, true);
+      mutex_exit(&trx_sys->mutex);
+    }
+    if (close_read_view_on_end && m_prebuilt != nullptr) {
+      m_prebuilt->sql_stat_start = true;
+    }
+  };
+
+  const KEY *key = &table->key_info[keyno];
+  mem_heap_t *heap = mem_heap_create(
+      2 * (key->actual_key_parts * sizeof(dfield_t) + sizeof(dtuple_t)),
+      UT_LOCATION_HERE);
+  if (heap == nullptr) {
+    cleanup_read_view();
+    return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
+  }
+
+  dtuple_t *range_start = nullptr;
+  dtuple_t *range_end = nullptr;
+  dberr_t err = DB_SUCCESS;
+
+  if (start_key != nullptr && start_key->keypart_map != 0) {
+    range_start = dtuple_create(heap, key->actual_key_parts);
+    dict_index_copy_types(range_start, index, key->actual_key_parts);
+    row_sel_convert_mysql_key_to_innobase(
+        range_start, m_prebuilt->srch_key_val1, m_prebuilt->srch_key_val_len,
+        index, reinterpret_cast<const byte *>(start_key->key),
+        static_cast<ulint>(start_key->length));
+    if (range_start->n_fields == 0) {
+      err = DB_UNSUPPORTED;
+    }
+  }
+
+  if (err == DB_SUCCESS && end_key != nullptr && end_key->keypart_map != 0) {
+    range_end = dtuple_create(heap, key->actual_key_parts);
+    dict_index_copy_types(range_end, index, key->actual_key_parts);
+    row_sel_convert_mysql_key_to_innobase(
+        range_end, m_prebuilt->srch_key_val2, m_prebuilt->srch_key_val_len,
+        index, reinterpret_cast<const byte *>(end_key->key),
+        static_cast<ulint>(end_key->length));
+    if (range_end->n_fields == 0) {
+      err = DB_UNSUPPORTED;
+    }
+  }
+
+  if (err == DB_SUCCESS) {
+    const bool is_compact = dict_table_is_comp(index->table);
+    page_size_t page_size(dict_tf_to_fsp_flags(index->table->flags));
+    InnoDB_pq_scan_ctx scan_ctx(index, trx, is_compact, page_size);
+    err = scan_ctx.partition(0, range_start, range_end);
+    if (err == DB_SUCCESS) {
+      *ranges_built = static_cast<uint>(scan_ctx.ranges().size());
+    }
+  }
+
+  mem_heap_free(heap);
+  cleanup_read_view();
+
+  return pq_map_dberr_to_handler_error(err, nullptr);
+}
+
 int ha_innobase::pq_secondary_visibility_smoke(THD *leader_thd, uint keyno) {
   if (leader_thd == nullptr || table == nullptr || table->s == nullptr ||
       keyno >= table->s->keys || keyno == table->s->primary_key ||

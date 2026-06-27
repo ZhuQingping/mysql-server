@@ -954,16 +954,13 @@ static bool pq_key_has_mvi_part(const KEY &key) {
   return false;
 }
 
-static bool pq_secondary_range_key_has_unsupported_parts(const TABLE *table,
-                                                         uint keyno) {
+static bool pq_range_key_has_unsupported_parts(const TABLE *table, uint keyno) {
   if (table == nullptr || table->s == nullptr || table->key_info == nullptr ||
       keyno >= table->s->keys) {
     return true;
   }
   const KEY &key = table->key_info[keyno];
   if (pq_key_has_mvi_part(key)) {
-    pq_global_stats.secondary_mvi_reject_probes.fetch_add(
-        1, std::memory_order_relaxed);
     return true;
   }
   if (key.flags & HA_SPATIAL) {
@@ -973,6 +970,19 @@ static bool pq_secondary_range_key_has_unsupported_parts(const TABLE *table,
     if (key.key_part[i].key_part_flag & HA_REVERSE_SORT) {
       return true;
     }
+  }
+  return false;
+}
+
+static bool pq_secondary_range_key_has_unsupported_parts(const TABLE *table,
+                                                         uint keyno) {
+  if (pq_range_key_has_unsupported_parts(table, keyno)) {
+    if (table != nullptr && table->s != nullptr && table->key_info != nullptr &&
+        keyno < table->s->keys && pq_key_has_mvi_part(table->key_info[keyno])) {
+      pq_global_stats.secondary_mvi_reject_probes.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+    return true;
   }
   return false;
 }
@@ -1631,8 +1641,7 @@ static void pq_maybe_run_secondary_range_partition_smoke(
 
   const auto &param = range_scan->index_range_scan();
   if (param.reverse || param.geometry || param.num_ranges != 1 ||
-      param.ranges == nullptr ||
-      pq_secondary_range_key_has_unsupported_parts(table, keyno)) {
+      param.ranges == nullptr || pq_range_key_has_unsupported_parts(table, keyno)) {
     mark_failed();
     return;
   }
@@ -1670,6 +1679,75 @@ static void pq_maybe_run_secondary_range_partition_smoke(
   }
 
   pq_global_stats.secondary_ranges_built.fetch_add(
+      ranges_built, std::memory_order_relaxed);
+}
+
+static void pq_maybe_run_primary_range_partition_smoke(
+    THD *thd, TABLE *table, AccessPath *range_scan, uint keyno) {
+  bool enabled = false;
+  DBUG_EXECUTE_IF("pq_primary_range_partition_smoke", enabled = true;);
+  if (!enabled) return;
+
+  pq_global_stats.primary_range_partition_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  auto mark_failed = []() {
+    pq_global_stats.primary_range_partition_failed.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  if (thd == nullptr || table == nullptr || table->s == nullptr ||
+      table->file == nullptr || range_scan == nullptr ||
+      range_scan->type != AccessPath::INDEX_RANGE_SCAN ||
+      keyno >= table->s->keys || keyno != table->s->primary_key ||
+      table->part_info != nullptr || table->file->pushed_idx_cond != nullptr) {
+    mark_failed();
+    return;
+  }
+
+  const auto &param = range_scan->index_range_scan();
+  if (param.reverse || param.geometry || param.num_ranges != 1 ||
+      param.ranges == nullptr ||
+      pq_secondary_range_key_has_unsupported_parts(table, keyno)) {
+    mark_failed();
+    return;
+  }
+
+  QUICK_RANGE *quick_range = param.ranges[0];
+  if (quick_range == nullptr) {
+    mark_failed();
+    return;
+  }
+
+  key_range start_key{};
+  key_range end_key{};
+  quick_range->make_min_endpoint(&start_key);
+  quick_range->make_max_endpoint(&end_key);
+
+  PQ_copied_key_endpoint copied_start;
+  PQ_copied_key_endpoint copied_end;
+  if (!pq_copy_key_endpoint(start_key, &copied_start) ||
+      !pq_copy_key_endpoint(end_key, &copied_end)) {
+    mark_failed();
+    return;
+  }
+
+  uint ranges_built = 0;
+  uint requested_dop = thd->variables.parallel_default_dop;
+  if (requested_dop == 0) requested_dop = 1;
+
+  const int error = table->file->pq_primary_range_partition_smoke(
+      thd, keyno, copied_start.present ? &copied_start.range : nullptr,
+      copied_end.present ? &copied_end.range : nullptr, requested_dop,
+      &ranges_built);
+  if (error != 0) {
+    mark_failed();
+    return;
+  }
+
+  pq_global_stats.primary_range_partition_success.fetch_add(
+      1, std::memory_order_relaxed);
+  pq_global_stats.primary_ranges_built.fetch_add(
       ranges_built, std::memory_order_relaxed);
 }
 
@@ -2214,6 +2292,8 @@ static bool pq_check_full_table_scan(JOIN *join, PQUnsuiteInfo *info,
               1, std::memory_order_relaxed);
           pq_global_stats.primary_range_probe_unsupported.fetch_add(
               1, std::memory_order_relaxed);
+          pq_maybe_run_primary_range_partition_smoke(
+              join->thd, candidate_table, candidate_range_scan, candidate_index);
         } else {
           pq_global_stats.secondary_range_probe_attempts.fetch_add(
               1, std::memory_order_relaxed);

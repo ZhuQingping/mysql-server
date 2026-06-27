@@ -38,12 +38,31 @@ SET @pq_primary_range_probe_unsupported_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_primary_range_probe_unsupported');
+SET @pq_primary_range_partition_attempts_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_primary_range_partition_attempts');
+SET @pq_primary_range_partition_success_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_primary_range_partition_success');
+SET @pq_primary_range_partition_failed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_primary_range_partition_failed');
+SET @pq_primary_ranges_built_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_primary_ranges_built');
+SET @old_debug=@@debug;
+SET SESSION debug="+d,pq_primary_range_partition_smoke";
 SELECT id, col2 FROM pq_range_clust_t1 FORCE INDEX(PRIMARY) WHERE id < 5;
 id	col2
 1	100
 2	90
 3	80
 4	70
+SET SESSION debug=@old_debug;
 SELECT
 (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
@@ -61,9 +80,25 @@ AS primary_range_probe_attempts_seen,
 ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_primary_range_probe_unsupported') -
 @pq_primary_range_probe_unsupported_before) >= 1
-AS primary_range_probe_unsupported_seen;
-executed_delta	fallback_delta	workers_delta	primary_range_probe_attempts_seen	primary_range_probe_unsupported_seen
-0	0	0	1	1
+AS primary_range_probe_unsupported_seen,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_primary_range_partition_attempts') -
+@pq_primary_range_partition_attempts_before) >= 1
+AS primary_range_partition_attempts_seen,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_primary_range_partition_success') -
+@pq_primary_range_partition_success_before) >= 1
+AS primary_range_partition_success_seen,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_primary_range_partition_failed') -
+@pq_primary_range_partition_failed_before
+AS primary_range_partition_failed_delta,
+((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_primary_ranges_built') -
+@pq_primary_ranges_built_before) >= 1
+AS primary_ranges_built_seen;
+executed_delta	fallback_delta	workers_delta	primary_range_probe_attempts_seen	primary_range_probe_unsupported_seen	primary_range_partition_attempts_seen	primary_range_partition_success_seen	primary_range_partition_failed_delta	primary_ranges_built_seen
+0	0	0	1	1	1	1	0	1
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
