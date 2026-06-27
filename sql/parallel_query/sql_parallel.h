@@ -406,6 +406,14 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_ref_ctx_token_normal_rejects{0};  ///< F6b-2
   std::atomic<uint64> worker_ref_ctx_token_invalid_rejects{0};  ///< F6b-2
   std::atomic<uint64> worker_ref_ctx_token_len_mismatch{0};  ///< F6b-2
+  std::atomic<uint64> worker_ref_contract_attempts{0};  ///< F6d-1
+  std::atomic<uint64> worker_ref_contract_success{0};  ///< F6d-1
+  std::atomic<uint64> worker_ref_contract_unsupported{0};  ///< F6d-1
+  std::atomic<uint64> worker_ref_contract_cleanup{0};  ///< F6d-1
+  std::atomic<uint64> worker_ref_contract_failures{0};  ///< F6d-1
+  std::atomic<uint64> worker_ref_contract_lookup_bytes{0};  ///< F6d-1
+  std::atomic<uint64> worker_ref_contract_ownership_success{0};  ///< F6d-1
+  std::atomic<uint64> worker_ref_contract_no_row_success{0};  ///< F6d-1
   std::atomic<uint64> secondary_reverse_reject_probes{0};  ///< Reverse ref rejects
   std::atomic<uint64> secondary_reverse_ref_reject_probes{0};  ///< Reverse ref
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs

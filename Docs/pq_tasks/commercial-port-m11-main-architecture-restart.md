@@ -135,7 +135,8 @@ docs-only 决策并通过独立 review：暂不把 M9-C2 leader-local visible re
 handler source inventory and contract。F6d worker-side ref execution
 inventory / contract 已完成 docs-only 任务书并通过独立 review；建议后续
 先做 F6d-1 no-row worker TABLE / handler contract smoke，再评估 positive
-visible worker-side ref row path。仍不改变 worker row/MQ、
+visible worker-side ref row path。F6d-1 已完成本地编码和 targeted 验证，
+并通过独立 code/docs/test review。仍不改变 worker row/MQ、
 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
 `handler::ha_pq_next()` 或 `pq_worker_scan_next()` 的 production 行为。
 
@@ -169,7 +170,10 @@ visible worker-side ref row path。仍不改变 worker row/MQ、
 9. F6d worker-side ref execution inventory / contract 已完成 docs-only
    任务书并通过独立 review；结论是下一步优先做 F6d-1 no-row worker TABLE /
    handler contract smoke，不直接打开 visible worker-side ref row path；
-10. 仍不得打开 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+10. F6d-1 no-row worker TABLE / handler contract smoke 已完成本地编码、
+    targeted 验证并通过独立 review；该 smoke 只 open/validate/cleanup worker
+    TABLE，不调用 typed `pq_worker_scan_init()`，不 dispatch range，不生产 row；
+11. 仍不得打开 `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
    `pq_worker_scan_next()`、`ha_pq_next()`、worker MQ production row 或
    production `Query_result_mq::send_data()` 行为。
 

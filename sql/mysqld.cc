@@ -10066,6 +10066,22 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_invalid_rejects,
                                     worker_ref_ctx_token_invalid_rejects)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_ctx_token_len_mismatch,
                                     worker_ref_ctx_token_len_mismatch)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_contract_attempts,
+                                    worker_ref_contract_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_contract_success,
+                                    worker_ref_contract_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_contract_unsupported,
+                                    worker_ref_contract_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_contract_cleanup,
+                                    worker_ref_contract_cleanup)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_contract_failures,
+                                    worker_ref_contract_failures)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_contract_lookup_bytes,
+                                    worker_ref_contract_lookup_bytes)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_contract_ownership_success,
+                                    worker_ref_contract_ownership_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_contract_no_row_success,
+                                    worker_ref_contract_no_row_success)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_reject_probes,
                                     secondary_reverse_reject_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_ref_reject_probes,
@@ -12705,6 +12721,30 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_ctx_token_unsupported",
      (char *)&show_pq_worker_ref_ctx_token_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_contract_attempts",
+     (char *)&show_pq_worker_ref_contract_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_contract_cleanup",
+     (char *)&show_pq_worker_ref_contract_cleanup, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_contract_failures",
+     (char *)&show_pq_worker_ref_contract_failures, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_contract_lookup_bytes",
+     (char *)&show_pq_worker_ref_contract_lookup_bytes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_contract_no_row_success",
+     (char *)&show_pq_worker_ref_contract_no_row_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_contract_ownership_success",
+     (char *)&show_pq_worker_ref_contract_ownership_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_contract_success",
+     (char *)&show_pq_worker_ref_contract_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_contract_unsupported",
+     (char *)&show_pq_worker_ref_contract_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_ctx_success", (char *)&show_pq_worker_ref_ctx_success,
      SHOW_FUNC, SHOW_SCOPE_GLOBAL},

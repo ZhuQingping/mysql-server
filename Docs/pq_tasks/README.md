@@ -326,8 +326,13 @@
   `pq_worker_scan_next(void*, ...)` / `handler::ha_pq_next()` 路径。M11-F6d
   worker-side ref execution inventory / contract 已完成 docs-only 任务书并通过
   独立 review；建议后续先做 F6d-1 no-row worker TABLE / handler
-  contract smoke，不直接打开 visible worker-side ref row path。继续禁止在当前
-  F5/F6a/F6b/F6c/F6d closure 后直接打开
+  contract smoke，不直接打开 visible worker-side ref row path。M11-F6d-1
+  no-row worker TABLE / handler contract smoke 已完成本地编码和 targeted
+  验证，并通过独立 review；该 smoke 不调用 typed `pq_worker_scan_init()`，不
+  dispatch range，不生产 row。后续进入 F6d-2 / F6e minimal positive
+  worker-side constant covering ref row path 设计拆分。继续禁止在当前
+  F5/F6a/F6b/F6c/F6d/F6d-1
+  closure 后直接打开
   `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
   `pq_worker_scan_next()`、worker MQ row production、worker-side ICP + native
   `Record_buffer`、MVI unique filter、partition、reverse、secondary MIN

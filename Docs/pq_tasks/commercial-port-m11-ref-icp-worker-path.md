@@ -17,7 +17,9 @@ confirmation completed；M11-F6b-1 local constant-ref token transport helper
 completed and committed；M11-F6b-2 constant-ref context to token smoke completed,
 review accepted, and committed；M11-F6c user-visible migration decision
 completed locally and review accepted；M11-F6d worker-side ref execution
-inventory / contract completed locally and review accepted。Real
+inventory / contract completed locally and review accepted；M11-F6d-1 no-row
+worker TABLE / handler contract smoke completed locally and review accepted。
+Real
 worker-side ICP positive row production and visible worker-side ref execution
 remain blocked。
 
@@ -3235,6 +3237,105 @@ F6d Review Result:
   `F6d-1 no-row worker TABLE / handler contract smoke` only, and keep its
   counters separate from F6b token counters；
 - Safe next task: F6d-1 no-row worker TABLE / handler contract smoke。
+
+#### M11-F6d-1: No-row Worker TABLE / Handler Contract Smoke
+
+Status: coding completed locally；independent code/docs/test review accepted。
+
+Goal:
+
+- Add a DBUG-only no-row smoke for worker-side constant-ref readiness；
+- prove a ref lookup context can drive worker TABLE / handler ownership checks
+  without opening a visible worker-side ref row path；
+- keep counters separate from F6b token counters；
+- keep `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、
+  `handler::ha_pq_next()`、`pq_worker_scan_next()` and production MQ behavior
+  unchanged。
+
+Changed Files:
+
+- `sql/parallel_query/pq_iterators.cc`；
+- `sql/parallel_query/sql_parallel.h`；
+- `sql/mysqld.cc`；
+- `mysql-test/suite/parallel_query/t/pq_commercial_ref_icp.test`；
+- `mysql-test/suite/parallel_query/r/pq_commercial_ref_icp.result`；
+- `mysql-test/suite/parallel_query/r/pq_stats.result`；
+- `Docs/pq_tasks/README.md`；
+- `Docs/pq_tasks/commercial-port-m11-main-architecture-restart.md`；
+- `Docs/pq_tasks/commercial-port-m11-ref-icp-worker-path.md`。
+
+Implementation:
+
+- added eight diagnostic counters:
+  `Parallel_worker_ref_contract_attempts`,
+  `Parallel_worker_ref_contract_success`,
+  `Parallel_worker_ref_contract_unsupported`,
+  `Parallel_worker_ref_contract_cleanup`,
+  `Parallel_worker_ref_contract_failures`,
+  `Parallel_worker_ref_contract_lookup_bytes`,
+  `Parallel_worker_ref_contract_ownership_success`,
+  `Parallel_worker_ref_contract_no_row_success`；
+- added `pq_run_worker_ref_contract_smoke()` as an anonymous helper in
+  `pq_iterators.cc`；
+- the helper runs only from `PQSecondaryCoveringRefIterator::Init()` DBUG hooks
+  after the constant-ref context is built；
+- the helper opens an independent worker THD/TABLE through existing
+  `Gather_operator` / `pq_open_worker_table()` lifecycle helpers；
+- the helper validates worker TABLE, handler, `record[0]`, `in_use`, and lookup
+  key ownership, then immediately cleans up；
+- the injected failure hook validates cleanup and increments a separate failure
+  counter。
+
+Scope Kept Closed:
+
+- no `PQRefIterator::Read()` or `PQblockScanIterator::Read()` behavior change；
+- no `handler::ha_pq_next()` or `pq_worker_scan_next()` behavior change；
+- no typed `pq_worker_scan_init()` call in F6d-1 smoke, so no range dispatch；
+- no worker thread launch, no worker MQ row, no `Query_result_mq::send_data()`
+  or `PQWR` wire-format change；
+- no storage/InnoDB source changes；
+- no visible ref gate migration；M9-C2 remains leader-local。
+
+TDD / Verification:
+
+- RED: targeted `pq_commercial_ref_icp` failed because new
+  `Parallel_worker_ref_contract_*` variables returned `NULL` and DBUG deltas
+  were missing；
+- GREEN build: `cmake --build build-ninja --target mysqld -j 8` passed；
+- GREEN MTR:
+  `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1
+  pq_commercial_ref_icp pq_stats --vardir=/tmp/pq_f6d1_green2_vardir
+  --tmpdir=/tmp/pq_f6d1_green2_tmp` passed。
+
+Residual Risk:
+
+- F6d-1 proves worker TABLE / handler open ownership and lookup-byte ownership
+  only；it intentionally does not prove typed worker scan init, range dispatch,
+  row production, `ha_pq_next()`, or production MQ output；
+- InnoDB `prebuilt` ownership is inferred from independent worker TABLE /
+  handler ownership and existing open-table gates；it is not directly inspected
+  in this smoke；
+- MTR DBUG assertions use `>=` deltas because counters are global；
+- the next positive worker-side ref path still needs a separate reviewed task to
+  choose between typed bridge and commercial `void*` path。
+
+F6d-1 Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Required fixes: none；
+- Non-blocking risks: direct InnoDB `prebuilt` ownership inspection remains for
+  a future task；global-counter tests use threshold deltas rather than exact
+  cardinality；
+- Safe next task: F6d-2 / F6e design split for minimal positive worker-side
+  constant covering ref row path。
+
+Safe Next Task After Review:
+
+- F6d-2 / F6e design or coding split for minimal positive worker-side constant
+  covering ref row path；
+- before coding, explicitly decide whether to use typed bridge or commercial
+  `ha_pq_next()` / `void*` path。
 
 Required Future MTR Windows:
 
