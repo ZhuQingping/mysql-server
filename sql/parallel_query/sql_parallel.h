@@ -546,6 +546,11 @@ struct PQ_global_stats {
   std::atomic<uint64> leader_row_stream_smoke_rows{0};  ///< Read smoke rows
   std::atomic<uint64> visible_pqwr_record_gather_selected{0};  ///< PQWR path
   std::atomic<uint64> visible_pqwr_record_gather_rows{0};  ///< PQWR rows
+  std::atomic<uint64> visible_void_pull_selected{0};  ///< D1.8 path
+  std::atomic<uint64> visible_void_pull_rows{0};  ///< D1.8 rows
+  std::atomic<uint64> visible_void_pull_eofs{0};  ///< D1.8 EOFs
+  std::atomic<uint64> visible_void_pull_cleanup{0};  ///< D1.8 cleanup
+  std::atomic<uint64> visible_void_pull_failures{0};  ///< D1.8 failures
   std::atomic<uint64> worker_result_smoke_rows{0};  ///< Worker result frames
   std::atomic<uint64> worker_result_smoke_finishes{0};  ///< FINISH frames
   std::atomic<uint64> worker_result_smoke_errors{0};  ///< ERROR frames
@@ -1120,6 +1125,11 @@ struct PQ_global_stats {
     leader_row_stream_smoke_rows.store(0, std::memory_order_relaxed);
     visible_pqwr_record_gather_selected.store(0, std::memory_order_relaxed);
     visible_pqwr_record_gather_rows.store(0, std::memory_order_relaxed);
+    visible_void_pull_selected.store(0, std::memory_order_relaxed);
+    visible_void_pull_rows.store(0, std::memory_order_relaxed);
+    visible_void_pull_eofs.store(0, std::memory_order_relaxed);
+    visible_void_pull_cleanup.store(0, std::memory_order_relaxed);
+    visible_void_pull_failures.store(0, std::memory_order_relaxed);
     worker_result_smoke_rows.store(0, std::memory_order_relaxed);
     worker_result_smoke_finishes.store(0, std::memory_order_relaxed);
     worker_result_smoke_errors.store(0, std::memory_order_relaxed);

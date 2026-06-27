@@ -214,9 +214,10 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   worker context / callback-backed materialization，默认 visible PQWR fullscan
   不变，不混入 ref/range/ICP/ORDER BY。任务书与完成报告见
   [commercial-port-d1-worker-pull-fullscan.md](commercial-port-d1-worker-pull-fullscan.md)。
-- 下一步 D1.8：visible fullscan void-pull gate。该任务在独立 DBUG/实验 gate
-  下让用户可见 clustered fullscan query 通过 `PQTableScanIterator::Read()`
-  调 worker handler `ha_pq_next(void*)`，但暂不替换默认 PQWR path。任务书见
+- D1.8 visible fullscan void-pull gate 已完成本地实现和 targeted 验证，等待
+  独立 code/task review。该任务在独立 DBUG gate 下让用户可见 clustered
+  fullscan query 通过 `PQTableScanIterator::Read()` 调 worker handler
+  `ha_pq_next(void*)`，但暂不替换默认 PQWR path。任务书和完成报告见
   [commercial-port-d18-visible-void-pull-fullscan.md](commercial-port-d18-visible-void-pull-fullscan.md)。
 
 ## Batch A 审计结果

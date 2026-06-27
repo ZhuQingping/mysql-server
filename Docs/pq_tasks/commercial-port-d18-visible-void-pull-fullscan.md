@@ -2,7 +2,7 @@
 
 ## 状态
 
-Status: design prepared；coding not started。
+Status: completed；targeted build/MTR passed；independent review accepted。
 
 ## 背景
 
@@ -139,3 +139,76 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 - 是否保留 DBUG/实验 gate，不直接替换默认 PQWR；
 - 是否没有打开 ref/range/ICP/ORDER BY 等禁止路径。
 
+## Completion Report
+
+### 实现摘要
+
+- 新增 `pq_visible_void_pull_fullscan_path` DBUG gate，在用户可见 clustered
+  fullscan query 中绕过默认 PQWR path，改由 `PQTableScanIterator::Read()`
+  逐行调用 worker handler `ha_pq_next(worker_record, leader_pq_ctx)`。
+- `Init()` 侧创建并持有独立 worker THD / TABLE / handler / typed
+  worker context，并通过 `ha_pq_init(1, MAX_KEY)` 建立 leader fullscan
+  `pq_ctx`。
+- `Read()` 侧将 worker record image copy 到 leader `table()->record[0]`，
+  保持 SQL executor 从 leader TABLE 读取字段。
+- EOF / error / destructor cleanup 会结束 worker context、destroy worker
+  TABLE/THD/Gather，并对 `ha_pq_init()` 创建的 leader ctx 使用
+  `ha_pq_end()` 收尾，避免 handler 内残留 `pq_ctx`。
+- 新增 `Parallel_visible_void_pull_*` 状态变量，与默认
+  `Parallel_visible_pqwr_record_gather_*` counters 分离；测试同时断言
+  visible void-pull 窗口内 PQWR visible counters 不增长。
+- `ha_innobase::pq_worker_scan_next(void*, uchar*)` 仍保持默认 fail-closed；
+  仅在 D1.7 smoke hook 和 D1.8 visible hook 下启用当前 typed worker
+  bridge。
+
+### 调试与风险收敛记录
+
+- RED 已观察：新增 MTR 在实现前因状态变量/计数不存在而失败。
+- 首轮 MTR 暴露 debug build 崩溃：leader 线程直接调用 worker handler
+  触发 `handler::ha_thd()` 断言。修复为调用 worker handler
+  `ha_pq_next()` / `pq_worker_scan_end()` 前切到 worker THD globals，返回后
+  恢复 leader THD globals。
+- 第二轮 MTR 暴露 cleanup 崩溃：`m_gather->destroy()` 关闭 worker table 时
+  仍在 leader current_thd 下执行 worker transaction rollback。修复为 D1.8
+  visible cleanup destroy 阶段切到 worker THD globals，destroy 后恢复
+  leader THD globals。
+
+### 已验证
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 8
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan \
+  --vardir=/tmp/pq-d18-green3-vardir \
+  --tmpdir=/tmp/pq-d18-green3-tmpdir
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats \
+  --vardir=/tmp/pq-d18-targeted-vardir \
+  --tmpdir=/tmp/pq-d18-targeted-tmpdir
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats \
+  --vardir=/tmp/pq-d18-reviewfix-vardir \
+  --tmpdir=/tmp/pq-d18-reviewfix-tmpdir
+```
+
+### 独立 Review
+
+- Review Agent: `019f0b72-4e5d-7393-9eb2-8d2c79f4879e`
+- 首轮 finding：visible void-pull `Read()` 分支缺少 leader KILL 检查和 worker
+  kill propagation，可能违背现有 error priority。
+- 已修复：在调用 `ha_pq_next()` 前加入 `check_leader_kill()`、
+  `propagate_kill_to_workers()`、cleanup 和 `send_kill_message()`。
+- 复审结论：accepted with minor notes；无 Critical / Important findings。
+- Minor note：当前 `propagate_kill_to_workers()` 不设置 worker THD `killed`，
+  对 D1.8 同步 visible void-pull path 可接受；未来真正并发/长耗时 worker
+  path 应增强该 helper。
+
+### 剩余风险
+
+- D1.8 仍是 DBUG-gated visible path，不替换默认 PQWR fullscan path。
+- 当前只覆盖 clustered fullscan；ref/range/ICP/ORDER BY/partition/MVI/native
+  Record_buffer 仍未在该 path 打开。
+- record image copy 当前使用同表 share 的 record buffer `reclength` copy；
+  BLOB/TEXT 等场景仍受上层 eligibility guard 限制，后续若扩大场景需重新审计。

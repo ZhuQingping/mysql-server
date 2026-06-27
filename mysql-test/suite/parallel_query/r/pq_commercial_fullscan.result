@@ -299,6 +299,83 @@ WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
 @visible_pqwr_rows_before AS visible_pqwr_rows_delta;
 visible_pqwr_selected_delta	visible_pqwr_rows_delta
 0	0
+SELECT COUNT(*) AS visible_void_pull_status_vars
+FROM performance_schema.global_status
+WHERE variable_name IN (
+'Parallel_visible_void_pull_selected',
+'Parallel_visible_void_pull_rows',
+'Parallel_visible_void_pull_eofs',
+'Parallel_visible_void_pull_cleanup',
+'Parallel_visible_void_pull_failures');
+visible_void_pull_status_vars
+5
+SET @visible_void_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_selected');
+SET @visible_void_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_rows');
+SET @visible_void_eofs_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_eofs');
+SET @visible_void_cleanup_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_cleanup');
+SET @visible_void_failures_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_failures');
+SET @visible_pqwr_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected');
+SET @visible_pqwr_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
+SET SESSION debug = 'd,pq_visible_void_pull_fullscan_path';
+SELECT id FROM t1 WHERE val >= 10;
+id
+1
+2
+3
+4
+5
+6
+7
+8
+SET SESSION debug = '';
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_selected') -
+@visible_void_selected_before AS selected_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_rows') -
+@visible_void_rows_before AS rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_eofs') -
+@visible_void_eofs_before AS eofs_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_cleanup') -
+@visible_void_cleanup_before AS cleanup_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_failures') -
+@visible_void_failures_before AS failures_delta;
+selected_delta	rows_delta	eofs_delta	cleanup_delta	failures_delta
+1	8	1	1	0
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected') -
+@visible_pqwr_selected_before AS visible_pqwr_selected_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
+@visible_pqwr_rows_before AS visible_pqwr_rows_delta;
+visible_pqwr_selected_delta	visible_pqwr_rows_delta
+0	0
 CREATE TABLE t_blob (id INT PRIMARY KEY, payload TEXT) ENGINE=InnoDB;
 INSERT INTO t_blob VALUES (1,'alpha'),(2,'beta');
 SET SESSION parallel_query_experimental_threaded_dop4=OFF;

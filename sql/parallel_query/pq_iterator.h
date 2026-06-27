@@ -73,6 +73,7 @@ struct MEM_ROOT;
 class Gather_operator;
 class MQ_record_gather;
 class PQ_Leader_context;
+struct PQ_worker_info;
 
 /**
   Parallel table scan iterator skeleton.
@@ -197,6 +198,8 @@ class PQTableScanIterator final : public TableRowIterator {
   MQ_record_gather *m_record_gather{nullptr};  ///< Leader-side MQ gather facade
   Runtime_state m_runtime_state{Runtime_state::SAFE_FALLBACK};
   bool m_use_worker_result_record_gather{false};
+  bool m_use_visible_void_pull{false};
+  bool m_leader_ctx_from_ha_pq_init{false};
   bool m_fallback_counted{false};  ///< Count per query iterator, not per Init()
   bool m_executed_counted{false};  ///< Count real PQ execution at first row
 };

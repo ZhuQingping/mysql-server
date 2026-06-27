@@ -274,6 +274,78 @@ SELECT
    WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
     @visible_pqwr_rows_before AS visible_pqwr_rows_delta;
 
+# D1.8: visible fullscan void-pull gate. This is separate from the default
+# visible PQWR path until the commercial route is fully reviewed.
+SELECT COUNT(*) AS visible_void_pull_status_vars
+  FROM performance_schema.global_status
+  WHERE variable_name IN (
+    'Parallel_visible_void_pull_selected',
+    'Parallel_visible_void_pull_rows',
+    'Parallel_visible_void_pull_eofs',
+    'Parallel_visible_void_pull_cleanup',
+    'Parallel_visible_void_pull_failures');
+
+SET @visible_void_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_selected');
+SET @visible_void_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_rows');
+SET @visible_void_eofs_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_eofs');
+SET @visible_void_cleanup_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_cleanup');
+SET @visible_void_failures_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_failures');
+SET @visible_pqwr_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected');
+SET @visible_pqwr_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
+
+SET SESSION debug = 'd,pq_visible_void_pull_fullscan_path';
+
+--sorted_result
+SELECT id FROM t1 WHERE val >= 10;
+
+SET SESSION debug = '';
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_selected') -
+    @visible_void_selected_before AS selected_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_rows') -
+    @visible_void_rows_before AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_eofs') -
+    @visible_void_eofs_before AS eofs_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_cleanup') -
+    @visible_void_cleanup_before AS cleanup_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_failures') -
+    @visible_void_failures_before AS failures_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected') -
+    @visible_pqwr_selected_before AS visible_pqwr_selected_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
+    @visible_pqwr_rows_before AS visible_pqwr_rows_delta;
+
 # BLOB/TEXT remains serial fallback even when the DOP2 gate is enabled.
 CREATE TABLE t_blob (id INT PRIMARY KEY, payload TEXT) ENGINE=InnoDB;
 INSERT INTO t_blob VALUES (1,'alpha'),(2,'beta');

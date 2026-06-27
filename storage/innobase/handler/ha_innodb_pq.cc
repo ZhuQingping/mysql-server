@@ -709,7 +709,7 @@ int ha_innobase::pq_worker_scan_next(PQ_Worker_context *worker_ctx,
 
 int ha_innobase::pq_worker_scan_next(void *scan_ctx [[maybe_unused]],
                                      uchar *buf [[maybe_unused]]) {
-  DBUG_EXECUTE_IF("pq_worker_void_pull_fullscan_smoke", {
+  auto run_void_pull_bridge = [&]() -> int {
     if (scan_ctx == nullptr || buf == nullptr ||
         m_pq_void_pull_smoke_worker_ctx == nullptr ||
         m_pq_void_pull_smoke_worker_ctx->kind() !=
@@ -755,6 +755,12 @@ int ha_innobase::pq_worker_scan_next(void *scan_ctx [[maybe_unused]],
     pq_global_stats.worker_void_pull_rows.fetch_add(
         1, std::memory_order_relaxed);
     return 0;
+  };
+  DBUG_EXECUTE_IF("pq_worker_void_pull_fullscan_smoke", {
+    return run_void_pull_bridge();
+  });
+  DBUG_EXECUTE_IF("pq_visible_void_pull_fullscan_path", {
+    return run_void_pull_bridge();
   });
   return HA_ERR_UNSUPPORTED;
 }

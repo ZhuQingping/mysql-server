@@ -10453,6 +10453,16 @@ DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(
     visible_pqwr_record_gather_selected)
 DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_pqwr_record_gather_rows,
                                       visible_pqwr_record_gather_rows)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_selected,
+                                      visible_void_pull_selected)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_rows,
+                                      visible_void_pull_rows)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_eofs,
+                                      visible_void_pull_eofs)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_cleanup,
+                                      visible_void_pull_cleanup)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_failures,
+                                      visible_void_pull_failures)
 
 #undef DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC
 
@@ -12678,6 +12688,19 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_visible_pqwr_record_gather_selected",
      (char *)&show_pq_visible_pqwr_record_gather_selected, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_cleanup",
+     (char *)&show_pq_visible_void_pull_cleanup, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_eofs",
+     (char *)&show_pq_visible_void_pull_eofs, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_failures",
+     (char *)&show_pq_visible_void_pull_failures, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_rows",
+     (char *)&show_pq_visible_void_pull_rows, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_selected",
+     (char *)&show_pq_visible_void_pull_selected, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_workers_launched", (char *)&show_pq_workers_launched, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
