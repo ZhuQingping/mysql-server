@@ -12,7 +12,12 @@
   clustered fullscan bridge；默认 visible fullscan 仍走 PQWR record_gather，
   默认 `pq_worker_scan_next(void*)` 仍 fail-closed。验证已通过：
   `mysqld` build、`pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats`
-  targeted MTR。独立 code review 正在进行。
+  targeted MTR。独立 code review accepted；提交为 `ee611b383c6`。
+- Next task selected: D1.8 visible fullscan void-pull gate。D1.7 只证明
+  DBUG-only internal smoke；D1.8 将增加独立 DBUG/实验 gate，让用户可见
+  clustered fullscan query 在 `PQTableScanIterator::Read()` 中逐行调用 worker
+  handler `ha_pq_next(void*)`，并继续保持默认 PQWR fullscan path 不变。任务书见
+  [commercial-port-d18-visible-void-pull-fullscan.md](commercial-port-d18-visible-void-pull-fullscan.md)。
 - Current M11-F update: F6d-1 no-row worker TABLE / handler contract smoke 已
   提交为 `1a75dea8a67`，targeted build/MTR passed，独立 review accepted。
   F6d-2 positive ref path design split 已完成本地文档：下一步 F6e-1 不直接
