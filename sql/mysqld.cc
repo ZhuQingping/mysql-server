@@ -10100,6 +10100,22 @@ DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_local_row_lookup_bytes,
                                     worker_ref_local_row_lookup_bytes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_local_row_ownership_success,
                                     worker_ref_local_row_ownership_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_attempts,
+                                    worker_ref_carrier_attempts)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_success,
+                                    worker_ref_carrier_success)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_rows,
+                                    worker_ref_carrier_rows)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_finishes,
+                                    worker_ref_carrier_finishes)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_errors,
+                                    worker_ref_carrier_errors)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_cleanup,
+                                    worker_ref_carrier_cleanup)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_unsupported,
+                                    worker_ref_carrier_unsupported)
+DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(worker_ref_carrier_failures,
+                                    worker_ref_carrier_failures)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_reject_probes,
                                     secondary_reverse_reject_probes)
 DEFINE_PQ_SECONDARY_RANGE_SHOW_FUNC(secondary_reverse_ref_reject_probes,
@@ -12763,6 +12779,30 @@ SHOW_VAR status_vars[] = {
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_contract_unsupported",
      (char *)&show_pq_worker_ref_contract_unsupported, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_carrier_attempts",
+     (char *)&show_pq_worker_ref_carrier_attempts, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_carrier_cleanup",
+     (char *)&show_pq_worker_ref_carrier_cleanup, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_carrier_errors",
+     (char *)&show_pq_worker_ref_carrier_errors, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_carrier_failures",
+     (char *)&show_pq_worker_ref_carrier_failures, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_carrier_finishes",
+     (char *)&show_pq_worker_ref_carrier_finishes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_carrier_rows",
+     (char *)&show_pq_worker_ref_carrier_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_carrier_success",
+     (char *)&show_pq_worker_ref_carrier_success, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_worker_ref_carrier_unsupported",
+     (char *)&show_pq_worker_ref_carrier_unsupported, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_worker_ref_local_row_attempts",
      (char *)&show_pq_worker_ref_local_row_attempts, SHOW_FUNC,

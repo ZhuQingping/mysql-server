@@ -423,6 +423,14 @@ struct PQ_global_stats {
   std::atomic<uint64> worker_ref_local_row_failures{0};  ///< F6e-1
   std::atomic<uint64> worker_ref_local_row_lookup_bytes{0};  ///< F6e-1
   std::atomic<uint64> worker_ref_local_row_ownership_success{0};  ///< F6e-1
+  std::atomic<uint64> worker_ref_carrier_attempts{0};  ///< F6e-4
+  std::atomic<uint64> worker_ref_carrier_success{0};  ///< F6e-4
+  std::atomic<uint64> worker_ref_carrier_rows{0};  ///< F6e-4
+  std::atomic<uint64> worker_ref_carrier_finishes{0};  ///< F6e-4
+  std::atomic<uint64> worker_ref_carrier_errors{0};  ///< F6e-4
+  std::atomic<uint64> worker_ref_carrier_cleanup{0};  ///< F6e-4
+  std::atomic<uint64> worker_ref_carrier_unsupported{0};  ///< F6e-4
+  std::atomic<uint64> worker_ref_carrier_failures{0};  ///< F6e-4
   std::atomic<uint64> secondary_reverse_reject_probes{0};  ///< Reverse ref rejects
   std::atomic<uint64> secondary_reverse_ref_reject_probes{0};  ///< Reverse ref
   std::atomic<uint64> worker_smoke_runs{0};   ///< Worker lifecycle smoke runs
@@ -943,6 +951,14 @@ struct PQ_global_stats {
     worker_ref_local_row_lookup_bytes.store(0, std::memory_order_relaxed);
     worker_ref_local_row_ownership_success.store(
         0, std::memory_order_relaxed);
+    worker_ref_carrier_attempts.store(0, std::memory_order_relaxed);
+    worker_ref_carrier_success.store(0, std::memory_order_relaxed);
+    worker_ref_carrier_rows.store(0, std::memory_order_relaxed);
+    worker_ref_carrier_finishes.store(0, std::memory_order_relaxed);
+    worker_ref_carrier_errors.store(0, std::memory_order_relaxed);
+    worker_ref_carrier_cleanup.store(0, std::memory_order_relaxed);
+    worker_ref_carrier_unsupported.store(0, std::memory_order_relaxed);
+    worker_ref_carrier_failures.store(0, std::memory_order_relaxed);
     secondary_reverse_reject_probes.store(0, std::memory_order_relaxed);
     secondary_reverse_ref_reject_probes.store(0, std::memory_order_relaxed);
     worker_smoke_runs.store(0, std::memory_order_relaxed);

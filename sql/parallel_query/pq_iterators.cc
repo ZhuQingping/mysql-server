@@ -37,6 +37,7 @@
 #include "sql/iterators/ref_row_iterators.h"
 #include "sql/iterators/timing_iterator.h"
 #include "sql/mysqld.h"
+#include "sql/parallel_query/exchange.h"
 #include "sql/parallel_query/exchange_sort.h"
 #include "sql/parallel_query/pq_handler.h"
 #include "sql/parallel_query/query_result_mq.h"
@@ -74,6 +75,12 @@ struct PQ_worker_constant_ref_context_shape {
   bool reverse{false};
   bool constant_ref{false};
   bool owned_key_bytes{false};
+};
+
+enum class PQ_worker_ref_carrier_smoke_mode {
+  NORMAL,
+  PRE_ERROR,
+  POST_ERROR
 };
 
 class PQ_worker_constant_ref_cleanup_smoke {
@@ -779,6 +786,271 @@ bool pq_run_worker_ref_local_row_smoke(
   }
   pq_global_stats.worker_ref_local_row_success.fetch_add(
       1, std::memory_order_relaxed);
+
+  cleanup();
+  return false;
+}
+
+bool pq_run_worker_ref_pqrm_carrier_smoke(
+    THD *thd, TABLE *leader_table,
+    const PQ_worker_constant_ref_context_shape &ctx,
+    PQ_worker_ref_carrier_smoke_mode mode) {
+  pq_global_stats.worker_ref_carrier_attempts.fetch_add(
+      1, std::memory_order_relaxed);
+
+  if (thd == nullptr || leader_table == nullptr || leader_table->file == nullptr ||
+      !ctx.owned_key_bytes || !ctx.exact_read || !ctx.constant_ref ||
+      ctx.reverse || ctx.owned_key.empty() ||
+      ctx.owned_key.size() != ctx.key_length) {
+    pq_global_stats.worker_ref_carrier_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  Gather_operator gather(1);
+  PQ_worker_info *worker = nullptr;
+  bool cleanup_reached = false;
+  bool cleanup_error = false;
+  bool index_open = false;
+  bool exchange_inited = false;
+  Exchange_nosort exchange(1, PQ_MQ_DEFAULT_RING_SIZE);
+
+  auto cleanup = [&]() {
+    if (cleanup_reached) return;
+    cleanup_reached = true;
+    if (exchange_inited) {
+      exchange.cleanup();
+      exchange_inited = false;
+    }
+    if (worker != nullptr) {
+      if (index_open && worker->m_open_ctx.worker_handler != nullptr) {
+        (void)worker->m_open_ctx.worker_handler->ha_index_end();
+        index_open = false;
+      }
+      if (worker->m_worker_ctx != nullptr &&
+          worker->m_open_ctx.worker_handler != nullptr) {
+        (void)worker->m_open_ctx.worker_handler->pq_worker_scan_end(
+            worker->m_worker_ctx);
+        worker->m_worker_ctx = nullptr;
+      }
+      if (worker->m_open_ctx.worker_table != nullptr) {
+        pq_close_worker_table(&worker->m_open_ctx, cleanup_error);
+      }
+      if (worker->m_worker_thd != nullptr) {
+        pq_destroy_worker_thd(worker);
+        thd->store_globals();
+      }
+    }
+    gather.destroy();
+    pq_global_stats.worker_ref_carrier_cleanup.fetch_add(
+        1, std::memory_order_relaxed);
+  };
+
+  bool failed = gather.init();
+  worker = gather.get_worker(0);
+  if (!failed && worker != nullptr) {
+    worker->m_open_ctx.leader_table = leader_table;
+    worker->m_open_ctx.actual_dop = 1;
+  }
+  failed = failed || worker == nullptr ||
+           pq_create_worker_thd(worker, &gather) == nullptr;
+  if (failed) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_carrier_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  failed = pq_open_worker_table(&worker->m_open_ctx);
+
+  TABLE *worker_table = worker->m_open_ctx.worker_table;
+  handler *worker_handler = worker->m_open_ctx.worker_handler;
+  const bool ownership_ok =
+      !failed && worker->m_open_ctx.worker_thd == worker->m_worker_thd &&
+      worker_table != nullptr && worker_handler != nullptr &&
+      worker_table != leader_table && worker_handler != leader_table->file &&
+      worker_table->file == worker_handler &&
+      worker_table->record[0] != leader_table->record[0] &&
+      worker_table->in_use == worker->m_worker_thd &&
+      worker->m_worker_ctx == nullptr;
+
+  if (failed || !ownership_ok) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_carrier_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  if (exchange.init()) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_carrier_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+  exchange_inited = true;
+
+  auto materialize_one = [&](Exchange_nosort::Materialize_status *status) {
+    if (exchange.materialize_next_record_image_status(leader_table, status)) {
+      pq_global_stats.worker_ref_carrier_failures.fetch_add(
+          1, std::memory_order_relaxed);
+      return true;
+    }
+    return false;
+  };
+
+  if (mode == PQ_worker_ref_carrier_smoke_mode::PRE_ERROR) {
+    if (exchange.enqueue_error_smoke(0)) {
+      cleanup_error = true;
+      cleanup();
+      pq_global_stats.worker_ref_carrier_failures.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+    Exchange_nosort::Materialize_status status =
+        Exchange_nosort::Materialize_status::WOULD_BLOCK;
+    if (materialize_one(&status) ||
+        status != Exchange_nosort::Materialize_status::ERROR) {
+      cleanup_error = true;
+      cleanup();
+      pq_global_stats.worker_ref_carrier_failures.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+    pq_global_stats.worker_ref_carrier_errors.fetch_add(
+        1, std::memory_order_relaxed);
+    cleanup();
+    return false;
+  }
+
+  std::vector<uchar> worker_lookup(ctx.owned_key.begin(), ctx.owned_key.end());
+  if (worker_lookup.size() != ctx.key_length) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_carrier_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  if (worker_handler->ha_index_init(ctx.keyno, false)) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_carrier_unsupported.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+  index_open = true;
+
+  key_range worker_ref_key{};
+  worker_ref_key.key = worker_lookup.data();
+  worker_ref_key.length = ctx.key_length;
+  worker_ref_key.keypart_map = ctx.keypart_map;
+  worker_ref_key.flag = HA_READ_KEY_EXACT;
+
+  uint enqueued_rows = 0;
+  int error = worker_handler->ha_index_read_map(
+      worker_table->record[0], worker_ref_key.key, worker_ref_key.keypart_map,
+      worker_ref_key.flag);
+  while (error == 0) {
+    if (exchange.enqueue_record_image(0, worker_table)) {
+      error = HA_ERR_INTERNAL_ERROR;
+      break;
+    }
+    ++enqueued_rows;
+    if (mode == PQ_worker_ref_carrier_smoke_mode::POST_ERROR ||
+        enqueued_rows >= kPQSecondaryCoveringMaxEstimatedRows) {
+      break;
+    }
+    error = worker_handler->ha_index_next_same(
+        worker_table->record[0], worker_ref_key.key, worker_ref_key.length);
+  }
+
+  if (error == HA_ERR_KEY_NOT_FOUND || error == HA_ERR_END_OF_FILE) {
+    error = 0;
+  }
+
+  if (error != 0) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_carrier_failures.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  if (mode == PQ_worker_ref_carrier_smoke_mode::POST_ERROR) {
+    if (enqueued_rows == 0 || exchange.enqueue_error_smoke(0)) {
+      cleanup_error = true;
+      cleanup();
+      pq_global_stats.worker_ref_carrier_failures.fetch_add(
+          1, std::memory_order_relaxed);
+      return false;
+    }
+  } else if (exchange.enqueue_finish_smoke(0)) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_carrier_failures.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  uint materialized_rows = 0;
+  bool saw_finish = false;
+  bool saw_error = false;
+  for (;;) {
+    Exchange_nosort::Materialize_status status =
+        Exchange_nosort::Materialize_status::WOULD_BLOCK;
+    if (materialize_one(&status)) {
+      cleanup_error = true;
+      cleanup();
+      return false;
+    }
+    if (status == Exchange_nosort::Materialize_status::ROW) {
+      ++materialized_rows;
+      continue;
+    }
+    if (status == Exchange_nosort::Materialize_status::EOF_REACHED) {
+      saw_finish = true;
+      break;
+    }
+    if (status == Exchange_nosort::Materialize_status::ERROR) {
+      saw_error = true;
+      break;
+    }
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_carrier_failures.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  const bool expected_status =
+      (mode == PQ_worker_ref_carrier_smoke_mode::POST_ERROR)
+          ? (saw_error && !saw_finish)
+          : (saw_finish && !saw_error);
+  if (!expected_status || materialized_rows != enqueued_rows) {
+    cleanup_error = true;
+    cleanup();
+    pq_global_stats.worker_ref_carrier_failures.fetch_add(
+        1, std::memory_order_relaxed);
+    return false;
+  }
+
+  pq_global_stats.worker_ref_carrier_rows.fetch_add(
+      materialized_rows, std::memory_order_relaxed);
+  if (saw_finish) {
+    pq_global_stats.worker_ref_carrier_finishes.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  if (saw_error) {
+    pq_global_stats.worker_ref_carrier_errors.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  if (mode == PQ_worker_ref_carrier_smoke_mode::NORMAL) {
+    pq_global_stats.worker_ref_carrier_success.fetch_add(
+        1, std::memory_order_relaxed);
+  }
 
   cleanup();
   return false;
@@ -1502,6 +1774,39 @@ class PQSecondaryCoveringRefIterator final : public TableRowIterator {
             1, std::memory_order_relaxed);
       } else {
         (void)pq_run_worker_ref_local_row_smoke(thd(), table(), ctx, true);
+      }
+    });
+    DBUG_EXECUTE_IF("pq_worker_ref_pqrm_carrier_smoke", {
+      PQ_worker_constant_ref_context_shape ctx;
+      if (pq_build_worker_constant_ref_context_shape(table(), m_ref, ref_key,
+                                                     &ctx)) {
+        pq_global_stats.worker_ref_carrier_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+      } else {
+        (void)pq_run_worker_ref_pqrm_carrier_smoke(
+            thd(), table(), ctx, PQ_worker_ref_carrier_smoke_mode::NORMAL);
+      }
+    });
+    DBUG_EXECUTE_IF("pq_worker_ref_pqrm_carrier_pre_error_smoke", {
+      PQ_worker_constant_ref_context_shape ctx;
+      if (pq_build_worker_constant_ref_context_shape(table(), m_ref, ref_key,
+                                                     &ctx)) {
+        pq_global_stats.worker_ref_carrier_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+      } else {
+        (void)pq_run_worker_ref_pqrm_carrier_smoke(
+            thd(), table(), ctx, PQ_worker_ref_carrier_smoke_mode::PRE_ERROR);
+      }
+    });
+    DBUG_EXECUTE_IF("pq_worker_ref_pqrm_carrier_post_error_smoke", {
+      PQ_worker_constant_ref_context_shape ctx;
+      if (pq_build_worker_constant_ref_context_shape(table(), m_ref, ref_key,
+                                                     &ctx)) {
+        pq_global_stats.worker_ref_carrier_unsupported.fetch_add(
+            1, std::memory_order_relaxed);
+      } else {
+        (void)pq_run_worker_ref_pqrm_carrier_smoke(
+            thd(), table(), ctx, PQ_worker_ref_carrier_smoke_mode::POST_ERROR);
       }
     });
 

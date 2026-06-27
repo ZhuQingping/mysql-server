@@ -23,7 +23,8 @@ M11-F6d-2 positive ref path design split completed and review accepted；
 M11-F6e-1 worker-local constant-ref row smoke completed locally and review
 accepted；M11-F6e-2 worker-local last-key edge hardening completed locally and
 review accepted；M11-F6e-3 visible / MQ route design completed locally and
-review accepted。
+review accepted；M11-F6e-4 debug-only `Exchange_nosort` / `PQRM` typed
+row-image carrier probe completed locally and is waiting independent review。
 Real worker-side ICP positive row production, worker-side visible ref execution,
 and commercial `ha_pq_next(void*)` positive ref path remain blocked。
 
@@ -3866,6 +3867,111 @@ F6e-3 Review Result:
 - Blocking findings: none；
 - Safe next task: F6e-4 debug-only `Exchange_nosort` / `PQRM` typed row-image
   carrier probe, with the F6e-3 hard stops explicitly inherited。
+
+#### M11-F6e-4: Debug-only PQRM Typed Row-image Carrier Probe
+
+Status: local source / MTR result / docs update completed；independent
+Code / Docs / Test Review accepted。
+
+Goal:
+
+- connect the F6e worker-local exact ref row smoke to the existing
+  `Exchange_nosort` typed record-image carrier helpers under DBUG only；
+- prove ROW、FINISH、ERROR status can be produced and observed through the
+  current `PQRM` fixed record-image path without changing visible SQL behavior；
+- keep `PQWR`、`Query_result_mq::send_data()`、production
+  `Exchange_nosort` / `PQRM` behavior, production `PQRefIterator::Read()`,
+  production `PQblockScanIterator::Read()`, `handler::ha_pq_next()` and
+  `pq_worker_scan_next()` closed。
+
+Implementation:
+
+- added eight F6e-4 status counters:
+  `Parallel_worker_ref_carrier_attempts`,
+  `Parallel_worker_ref_carrier_success`,
+  `Parallel_worker_ref_carrier_rows`,
+  `Parallel_worker_ref_carrier_finishes`,
+  `Parallel_worker_ref_carrier_errors`,
+  `Parallel_worker_ref_carrier_cleanup`,
+  `Parallel_worker_ref_carrier_unsupported`,
+  `Parallel_worker_ref_carrier_failures`；
+- added DBUG-only `pq_run_worker_ref_pqrm_carrier_smoke()` in
+  `sql/parallel_query/pq_iterators.cc`；
+- added three DBUG hooks in `PQSecondaryCoveringRefIterator::Init()`:
+  `pq_worker_ref_pqrm_carrier_smoke`,
+  `pq_worker_ref_pqrm_carrier_pre_error_smoke`,
+  `pq_worker_ref_pqrm_carrier_post_error_smoke`；
+- normal smoke opens an independent worker THD/TABLE, reads exact ref rows via
+  worker handler `ha_index_read_map()` / `ha_index_next_same()`, enqueues row
+  images with `Exchange_nosort::enqueue_record_image()`, then sends FINISH and
+  materializes through `materialize_next_record_image_status()`；
+- pre-error smoke sends ERROR before any row；
+- post-error smoke sends one row and then ERROR, with no FINISH-as-EOF；
+- default/no-DBUG windows assert all F6e-4 counters stay zero；
+- F6e-4 MTR protects that workers、range dispatch、worker-result MQ rows and
+  callback rows do not grow。
+
+Validation:
+
+- RED:
+  `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 pq_commercial_ref_icp --vardir=/tmp/pq_f6e4_red_vardir --tmpdir=/tmp/pq_f6e4_red_tmp`
+  failed because F6e-4 status variables and debug hook behavior were absent；
+- Build:
+  `cmake --build build-ninja --target mysqld -j 8` passed；
+- Result refresh:
+  `pq_commercial_ref_icp` and `pq_stats` produced result-only diffs for the new
+  counters and additional F6e-4 visible leader-local ref queries；
+- GREEN:
+  `TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 pq_commercial_ref_icp pq_stats --vardir=/tmp/pq_f6e4_final_vardir --tmpdir=/tmp/pq_f6e4_final_tmp`
+  passed。
+
+Hard Stops Still Active:
+
+- no visible worker-side ref gate；
+- no production `Exchange_nosort` / `PQRM` behavior or wire change；
+- no production `Query_result_mq::send_data()` / `PQWR` row carrier；
+- no production `PQRefIterator::Read()` / `PQblockScanIterator::Read()`；
+- no `handler::ha_pq_next()` or `pq_worker_scan_next()` positive path；
+- no worker-side ICP clone / refix / pushdown；
+- no partition、MVI、reverse、ORDER BY、native `Record_buffer` positive path。
+
+Review Prompt - M11-F6e-4:
+
+请作为 M11-F6e-4 Code / Docs / Test Review Agent，只读审查当前 patch：
+
+1. F6e-4 是否只通过 DBUG-only hook 使用 `Exchange_nosort` typed
+   record-image helper，不改变 production Exchange / PQRM / PQWR 行为；
+2. worker THD/TABLE、handler index open/end、Exchange cleanup、Gather cleanup
+   生命周期是否足够安全，错误路径是否不会泄漏或 silent fallback；
+3. normal / pre-error / post-error 三个窗口是否分别覆盖 ROW+FINISH、
+   pre-row ERROR、post-row ROW 后 ERROR，且 post-row ERROR 不被当作 EOF；
+4. MTR 是否证明 no-DBUG counters 为零，DBUG counters 正增长，且
+   workers/ranges/worker-result/callback 保护计数不增长；
+5. 文档是否准确说明 F6e-4 仍不是 visible worker-side ref execution。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`
+- Blocking findings
+- Non-blocking risks
+- Required fixes, if any
+
+F6e-4 Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Required fixes: none；
+- Non-blocking risk: MTR uses `>=` positive thresholds rather than exact
+  per-window vectors, but source enforces the post-row ERROR path as
+  `saw_error && !saw_finish` and failure-counts wrong EOF / FINISH behavior；
+- Review confirmed no production `PQWR`、`Query_result_mq::send_data()`、
+  `PQRefIterator::Read()`、`PQblockScanIterator::Read()`、`ha_pq_next()` or
+  `pq_worker_scan_next()` path was opened；
+- Review confirmed lifecycle cleanup covers Exchange、handler index、
+  worker scan context if present、worker TABLE、worker THD and Gather；
+- Review confirmed MTR protects no-DBUG zero deltas, DBUG positive counters,
+  zero unsupported / failures, and zero workers / ranges / worker-result /
+  callback growth。
 
 Required Future MTR Windows:
 
