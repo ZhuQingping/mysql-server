@@ -17,7 +17,8 @@
   constant-ref row smoke 已完成本地编码和 targeted build/MTR，独立
   code/docs/test review accepted。F6e-1 只证明 worker TABLE / handler 上的
   DBUG-only exact ref local row access，不打开 commercial `ha_pq_next(void*)`
-  或 visible worker-side ref execution。
+  或 visible worker-side ref execution。F6e-2 test/docs-only last-key edge
+  hardening 已完成，targeted MTR passed，独立 test/docs review accepted。
 - Active update: 商用 Parallel Query 全量迁移冲刺已启动，权威任务板为
   [commercial-full-port-sprint.md](commercial-full-port-sprint.md)。当前目标
   已从 F6b 小步 contract/smoke 推进切换为：以

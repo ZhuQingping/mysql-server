@@ -21,8 +21,10 @@ inventory / contract completed locally and review accepted；M11-F6d-1 no-row
 worker TABLE / handler contract smoke completed locally and review accepted；
 M11-F6d-2 positive ref path design split completed and review accepted；
 M11-F6e-1 worker-local constant-ref row smoke completed locally and review
-accepted。Real worker-side ICP positive row production, worker-side visible ref
-execution, and commercial `ha_pq_next(void*)` positive ref path remain blocked。
+accepted；M11-F6e-2 worker-local last-key edge hardening completed locally and
+review accepted。
+Real worker-side ICP positive row production, worker-side visible ref execution,
+and commercial `ha_pq_next(void*)` positive ref path remain blocked。
 
 M11-E 已收口：ORDER BY source work 停止，真实 ORDER BY 执行链路保持
 blocked。M11-F 只处理 ref / ICP worker path，不与 M11-E ORDER BY、
@@ -3629,6 +3631,74 @@ F6e-1 Review Result:
 - Safe next task: proceed only through another narrow reviewed step；continue
   to keep commercial `ha_pq_next(void*)`, visible worker-side ref execution,
   and production MQ row output behind separate design/review gates。
+
+#### M11-F6e-2: Worker-local Last-key Edge Hardening
+
+Status: test/docs-only update completed locally；independent test/docs review
+accepted。
+
+Goal:
+
+- harden F6e-1 worker-local exact ref smoke with an explicit last-key success
+  window；
+- keep this as a test/docs-only task；no source changes；
+- continue proving no worker thread, no range dispatch, no MQ row, no callback
+  row and no typed pull path growth。
+
+Implementation:
+
+- extended the existing `pq_worker_ref_local_row_smoke` MTR window to run
+  `k=50` as a successful worker-local exact ref lookup before the injected
+  failure window；
+- tightened expected lower bounds:
+  - attempts `>= 4`；
+  - success `>= 3`；
+  - local rows `>= 3`；
+  - cleanup `>= 4`；
+  - ownership success `>= 3`；
+- updated affected aggregate counter expectations caused by one additional
+  visible leader-local M9-C2 query in the test；
+- did not add or change any source code。
+
+TDD / Verification:
+
+- RED: targeted `pq_commercial_ref_icp` failed with expected/result mismatch
+  after adding the last-key success query and stricter thresholds；
+- GREEN targeted MTR passed after expected-result update:
+  `cd build-ninja/mysql-test && TMPDIR=/tmp ./mtr --suite=parallel_query
+  --parallel=1 pq_commercial_ref_icp pq_stats
+  --vardir=/tmp/pq_f6e2_green_vardir
+  --tmpdir=/tmp/pq_f6e2_green_tmp`。
+
+Review Prompt - M11-F6e-2:
+
+请作为 M11-F6e-2 Test / Docs Review Agent，只读审查当前 patch：
+
+1. F6e-2 是否确实是 test/docs-only，不包含源码行为变化；
+2. 新增 `k=50` worker-local success 是否补齐 last-key positive edge；
+3. attempts/success/rows/cleanup/ownership 阈值是否与新增窗口一致；
+4. workers/ranges/MQ/callback/typed-pull zero-growth 护栏是否仍保留；
+5. 文档是否仍明确 commercial `ha_pq_next(void*)`、visible worker-side ref 和
+   production MQ 路径保持关闭。
+
+输出：
+
+- Verdict: `ACCEPT` 或 `REVISE`；
+- Blocking findings；
+- Required fixes；
+- Non-blocking risks；
+- Safe next task recommendation。
+
+F6e-2 Review Result:
+
+- Verdict: `ACCEPT`；
+- Blocking findings: none；
+- Required fixes: none；
+- Non-blocking risks: unrelated untracked files remain in the working tree,
+  but tracked F6e-2 diff is limited to the intended test/docs files；
+- Safe next task: proceed only through another narrow reviewed step；visible
+  worker-side ref, commercial `ha_pq_next(void*)`, and production MQ row output
+  still require separate design and MTR gates。
 
 Required Future MTR Windows:
 
