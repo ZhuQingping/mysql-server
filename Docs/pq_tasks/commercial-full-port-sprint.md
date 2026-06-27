@@ -2502,7 +2502,7 @@ Notes:
 
 #### Batch D1.6z - Commercial secondary range endpoint subset
 
-Status: completed; independent review accepted, pending commit.
+Status: completed; independent review accepted and committed as `691a4c5a73f`.
 
 目标：
 
