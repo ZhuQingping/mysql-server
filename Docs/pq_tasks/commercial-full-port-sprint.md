@@ -2607,3 +2607,47 @@ Notes:
 
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
+
+#### Batch D1.6v - Commercial record-buffer diagnostics MTR
+
+Status: completed; independent review accepted after documentation refresh.
+
+目标：
+
+- 为商业 `pq_record_buffer` 迁移建立一个小型 targeted MTR 护栏；
+- 从较大的 `pq_worker_attach_contract_smoke` 中抽出 worker
+  record-buffer probe 和 ICP/record-buffer negative probe；
+- 验证当前 record-buffer 诊断仍是 debug-only、fail-closed，不增长
+  `Parallel_queries_executed`、worker launch、range dispatch 或 secondary
+  row counters；
+- 不启用商用 native Record_buffer / InnoDB row cache 主路径。
+
+Implementation:
+
+- 新增 `pq_commercial_record_buffer_diag` MTR；
+- 使用单表 fullscan 形态触发 `PQTableScanIterator` 的
+  `pq_worker_attach_contract_smoke`；
+- 断言 `Parallel_worker_record_buffer_null_probes`、
+  `Parallel_worker_icp_record_buffer_reject_probes`、attach attempt/success/
+  cleanup counters；
+- 同时断言用户可见 PQ 执行相关 counters 不增长。
+
+Validation:
+
+- `git diff --check` passed；
+- targeted MTR passed:
+  `pq_commercial_record_buffer_diag`
+  `pq_worker_attach_contract_smoke`
+  `pq_stats`。
+
+Review:
+
+- independent Review Agent found no Critical or Important issues；
+- one Minor issue was fixed: documentation status, validation, and review
+  sections were updated after the targeted verification run。
+
+Notes:
+
+- source code unchanged；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。

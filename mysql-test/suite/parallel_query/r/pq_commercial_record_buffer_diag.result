@@ -1,0 +1,174 @@
+DROP TABLE IF EXISTS pq_record_buffer_diag_t;
+CREATE TABLE pq_record_buffer_diag_t (
+id INT PRIMARY KEY,
+v INT NOT NULL,
+pad CHAR(8)
+) ENGINE=InnoDB;
+INSERT INTO pq_record_buffer_diag_t VALUES
+(1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c');
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=1;
+SET @rb_null_before = COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_null_probes'), 0);
+SET @rb_nonnull_before = COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_nonnull_probes'), 0);
+SET @attach_attempts_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_attempts');
+SET @attach_success_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_success');
+SET @attach_cleanup_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_cleanup_calls');
+SET @queries_executed_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed');
+SET @workers_launched_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_workers_launched');
+SET @ranges_dispatched_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched');
+SET @secondary_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced');
+SET @old_debug=@@session.debug;
+SET SESSION debug="d,pq_worker_attach_contract_smoke,pq_worker_record_buffer_probe_smoke";
+SELECT id, v FROM pq_record_buffer_diag_t WHERE v >= 0;
+id	v
+1	10
+2	20
+3	30
+SET SESSION debug=@old_debug;
+SELECT COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_null_probes'), 0) -
+@rb_null_before >= 1 AS rb_probe_null_seen;
+rb_probe_null_seen
+1
+SELECT COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_nonnull_probes'), 0) -
+@rb_nonnull_before AS rb_probe_nonnull_delta;
+rb_probe_nonnull_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_attempts') -
+@attach_attempts_before) >= 1 AS rb_attach_attempt_seen;
+rb_attach_attempt_seen
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_success') -
+@attach_success_before) >= 1 AS rb_attach_success_seen;
+rb_attach_success_seen
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_attach_smoke_cleanup_calls') -
+@attach_cleanup_before) >= 1 AS rb_attach_cleanup_seen;
+rb_attach_cleanup_seen
+1
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed') -
+@queries_executed_before) AS rb_queries_executed_delta;
+rb_queries_executed_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
+@workers_launched_before) AS rb_workers_launched_delta;
+rb_workers_launched_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched') -
+@ranges_dispatched_before) AS rb_ranges_dispatched_delta;
+rb_ranges_dispatched_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced') -
+@secondary_rows_before) AS rb_secondary_rows_delta;
+rb_secondary_rows_delta
+0
+SET @icp_rb_reject_before = COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_icp_record_buffer_reject_probes'), 0);
+SET @rb_null_before = COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_null_probes'), 0);
+SET @rb_nonnull_before = COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_nonnull_probes'), 0);
+SET @queries_executed_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed');
+SET @workers_launched_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_workers_launched');
+SET @ranges_dispatched_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched');
+SET @secondary_rows_before = (
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced');
+SET SESSION debug="d,pq_worker_attach_contract_smoke,pq_worker_icp_record_buffer_negative_smoke";
+SELECT id, v FROM pq_record_buffer_diag_t WHERE v >= 0;
+id	v
+1	10
+2	20
+3	30
+SET SESSION debug=@old_debug;
+SELECT COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_icp_record_buffer_reject_probes'), 0) -
+@icp_rb_reject_before >= 1 AS icp_rb_reject_seen;
+icp_rb_reject_seen
+1
+SELECT COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_null_probes'), 0) -
+@rb_null_before >= 1 AS icp_rb_null_probe_seen;
+icp_rb_null_probe_seen
+1
+SELECT COALESCE((
+SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_worker_record_buffer_nonnull_probes'), 0) -
+@rb_nonnull_before AS icp_rb_nonnull_delta;
+icp_rb_nonnull_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_queries_executed') -
+@queries_executed_before) AS icp_rb_queries_executed_delta;
+icp_rb_queries_executed_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_workers_launched') -
+@workers_launched_before) AS icp_rb_workers_launched_delta;
+icp_rb_workers_launched_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_ranges_dispatched') -
+@ranges_dispatched_before) AS icp_rb_ranges_dispatched_delta;
+icp_rb_ranges_dispatched_delta
+0
+SELECT (
+(SELECT VARIABLE_VALUE + 0 FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'Parallel_secondary_rows_produced') -
+@secondary_rows_before) AS icp_rb_secondary_rows_delta;
+icp_rb_secondary_rows_delta
+0
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+DROP TABLE pq_record_buffer_diag_t;
