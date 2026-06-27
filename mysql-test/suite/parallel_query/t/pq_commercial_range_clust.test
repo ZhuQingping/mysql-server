@@ -1,6 +1,7 @@
 # Test: pq_commercial_range_clust
-# Commercial clustered primary-key range subset. Current branch keeps these
-# shapes outside PQ eligibility until commercial range worker scan is enabled.
+# Commercial clustered primary-key range subset. The current branch executes
+# simple single-column primary ranges through the leader-local PQ path while
+# keeping unsupported shapes fail-closed.
 
 --source include/have_innodb_16k.inc
 --source include/have_debug.inc
@@ -125,6 +126,10 @@ SET @pq_workers_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_workers_launched');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
 SET @pq_primary_range_probe_attempts_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -148,6 +153,9 @@ SELECT
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
     AS workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_scanned_delta,
   ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_primary_range_probe_attempts') -
    @pq_primary_range_probe_attempts_before) >= 1
@@ -169,6 +177,10 @@ SET @pq_workers_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_workers_launched');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
 SET @pq_primary_range_probe_attempts_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
@@ -192,6 +204,9 @@ SELECT
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
     AS workers_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_scanned_delta,
   ((SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_primary_range_probe_attempts') -
    @pq_primary_range_probe_attempts_before) >= 1
@@ -245,9 +260,41 @@ SELECT
    @pq_primary_range_probe_unsupported_before) >= 1
     AS primary_range_probe_unsupported_seen;
 
+CREATE TABLE pq_range_clust_composite (
+  id1 INT NOT NULL,
+  id2 INT NOT NULL,
+  col2 INT,
+  PRIMARY KEY(id1, id2)
+) ENGINE=InnoDB;
+
+INSERT INTO pq_range_clust_composite VALUES
+  (1,1,10),(2,1,20),(3,1,30),(4,1,40);
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+--sorted_result
+SELECT id1, id2, col2 FROM pq_range_clust_composite FORCE INDEX(PRIMARY)
+  WHERE id1 BETWEEN 2 AND 3;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_default_dop=4;
 SET SESSION parallel_cost_threshold=10000;
 
+DROP TABLE pq_range_clust_composite;
 DROP TABLE pq_range_clust_t1;

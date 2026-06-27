@@ -2500,6 +2500,61 @@ Notes:
 - full `parallel_query` suite intentionally not run during development per
   current constraint。
 
+#### Batch D1.6ae - Primary clustered range endpoint flags
+
+Status: completed; independent review accepted.
+
+目标：
+
+- 对齐商用 primary clustered range endpoint 行为，支持 `BETWEEN` 和
+  `>`/`<` 组合谓词进入当前 primary range PQ 路径；
+- 使用 `index_read()` 根据真实 MySQL endpoint flag 定位 start/end
+  boundary tuple，避免用整数 `+1` 之类的类型相关近似；
+- 继续保持反向扫描、multi-range OR、分区表、ICP、非 primary、非 InnoDB、
+  多列/非单列 primary key fail-closed/串行回退；
+- 本批仍为 leader-local row sink，不启动 worker，保持当前 64 行保护上限。
+
+Implementation:
+
+- `pq_iterators.cc` 放宽 primary clustered range endpoint gate：
+  start 支持 `HA_READ_KEY_OR_NEXT`、`HA_READ_AFTER_KEY`、
+  `HA_READ_KEY_EXACT`，end 支持 `HA_READ_BEFORE_KEY`、
+  `HA_READ_AFTER_KEY`、`HA_READ_KEY_EXACT`；
+- primary clustered range path 增加单列 primary key gate，避免把多列或特殊
+  key 误送入当前 V1 path；
+- `ha_innodb_pq.cc` 新增 primary range boundary seek helper，通过
+  `index_read()` 捕获实际 start/end tuple；
+- boundary seek 前后保存并恢复 `active_index`、pushed ICP 状态和
+  `row_prebuilt_t` template 相关状态；
+- `row0sel.cc` 在 `pq_index_read` 模式下禁用 record buffer，并在
+  `row_search_mvcc()` normal return 时把当前 record 转成 `pq_tuple`；
+- `ha_innodb.cc` 在 `pq_index_read` 调用期间临时关闭 `idx_cond`，结束后恢复；
+- `pq_commercial_range_clust` 增加 `BETWEEN 4 AND 8` 和
+  `id > 3 AND id < 10` 的用户可见断言，验证 `Parallel_queries_executed`
+  增长且 rows scanned 分别为 5/6；
+- `pq_commercial_range_clust` 增加 composite primary key fallback 断言，
+  验证多列 primary key 不进入当前 leader-local primary range PQ path。
+
+Validation:
+
+- `git diff --check` passed；
+- `cmake --build build-ninja --target mysqld -j 8` passed；
+- `./mtr --suite=parallel_query --parallel=1 pq_commercial_range_clust pq_stats`
+  passed；
+- `--record pq_commercial_range_clust` 实际完成并刷新 result，但 MTR
+  harness 在复制 result 时返回 errno 1；已用非 record 模式复跑通过确认。
+
+Review:
+
+- initial independent Review Agent found two Important issues: primary
+  single-column gate was missing and debug smoke boundary seek could leak
+  handler template state；
+- fixes applied: primary gate is limited to single-column primary keys, secondary
+  key gates are unchanged, and debug smoke keeps the old direct tuple conversion；
+- final independent Review Agent accepted with no Critical or Important issues；
+- full `parallel_query` suite intentionally not run during development per
+  current constraint。
+
 #### Batch D1.6ab - Primary clustered range partition preflight
 
 Status: completed; independent review accepted after helper naming cleanup.

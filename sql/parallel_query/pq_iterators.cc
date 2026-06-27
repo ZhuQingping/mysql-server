@@ -331,7 +331,8 @@ bool pq_primary_clustered_key_parts_are_safe(const TABLE *table, uint keyno) {
   }
 
   const KEY &key = table->key_info[keyno];
-  if (key.flags & (HA_SPATIAL | HA_MULTI_VALUED_KEY)) {
+  if (key.user_defined_key_parts != 1 ||
+      (key.flags & (HA_SPATIAL | HA_MULTI_VALUED_KEY)) != 0) {
     return false;
   }
 
@@ -386,10 +387,14 @@ bool pq_primary_clustered_range_endpoints_are_safe(QUICK_RANGE *range) {
   range->make_min_endpoint(&start_key);
   range->make_max_endpoint(&end_key);
 
-  if (start_key.keypart_map != 0 && start_key.flag != HA_READ_KEY_OR_NEXT) {
+  if (start_key.keypart_map != 0 && start_key.flag != HA_READ_KEY_OR_NEXT &&
+      start_key.flag != HA_READ_AFTER_KEY &&
+      start_key.flag != HA_READ_KEY_EXACT) {
     return false;
   }
-  if (end_key.keypart_map != 0 && end_key.flag != HA_READ_BEFORE_KEY) {
+  if (end_key.keypart_map != 0 && end_key.flag != HA_READ_BEFORE_KEY &&
+      end_key.flag != HA_READ_AFTER_KEY &&
+      end_key.flag != HA_READ_KEY_EXACT) {
     return false;
   }
   return true;

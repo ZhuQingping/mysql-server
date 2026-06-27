@@ -3560,6 +3560,9 @@ static Record_buffer *row_sel_get_record_buffer(
   if (prebuilt->m_mysql_handler == nullptr) {
     return nullptr;
   }
+  if (prebuilt->pq_index_read) {
+    return nullptr;
+  }
   return prebuilt->m_mysql_handler->ha_get_record_buffer();
 }
 
@@ -4270,6 +4273,29 @@ static void row_sel_fill_vrow(const rec_t *rec, dict_index_t *index,
     }
   }
 }
+
+static void row_sel_capture_pq_index_tuple(row_prebuilt_t *prebuilt,
+                                           const rec_t *rec,
+                                           dict_index_t *index,
+                                           mem_heap_t **heap) {
+  if (prebuilt == nullptr || !prebuilt->pq_index_read || rec == nullptr ||
+      index == nullptr || prebuilt->pq_heap == nullptr) {
+    return;
+  }
+
+  prebuilt->pq_tuple = row_rec_to_index_entry_low(
+      rec, index,
+      rec_get_offsets(rec, index, nullptr, ULINT_UNDEFINED, UT_LOCATION_HERE,
+                      heap),
+      prebuilt->pq_heap);
+  if (prebuilt->pq_tuple == nullptr) {
+    return;
+  }
+  for (size_t i = 0; i < dtuple_get_n_fields(prebuilt->pq_tuple); ++i) {
+    dfield_dup(&prebuilt->pq_tuple->fields[i], prebuilt->pq_heap);
+  }
+}
+
 /** The return type of row_compare_row_to_range() which summarizes information
 about the relation between the row being processed, and the range of the scan */
 struct row_to_range_relation_t {
@@ -6008,6 +6034,10 @@ lock_table_wait:
 normal_return:
   /*-------------------------------------------------------------*/
   que_thr_stop_for_mysql_no_error(thr, trx);
+
+  if (err == DB_SUCCESS) {
+    row_sel_capture_pq_index_tuple(prebuilt, rec, index, &heap);
+  }
 
   mtr_commit(&mtr);
 

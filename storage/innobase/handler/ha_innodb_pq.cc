@@ -123,6 +123,78 @@ class PQ_counting_row_sink final : public PQ_row_sink {
   bool m_limit_hit{false};
 };
 
+static bool pq_primary_range_start_flag_supported(const key_range *key) {
+  return key == nullptr || key->keypart_map == 0 ||
+         key->flag == HA_READ_KEY_OR_NEXT || key->flag == HA_READ_AFTER_KEY ||
+         key->flag == HA_READ_KEY_EXACT;
+}
+
+static bool pq_primary_range_end_flag_supported(const key_range *key) {
+  return key == nullptr || key->keypart_map == 0 ||
+         key->flag == HA_READ_BEFORE_KEY || key->flag == HA_READ_AFTER_KEY ||
+         key->flag == HA_READ_KEY_EXACT;
+}
+
+static bool pq_primary_range_flags_supported(const key_range *start_key,
+                                             const key_range *end_key) {
+  return pq_primary_range_start_flag_supported(start_key) &&
+         pq_primary_range_end_flag_supported(end_key);
+}
+
+static dberr_t pq_seek_primary_range_boundary(ha_innobase *handler, TABLE *table,
+                                              row_prebuilt_t *prebuilt,
+                                              uint keyno,
+                                              const key_range *key,
+                                              bool start_boundary,
+                                              dtuple_t **tuple,
+                                              bool *empty_range) {
+  if (tuple == nullptr || empty_range == nullptr) {
+    return DB_UNSUPPORTED;
+  }
+
+  *tuple = nullptr;
+  if (key == nullptr || key->keypart_map == 0) {
+    return DB_SUCCESS;
+  }
+
+  if (handler == nullptr || table == nullptr || prebuilt == nullptr ||
+      keyno >= table->s->keys || key->key == nullptr || key->length == 0 ||
+      prebuilt->pq_heap == nullptr) {
+    return DB_UNSUPPORTED;
+  }
+
+  const enum ha_rkey_function seek_flag =
+      start_boundary
+          ? (key->flag == HA_READ_AFTER_KEY ? HA_READ_AFTER_KEY
+                                            : HA_READ_KEY_OR_NEXT)
+          : (key->flag == HA_READ_BEFORE_KEY ? HA_READ_KEY_OR_NEXT
+                                             : HA_READ_AFTER_KEY);
+  const uint key_len = calculate_key_len(table, keyno, key->keypart_map);
+
+  prebuilt->pq_tuple = nullptr;
+  prebuilt->pq_index_read = true;
+  const int error =
+      handler->index_read(table->record[0], key->key, key_len, seek_flag);
+  prebuilt->pq_index_read = false;
+
+  if (error == 0) {
+    if (prebuilt->pq_tuple == nullptr) {
+      return DB_UNSUPPORTED;
+    }
+    *tuple = prebuilt->pq_tuple;
+    return DB_SUCCESS;
+  }
+
+  if (error == HA_ERR_KEY_NOT_FOUND) {
+    if (start_boundary) {
+      *empty_range = true;
+    }
+    return DB_SUCCESS;
+  }
+
+  return DB_UNSUPPORTED;
+}
+
 class InnoDB_pq_sql_leader_context final : public PQ_Leader_context {
  public:
   explicit InnoDB_pq_sql_leader_context(InnoDB_pq_leader_ctx *innodb_ctx)
@@ -811,7 +883,6 @@ int ha_innobase::pq_secondary_range_partition_smoke(
       *ranges_built = static_cast<uint>(scan_ctx.ranges().size());
     }
   }
-
   mem_heap_free(heap);
   cleanup_read_view();
 
@@ -950,10 +1021,7 @@ int ha_innobase::pq_primary_range_produce(
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
-  if (start_key != nullptr && start_key->flag != HA_READ_KEY_OR_NEXT) {
-    return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
-  }
-  if (end_key != nullptr && end_key->flag != HA_READ_BEFORE_KEY) {
+  if (!pq_primary_range_flags_supported(start_key, end_key)) {
     return pq_map_dberr_to_handler_error(DB_UNSUPPORTED, nullptr);
   }
 
@@ -988,43 +1056,17 @@ int ha_innobase::pq_primary_range_produce(
     }
   };
 
-  const KEY *key = &table->key_info[keyno];
-  mem_heap_t *heap = mem_heap_create(
-      2 * (key->actual_key_parts * sizeof(dfield_t) + sizeof(dtuple_t)),
-      UT_LOCATION_HERE);
+  mem_heap_t *heap = mem_heap_create(2 * (sizeof(btr_pcur_t) + srv_page_size / 16),
+                                     UT_LOCATION_HERE);
   if (heap == nullptr) {
     cleanup_read_view();
     return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
   }
+  m_prebuilt->pq_heap = heap;
 
-  dtuple_t *range_start = nullptr;
-  dtuple_t *range_end = nullptr;
-  dberr_t err = DB_SUCCESS;
-
-  if (start_key != nullptr && start_key->keypart_map != 0) {
-    range_start = dtuple_create(heap, key->actual_key_parts);
-    dict_index_copy_types(range_start, index, key->actual_key_parts);
-    row_sel_convert_mysql_key_to_innobase(
-        range_start, m_prebuilt->srch_key_val1, m_prebuilt->srch_key_val_len,
-        index, reinterpret_cast<const byte *>(start_key->key),
-        static_cast<ulint>(start_key->length));
-    if (range_start->n_fields == 0) {
-      err = DB_UNSUPPORTED;
-    }
-  }
-
-  if (err == DB_SUCCESS && end_key != nullptr && end_key->keypart_map != 0) {
-    range_end = dtuple_create(heap, key->actual_key_parts);
-    dict_index_copy_types(range_end, index, key->actual_key_parts);
-    row_sel_convert_mysql_key_to_innobase(
-        range_end, m_prebuilt->srch_key_val2, m_prebuilt->srch_key_val_len,
-        index, reinterpret_cast<const byte *>(end_key->key),
-        static_cast<ulint>(end_key->length));
-    if (range_end->n_fields == 0) {
-      err = DB_UNSUPPORTED;
-    }
-  }
-
+  const uint saved_active_index = active_index;
+  Item *saved_pushed_idx_cond = pushed_idx_cond;
+  const uint saved_pushed_idx_cond_keyno = pushed_idx_cond_keyno;
   dict_index_t *saved_index = m_prebuilt->index;
   const unsigned saved_read_just_key = m_prebuilt->read_just_key;
   const unsigned saved_template_type = m_prebuilt->template_type;
@@ -1036,6 +1078,7 @@ int ha_innobase::pq_primary_range_produce(
   const unsigned saved_templ_contains_fixed_point =
       m_prebuilt->templ_contains_fixed_point;
   const ulint saved_mysql_prefix_len = m_prebuilt->mysql_prefix_len;
+  const bool saved_idx_cond = m_prebuilt->idx_cond;
   const ulint saved_idx_cond_n_cols = m_prebuilt->idx_cond_n_cols;
   const bool saved_keep_other_fields_on_keyread =
       m_prebuilt->keep_other_fields_on_keyread;
@@ -1067,6 +1110,9 @@ int ha_innobase::pq_primary_range_produce(
                     saved_mysql_template.size() * sizeof(mysql_row_templ_t));
       }
     }
+    active_index = saved_active_index;
+    pushed_idx_cond = saved_pushed_idx_cond;
+    pushed_idx_cond_keyno = saved_pushed_idx_cond_keyno;
     m_prebuilt->index = saved_index;
     m_prebuilt->read_just_key = saved_read_just_key;
     m_prebuilt->template_type = saved_template_type;
@@ -1077,6 +1123,7 @@ int ha_innobase::pq_primary_range_produce(
     m_prebuilt->templ_contains_fixed_point =
         saved_templ_contains_fixed_point;
     m_prebuilt->mysql_prefix_len = saved_mysql_prefix_len;
+    m_prebuilt->idx_cond = saved_idx_cond;
     m_prebuilt->idx_cond_n_cols = saved_idx_cond_n_cols;
     m_prebuilt->keep_other_fields_on_keyread =
         saved_keep_other_fields_on_keyread;
@@ -1084,7 +1131,28 @@ int ha_innobase::pq_primary_range_produce(
     m_prebuilt->m_end_range = saved_m_end_range;
   };
 
+  dtuple_t *range_start = nullptr;
+  dtuple_t *range_end = nullptr;
+  dberr_t err = DB_SUCCESS;
+  bool empty_range = false;
+
+  const int active_result = change_active_index(keyno);
+  if (active_result != 0) {
+    err = DB_UNSUPPORTED;
+  }
+
   if (err == DB_SUCCESS) {
+    err = pq_seek_primary_range_boundary(this, table, m_prebuilt, keyno, start_key,
+                                         true, &range_start, &empty_range);
+  }
+  if (err == DB_SUCCESS && !empty_range) {
+    err = pq_seek_primary_range_boundary(this, table, m_prebuilt, keyno, end_key,
+                                         false, &range_end, &empty_range);
+  }
+
+  bool restored_prebuilt_template_state = false;
+
+  if (err == DB_SUCCESS && !empty_range) {
     m_prebuilt->index = index;
     m_prebuilt->read_just_key = 0;
     build_template(false);
@@ -1116,7 +1184,18 @@ int ha_innobase::pq_primary_range_produce(
     }
 
     restore_prebuilt_template_state();
+    restored_prebuilt_template_state = true;
+  } else if (err == DB_SUCCESS && empty_range) {
+    *row_count = 0;
   }
+
+  if (!restored_prebuilt_template_state) {
+    restore_prebuilt_template_state();
+  }
+
+  m_prebuilt->pq_heap = nullptr;
+  m_prebuilt->pq_tuple = nullptr;
+  m_prebuilt->pq_index_read = false;
 
   if (err != DB_SUCCESS) {
     *row_count = 0;
