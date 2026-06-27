@@ -6,13 +6,18 @@
 
 - Last synced: 2026-06-28
 - Latest local update: 2026-06-28 D1.8 visible fullscan void-pull gate 已完成
-  本地实现和 targeted 验证，等待独立 code/task review。该批次新增
+  本地实现、targeted 验证和独立 review，并已提交为 `3a040d891bd`。该批次新增
   `pq_visible_void_pull_fullscan_path` DBUG hook，让用户可见 clustered fullscan
   query 在 `PQTableScanIterator::Read()` 中逐行调用 worker handler
   `ha_pq_next(void*)`，并保持默认 PQWR fullscan path 不变。验证已通过：
   `mysqld` build、`pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats`
   targeted MTR。任务书和完成报告见
   [commercial-port-d18-visible-void-pull-fullscan.md](commercial-port-d18-visible-void-pull-fullscan.md)。
+- Current task selected: D1.9 default fullscan void-pull gate。该任务将普通
+  eligible DOP2 clustered fullscan 默认路径切到 D1.8 已验证的
+  `ha_pq_next(void*)` visible void-pull path，旧 PQWR record-gather 路径保留为
+  显式 DBUG regression hook。任务书见
+  [commercial-port-d19-default-fullscan-void-pull.md](commercial-port-d19-default-fullscan-void-pull.md)。
 - Current M11-F update: F6d-1 no-row worker TABLE / handler contract smoke 已
   提交为 `1a75dea8a67`，targeted build/MTR passed，独立 review accepted。
   F6d-2 positive ref path design split 已完成本地文档：下一步 F6e-1 不直接
