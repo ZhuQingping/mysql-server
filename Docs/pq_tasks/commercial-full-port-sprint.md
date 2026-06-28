@@ -219,9 +219,10 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   fullscan query 通过 `PQTableScanIterator::Read()` 调 worker handler
   `ha_pq_next(void*)`，但暂不替换默认 PQWR path。任务书和完成报告见
   [commercial-port-d18-visible-void-pull-fullscan.md](commercial-port-d18-visible-void-pull-fullscan.md)。
-- 下一步 D1.9 default fullscan void-pull gate：将普通 eligible DOP2 clustered
-  fullscan 默认路径切到 D1.8 已验证的 `ha_pq_next(void*)` visible void-pull
-  path，旧 PQWR record-gather 路径保留为显式 DBUG regression hook。任务书见
+- D1.9 default fullscan void-pull gate 已完成本地编码、targeted 验证和独立
+  review。该任务将普通 eligible DOP2 clustered fullscan 默认路径切到
+  D1.8 已验证的 `ha_pq_next(void*)` visible void-pull path，旧 PQWR
+  record-gather 路径保留为显式 DBUG regression hook。任务书和完成报告见
   [commercial-port-d19-default-fullscan-void-pull.md](commercial-port-d19-default-fullscan-void-pull.md)。
 
 ## Batch A 审计结果

@@ -167,6 +167,12 @@ class PQTableScanIterator final : public TableRowIterator {
   /** @return true when the threaded PQWR record-gather path may run. */
   bool should_enter_threaded_pqwr_record_gather_path(uint requested_dop) const;
 
+  /** @return true when the visible void-pull fullscan path may run. */
+  bool should_enter_visible_void_pull_fullscan_path(uint requested_dop) const;
+
+  /** Initialize the visible void-pull fullscan path. */
+  bool init_visible_void_pull_fullscan_path();
+
   /** @return true while serial fallback is still allowed. */
   bool can_fallback_serial() const {
     return m_runtime_state == Runtime_state::SAFE_FALLBACK;

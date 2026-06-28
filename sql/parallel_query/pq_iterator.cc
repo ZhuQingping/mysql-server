@@ -221,54 +221,6 @@ bool PQTableScanIterator::Init() {
     return init_serial_fallback();
   });
 
-  DBUG_EXECUTE_IF("pq_visible_void_pull_fullscan_path", {
-    m_gather = new Gather_operator(1);
-    if (m_gather == nullptr || m_gather->init()) {
-      cleanup_pq_resources(true);
-      PrintError(HA_ERR_INTERNAL_ERROR);
-      return true;
-    }
-
-    table()->file->pq_ref = false;
-    table()->file->pq_ref_depend = false;
-    table()->file->pq_range_type = PQ_QUICK_SELECT_NONE;
-    table()->file->ha_set_reverse_scan(false);
-    int init_error = table()->file->ha_pq_init(1, MAX_KEY);
-    if (init_error != 0 || table()->file->pq_ctx == nullptr) {
-      cleanup_pq_resources(true);
-      PrintError(init_error != 0 ? init_error : HA_ERR_INTERNAL_ERROR);
-      return true;
-    }
-    table()->file->pq_table_scan = true;
-    m_leader_ctx = static_cast<PQ_Leader_context *>(table()->file->pq_ctx);
-    m_leader_ctx_from_ha_pq_init = true;
-    m_use_visible_void_pull = true;
-
-    if (m_gather->configure_worker_open_contexts(table(), m_leader_ctx, 1)) {
-      cleanup_pq_resources(true);
-      PrintError(HA_ERR_INTERNAL_ERROR);
-      return true;
-    }
-
-    auto *worker = m_gather->get_worker(0);
-    if (worker == nullptr || pq_create_worker_thd(worker, m_gather) == nullptr ||
-        pq_open_worker_table(&worker->m_open_ctx) ||
-        worker->m_open_ctx.worker_handler->pq_worker_scan_init(
-            &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
-        worker->m_worker_ctx == nullptr) {
-      thd()->store_globals();
-      cleanup_pq_resources(true);
-      PrintError(HA_ERR_INTERNAL_ERROR);
-      return true;
-    }
-
-    thd()->store_globals();
-    pq_global_stats.visible_void_pull_selected.fetch_add(
-        1, std::memory_order_relaxed);
-    mark_pq_started();
-    return false;
-  });
-
   DBUG_EXECUTE_IF("pq_leader_row_stream_smoke", {
     pq_global_stats.leader_row_stream_smoke_attempts.fetch_add(
         1, std::memory_order_relaxed);
@@ -419,14 +371,30 @@ bool PQTableScanIterator::Init() {
   uint actual_dop = 0;
   uint requested_dop = thd()->variables.parallel_default_dop;
   if (requested_dop == 0) requested_dop = 1;
+  bool force_threaded_pqwr_record_gather_path = false;
+  DBUG_EXECUTE_IF("pq_read_threaded_pqwr_record_gather_path", {
+    force_threaded_pqwr_record_gather_path = true;
+  });
+  const bool visible_void_pull_fullscan_path =
+      !force_threaded_pqwr_record_gather_path &&
+      should_enter_visible_void_pull_fullscan_path(requested_dop);
   const bool threaded_pqwr_record_gather_path =
-      should_enter_threaded_pqwr_record_gather_path(requested_dop);
+      force_threaded_pqwr_record_gather_path ||
+      (!visible_void_pull_fullscan_path &&
+       should_enter_threaded_pqwr_record_gather_path(requested_dop));
   const bool threaded_read_shadow_path =
       !threaded_pqwr_record_gather_path &&
+      !visible_void_pull_fullscan_path &&
       should_enter_threaded_read_shadow_path(requested_dop);
   const bool read_shadow_path =
       !threaded_read_shadow_path && !threaded_pqwr_record_gather_path &&
+      !visible_void_pull_fullscan_path &&
       should_enter_read_shadow_path(requested_dop);
+
+  if (visible_void_pull_fullscan_path) {
+    return init_visible_void_pull_fullscan_path();
+  }
+
   pq_global_stats.probe_attempts.fetch_add(1, std::memory_order_relaxed);
   int error = table()->file->pq_leader_scan_init(
       thd(), &m_leader_ctx, PQ_leader_scan_mode::PROBE, requested_dop,
@@ -740,6 +708,62 @@ void PQTableScanIterator::cleanup_pq_resources(bool abort_workers) {
   m_leader_ctx_from_ha_pq_init = false;
 }
 
+bool PQTableScanIterator::init_visible_void_pull_fullscan_path() {
+  m_gather = new Gather_operator(1);
+  if (m_gather == nullptr || m_gather->init()) {
+    cleanup_pq_resources(true);
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return true;
+  }
+
+  table()->file->pq_ref = false;
+  table()->file->pq_ref_depend = false;
+  table()->file->pq_range_type = PQ_QUICK_SELECT_NONE;
+  table()->file->ha_set_reverse_scan(false);
+  int init_error = table()->file->ha_pq_init(1, MAX_KEY);
+  if (init_error != 0 || table()->file->pq_ctx == nullptr) {
+    cleanup_pq_resources(true);
+    PrintError(init_error != 0 ? init_error : HA_ERR_INTERNAL_ERROR);
+    return true;
+  }
+  table()->file->pq_table_scan = true;
+  m_leader_ctx = static_cast<PQ_Leader_context *>(table()->file->pq_ctx);
+  m_leader_ctx_from_ha_pq_init = true;
+  m_use_visible_void_pull = true;
+
+  if (m_gather->configure_worker_open_contexts(table(), m_leader_ctx, 1)) {
+    cleanup_pq_resources(true);
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return true;
+  }
+
+  auto *worker = m_gather->get_worker(0);
+  if (worker == nullptr || pq_create_worker_thd(worker, m_gather) == nullptr) {
+    thd()->store_globals();
+    cleanup_pq_resources(true);
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return true;
+  }
+
+  worker->m_worker_thd->store_globals();
+  const bool worker_init_failed =
+      pq_open_worker_table(&worker->m_open_ctx) ||
+      worker->m_open_ctx.worker_handler->pq_worker_scan_init(
+          &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
+      worker->m_worker_ctx == nullptr;
+  thd()->store_globals();
+  if (worker_init_failed) {
+    cleanup_pq_resources(true);
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return true;
+  }
+
+  pq_global_stats.visible_void_pull_selected.fetch_add(
+      1, std::memory_order_relaxed);
+  mark_pq_started();
+  return false;
+}
+
 bool PQTableScanIterator::should_enter_read_shadow_path(
     uint requested_dop) const {
   bool enabled = false;
@@ -777,6 +801,18 @@ bool PQTableScanIterator::should_enter_threaded_read_shadow_path(
          table() != nullptr &&
          table()->s != nullptr && table()->s->blob_fields == 0 &&
          table()->s->reclength > 0;
+}
+
+bool PQTableScanIterator::should_enter_visible_void_pull_fullscan_path(
+    uint requested_dop) const {
+  bool enabled = thd() != nullptr && m_join != nullptr && m_join->pq_eligible &&
+                 thd()->variables.parallel_query && requested_dop == 2;
+  DBUG_EXECUTE_IF("pq_visible_void_pull_fullscan_path", {
+    enabled = true;
+  });
+  return enabled && table() != nullptr && table()->s != nullptr &&
+         table()->s->blob_fields == 0 && table()->s->reclength > 0 &&
+         pq_table_has_read_fields(table());
 }
 
 bool PQTableScanIterator::should_enter_threaded_pqwr_record_gather_path(

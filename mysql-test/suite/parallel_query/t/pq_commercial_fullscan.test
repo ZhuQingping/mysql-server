@@ -161,8 +161,12 @@ SELECT
    WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
     AS workers_delta;
 
-# D1.7: commercial ha_pq_next(void*) fullscan bridge remains inactive unless
-# the explicit DBUG-only smoke hook is enabled.
+# D1.9: default eligible DOP2 fullscan now uses the visible ha_pq_next(void*)
+# path. The D1.7 worker-smoke counters below remain scoped to their explicit
+# smoke hook, so refresh the baseline before running that hook.
+SET SESSION parallel_query_experimental_threaded_dop4=OFF;
+SET SESSION parallel_default_dop=2;
+
 SELECT COUNT(*) AS void_pull_status_vars
   FROM performance_schema.global_status
   WHERE variable_name IN (
@@ -202,6 +206,34 @@ SET @void_pull_cleanup_before = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_worker_void_pull_cleanup');
+SET @default_void_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_selected');
+SET @default_void_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_rows');
+SET @default_void_eofs_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_eofs');
+SET @default_void_cleanup_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_cleanup');
+SET @default_void_failures_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_void_pull_failures');
+SET @default_pqwr_selected_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected');
+SET @default_pqwr_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows');
 
 --sorted_result
 SELECT id FROM t1 WHERE val >= 10;
@@ -216,6 +248,48 @@ SELECT
   (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
    WHERE variable_name = 'Parallel_worker_void_pull_cleanup') -
     @void_pull_cleanup_before AS cleanup_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_selected') -
+    @default_void_selected_before AS default_void_selected_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_rows') -
+    @default_void_rows_before AS default_void_rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_eofs') -
+    @default_void_eofs_before AS default_void_eofs_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_cleanup') -
+    @default_void_cleanup_before AS default_void_cleanup_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_void_pull_failures') -
+    @default_void_failures_before AS default_void_failures_delta;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_pqwr_record_gather_selected') -
+    @default_pqwr_selected_before AS default_pqwr_selected_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
+    @default_pqwr_rows_before AS default_pqwr_rows_delta;
+
+SET @void_pull_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_void_pull_rows');
+SET @void_pull_eofs_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_void_pull_eofs');
+SET @void_pull_unsupported_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_void_pull_unsupported');
+SET @void_pull_failures_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_worker_void_pull_failures');
 
 SET @visible_pqwr_selected_before = (
   SELECT CAST(variable_value AS UNSIGNED)
@@ -274,8 +348,8 @@ SELECT
    WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
     @visible_pqwr_rows_before AS visible_pqwr_rows_delta;
 
-# D1.8: visible fullscan void-pull gate. This is separate from the default
-# visible PQWR path until the commercial route is fully reviewed.
+# D1.8 explicit visible fullscan void-pull hook remains valid after D1.9 made
+# the same path the default eligible DOP2 fullscan route.
 SELECT COUNT(*) AS visible_void_pull_status_vars
   FROM performance_schema.global_status
   WHERE variable_name IN (

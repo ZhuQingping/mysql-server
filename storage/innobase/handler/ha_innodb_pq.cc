@@ -587,6 +587,15 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
     return pq_map_dberr_to_handler_error(DB_OUT_OF_MEMORY, nullptr);
   }
 
+  active_index = MAX_KEY;
+  const int index_result = change_active_index(active_index);
+  if (index_result != 0) {
+    ut::delete_(sql_worker);
+    ut::delete_(innodb_worker);
+    return index_result;
+  }
+  build_template(false);
+
   m_pq_worker_ctxs.push_back(innodb_worker);
   if (worker_ctx != nullptr) {
     *worker_ctx = sql_worker;
@@ -762,7 +771,7 @@ int ha_innobase::pq_worker_scan_next(void *scan_ctx [[maybe_unused]],
   DBUG_EXECUTE_IF("pq_visible_void_pull_fullscan_path", {
     return run_void_pull_bridge();
   });
-  return HA_ERR_UNSUPPORTED;
+  return run_void_pull_bridge();
 }
 
 int ha_innobase::pq_worker_scan_callback_smoke(PQ_Worker_context *worker_ctx,

@@ -12,7 +12,7 @@
 
 ## 状态
 
-Status: design prepared；coding not started。
+Status: completed；targeted build/MTR passed；independent review accepted。
 
 ## 背景
 
@@ -303,12 +303,88 @@ git push
 
 ## Acceptance Checklist
 
-- [ ] Default eligible DOP2 clustered fullscan increments
+- [x] Default eligible DOP2 clustered fullscan increments
   `Parallel_visible_void_pull_selected/rows/eofs/cleanup` and not PQWR visible
   counters.
-- [ ] Explicit `pq_visible_void_pull_fullscan_path` DBUG path remains valid.
-- [ ] Explicit `pq_read_threaded_pqwr_record_gather_path` regression path remains
+- [x] Explicit `pq_visible_void_pull_fullscan_path` DBUG path remains valid.
+- [x] Explicit `pq_read_threaded_pqwr_record_gather_path` regression path remains
   valid.
-- [ ] BLOB/TEXT fallback in `pq_commercial_fullscan` remains serial.
-- [ ] No public handler API changes.
-- [ ] No ref/range/ICP/ORDER BY/partition/MVI production path opened.
+- [x] BLOB/TEXT fallback in `pq_commercial_fullscan` remains serial.
+- [x] No public handler API changes.
+- [x] No ref/range/ICP/ORDER BY/partition/MVI production path opened.
+
+## Completion Report
+
+### 实现摘要
+
+- `PQTableScanIterator::Init()` 默认 eligible DOP2 clustered fullscan 现在优先
+  进入 D1.8 已验证的 visible void-pull path。
+- D1.8 初始化逻辑已抽成 `init_visible_void_pull_fullscan_path()`，DBUG 路径和
+  默认路径共享同一套 leader/worker lifecycle。
+- 新增 `should_enter_visible_void_pull_fullscan_path()`，默认只允许
+  `parallel_query=ON`、`parallel_default_dop=2`、`JOIN::pq_eligible`、
+  no-BLOB fullscan 表进入。
+- 显式 `pq_read_threaded_pqwr_record_gather_path` DBUG hook 优先于默认
+  void-pull，用于保留旧 PQWR record-gather regression 测试。
+- `ha_innobase::pq_worker_scan_next(void*, uchar*)` 改为在 typed worker/leader
+  context 校验通过时默认执行 callback-backed bridge，否则仍返回
+  `HA_ERR_UNSUPPORTED`。
+- typed worker scan init 对 fullscan worker handler 执行
+  `change_active_index(MAX_KEY)` 和 `build_template(false)`，保证
+  `row_sel_store_mysql_rec()` 能 materialize 完整 read_set。
+
+### RED 记录
+
+```bash
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan \
+  --vardir=/tmp/pq-d19-red-vardir \
+  --tmpdir=/tmp/pq-d19-red-tmpdir
+```
+
+RED 失败符合预期：默认查询结果正确，但
+`Parallel_visible_void_pull_selected/rows/eofs/cleanup` delta 为 `0/0/0/0`，
+证明默认路径尚未切换到 visible void-pull。
+
+### 调试记录
+
+- 首轮 GREEN 暴露 `SELECT *` 返回 `0/0/''`：typed worker scan init 未构建
+  InnoDB mysql template，worker record image 没有正确 materialize。
+- 直接 `build_template(false)` 触发崩溃：worker handler active index 未初始化。
+- 最终修复：typed worker scan init 先 `change_active_index(MAX_KEY)`，再
+  `build_template(false)`，与 InnoDB clustered fullscan 语义一致。
+- `pq_read_threaded_pqwr_record_gather` 因默认路径切换而不再自然进入 PQWR；
+  测试已改为显式 DBUG regression hook，并在代码中让该 hook 优先于默认
+  void-pull。
+
+### 已验证
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 8
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan \
+  --vardir=/tmp/pq-d19-green5-vardir \
+  --tmpdir=/tmp/pq-d19-green5-tmpdir
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats \
+  --vardir=/tmp/pq-d19-targeted2-vardir \
+  --tmpdir=/tmp/pq-d19-targeted2-tmpdir
+```
+
+### 独立 Review
+
+- Review Agent: `019f0b86-6a99-78c0-914a-614eb6d56566`
+- 结论：accepted with minor notes；无 Critical / Important findings。
+- Minor notes：`pq_commercial_fullscan.test` 中两个注释仍按 D1.8 旧语义描述
+  默认 PQWR path；已修正为 D1.9 默认 visible void-pull、PQWR 显式 regression
+  hook 的语义。
+
+### 剩余风险
+
+- D1.9 默认 fullscan 是同步 worker handler pull，还不是完整商用 worker
+  thread execution topology；`Parallel_workers_launched` 不增长。
+- 只覆盖 clustered fullscan；ref/range/ICP/ORDER BY/partition/MVI/native
+  Record_buffer 仍按既有边界处理。
