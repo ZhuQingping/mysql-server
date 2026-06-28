@@ -248,10 +248,10 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   完整 `PQ()` hint parser、range/ref/ICP、ORDER BY 和 GROUP BY 不在本小步内。
   任务书和完成报告见
   [commercial-port-d22-fullscan-dop-resolver.md](commercial-port-d22-fullscan-dop-resolver.md)。
-- D5 default fullscan multi-range coverage 已完成设计任务书，下一步进入 TDD
-  测试实现。该任务不改生产源码，新增 no-debug commercial guard，证明默认
-  DOP2/DOP4 threaded visible fullscan 能完整 drain 多个 InnoDB PQ ranges。
-  任务书见
+- D5 default fullscan multi-range coverage 已完成 test/docs-only 实现、targeted
+  验证和独立 review。该任务不改生产源码，新增 no-debug commercial guard，
+  证明默认 DOP2/DOP4 threaded visible fullscan 能完整 drain 多个 InnoDB PQ
+  ranges。任务书和完成报告见
   [commercial-port-d23-fullscan-multirange-default.md](commercial-port-d23-fullscan-multirange-default.md)。
 
 ## Batch A 审计结果

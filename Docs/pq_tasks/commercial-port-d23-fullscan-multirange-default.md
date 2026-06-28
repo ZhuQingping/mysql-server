@@ -15,7 +15,7 @@ paths. D5 adds a default-path guard without changing production source.
 
 ## 状态
 
-Status: design ready；等待 TDD 测试实现。
+Status: completed.
 
 ## 允许修改
 
@@ -85,4 +85,48 @@ Build is optional if D5 remains test/docs-only.
 
 ## Completion Report
 
-Pending.
+Status: completed.
+
+Changed files:
+
+- `mysql-test/suite/parallel_query/t/pq_commercial_fullscan_multirange.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_fullscan_multirange.result`
+- `Docs/pq_tasks/commercial-port-d23-fullscan-multirange-default.md`
+
+Implementation:
+
+- Added no-debug DOP2/DOP4 default clustered fullscan multi-range coverage.
+- The test disables experimental threaded DOP variables and does not set
+  `debug`.
+- DOP2 and DOP4 both verify:
+  - complete aggregate result over 1024 rows;
+  - executed/fallback/rows/workers deltas;
+  - threaded visible void-pull selected/rows/FINISH/workers/failures deltas;
+  - `Parallel_ranges_built` and `Parallel_ranges_dispatched` deltas are at
+    least DOP.
+
+Verification:
+
+```text
+git diff --check
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan_multirange pq_commercial_fullscan_dop \
+  pq_read_threaded_dop2_multirange pq_read_threaded_dop4_shadow_multirange \
+  --vardir=/tmp/pq-d23-final-vardir \
+  --tmpdir=/tmp/pq-d23-final-tmpdir
+```
+
+Result: all 5 tests passed.
+
+Review:
+
+- Independent review: ACCEPT, no Critical/Important findings.
+- Minor review fixes applied before commit:
+  - refreshed stale status text;
+  - explicitly reset `parallel_query_experimental_threaded_dop1=OFF` for a
+    fully hermetic no-experimental threaded DOP setup.
+
+Residual risk:
+
+- D5 is test/docs-only and does not widen production behavior.
