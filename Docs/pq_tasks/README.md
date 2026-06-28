@@ -42,6 +42,17 @@
   targeted MTR `pq_commercial_control_sysvars pq_vars
   pq_commercial_resource_sysvars` 已通过，独立 review 已 ACCEPT。任务书和完成报告见
   [commercial-port-d27-control-sysvars.md](commercial-port-d27-control-sysvars.md)。
+- Current task selected: D28 force_parallel_execute behavior alignment 已完成。
+  D28 将 D9 新增的 `force_parallel_execute` 从变量合同推进到第一步
+  商用行为：只绕过 `parallel_cost_threshold` 的 `COST_BELOW_THRESHOLD`
+  eligibility 拒绝；不绕过 `parallel_query=ON`、ORDER BY/LIMIT 等 unsupported
+  shape、DOP/resource gate，也不改 worker/InnoDB/handler/MQ/aggregation/range/ref/ICP
+  执行路径。RED/GREEN、`mysqld` build、`git diff --check` 和 targeted MTR
+  `pq_commercial_force_parallel_execute pq_explain_eligible
+  pq_explain_fallback pq_commercial_max_threads` 已本地通过，独立 review 已
+  ACCEPT，review 建议的 `parallel_query=OFF` 与 runtime DOP-cap status
+  覆盖已补充。任务书和完成报告见
+  [commercial-port-d28-force-parallel-execute.md](commercial-port-d28-force-parallel-execute.md)。
 - Previous local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
   本地编码、targeted 验证、首轮 review 修正和 final review。`parallel_default_dop`
   变量合同已对齐到 `0..1024`；DOP0 不进入 PQ；DOP1..256 eligible clustered

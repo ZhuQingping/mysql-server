@@ -2672,8 +2672,9 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   // 21. Estimated cost must reach parallel_cost_threshold
   // ================================================================
   if (join != nullptr) {
-    if (join->best_read < static_cast<double>(
-            thd->variables.parallel_cost_threshold)) {
+    if (!thd->variables.force_parallel_execute &&
+        join->best_read <
+            static_cast<double>(thd->variables.parallel_cost_threshold)) {
       return pq_reject(info, PQUnsuiteReason::COST_BELOW_THRESHOLD,
                        "estimated cost below threshold");
     }

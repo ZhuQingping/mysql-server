@@ -1,0 +1,65 @@
+# Test: pq_commercial_force_parallel_execute
+# Commercial force_parallel_execute behavior.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40);
+
+SET @saved_parallel_max_threads = @@global.parallel_max_threads;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_default_dop=2;
+SET SESSION parallel_cost_threshold=99999999;
+SET SESSION force_parallel_execute=OFF;
+
+# Without force, the high threshold rejects an otherwise supported full scan.
+EXPLAIN SELECT * FROM t1;
+
+# force_parallel_execute only bypasses the cost threshold.
+SET SESSION force_parallel_execute=ON;
+EXPLAIN SELECT * FROM t1;
+
+# force_parallel_execute must not bypass the main parallel_query switch.
+SET SESSION parallel_query=OFF;
+EXPLAIN SELECT * FROM t1;
+SET SESSION parallel_query=ON;
+
+# Unsupported shapes must still stay serial under force mode.
+EXPLAIN SELECT * FROM t1 ORDER BY val;
+EXPLAIN SELECT * FROM t1 LIMIT 2;
+
+# Resource/DOP gates must still stay serial under force mode.
+SET GLOBAL parallel_max_threads=1;
+EXPLAIN SELECT * FROM t1;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+SELECT COUNT(*) AS row_count FROM t1;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+SET GLOBAL parallel_max_threads=@saved_parallel_max_threads;
+SET SESSION force_parallel_execute=OFF;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE t1;

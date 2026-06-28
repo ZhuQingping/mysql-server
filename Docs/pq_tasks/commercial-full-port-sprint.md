@@ -40,6 +40,16 @@ Last synced: 2026-06-28
   `pq_commercial_control_sysvars pq_vars pq_commercial_resource_sysvars` pass.
   Independent review accepted. Task report:
   [commercial-port-d27-control-sysvars.md](commercial-port-d27-control-sysvars.md).
+- D28 force_parallel_execute behavior alignment: completed.
+  Wires the first commercial behavior for `force_parallel_execute`: a session
+  with PQ enabled can bypass only the `parallel_cost_threshold`
+  `COST_BELOW_THRESHOLD` eligibility rejection. Unsupported query shapes and
+  DOP/resource gates remain unchanged. RED/GREEN MTR, `mysqld` build,
+  `git diff --check`, and targeted MTR
+  `pq_commercial_force_parallel_execute pq_explain_eligible
+  pq_explain_fallback pq_commercial_max_threads` pass locally; independent
+  review accepted, and suggested test-strengthening coverage was added. Task report:
+  [commercial-port-d28-force-parallel-execute.md](commercial-port-d28-force-parallel-execute.md).
 
 ## 目标
 
