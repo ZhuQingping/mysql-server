@@ -19,11 +19,15 @@ Last synced: 2026-06-28
   review found and fixed large-value narrowing risk; targeted build/MTR passed.
   Task report:
   [commercial-port-d25-parallel-max-threads.md](commercial-port-d25-parallel-max-threads.md).
-- D8 commercial resource sysvars: in progress.
+- D8 commercial resource sysvars: completed.
   Adds the remaining commercial variable contract used by many reference MTRs:
   `parallel_rows_threshold`, `parallel_tuple_cost`, `parallel_setup_cost`, and
   `parallel_graceful_fallback`. This task intentionally does not wire those
-  variables into optimizer/execution behavior yet. Task plan:
+  variables into optimizer/execution behavior yet. `mysqld` build,
+  `git diff --check`, and targeted MTR
+  `pq_commercial_resource_sysvars pq_vars pq_commercial_max_threads` pass.
+  Independent review accepted, and lightweight re-review accepted the added
+  invalid-value coverage. Task report:
   [commercial-port-d26-resource-sysvars.md](commercial-port-d26-resource-sysvars.md).
 
 ## 目标

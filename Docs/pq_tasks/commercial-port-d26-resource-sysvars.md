@@ -16,7 +16,7 @@ row-threshold eligibility, or execution fallback behavior in D8.
 
 ## 状态
 
-Status: in progress.
+Status: completed.
 
 ## 允许修改
 
@@ -73,7 +73,7 @@ Create `pq_commercial_resource_sysvars`:
   - `parallel_graceful_fallback=OFF`, `ON`;
 - verify global values are visible where MySQL exposes session sysvars as
   global defaults;
-- verify invalid negative numeric values are rejected/truncated by sysvar
+- verify invalid negative numeric values are truncated by sysvar
   machinery where applicable.
 
 Run RED first:
@@ -105,14 +105,67 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## Completion Report
 
-Status: pending.
+Status: completed.
 
-Changed files: pending.
+Changed files:
 
-Implementation: pending.
+- `sql/system_variables.h`
+- `sql/sys_vars.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_resource_sysvars.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_resource_sysvars.result`
+- `mysql-test/suite/parallel_query/t/pq_vars.test`
+- `mysql-test/suite/parallel_query/r/pq_vars.result`
 
-Verification: pending.
+Implementation:
 
-Review: pending.
+- Added commercial-compatible session variable storage for
+  `parallel_rows_threshold`, `parallel_tuple_cost`, `parallel_setup_cost`, and
+  `parallel_graceful_fallback`.
+- Added sysvar declarations with the commercial defaults and ranges:
+  `10000`, `1.5`, `250.0`, and `ON`.
+- Kept this task contract-only. No optimizer eligibility, cost-model, fallback,
+  handler, InnoDB, hint-parser, or execution-path behavior was wired in this
+  step.
+- Extended `pq_vars` coverage so the common variable contract test observes the
+  new commercial variables.
+- Added invalid lower-bound checks showing negative numeric assignments are
+  truncated to `0` with sysvar warning 1292, matching MySQL sysvar machinery.
 
-Residual risk: pending.
+Verification:
+
+- RED observed before production changes:
+  `pq_commercial_resource_sysvars` failed with unknown
+  `parallel_rows_threshold`.
+- `git diff --check`: passed.
+- `cmake --build build-ninja --target mysqld -j 8`: passed.
+- Initial targeted MTR passed:
+
+```bash
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_resource_sysvars pq_vars pq_commercial_max_threads \
+  --vardir=/tmp/pq-d26-final-vardir \
+  --tmpdir=/tmp/pq-d26-final-tmpdir
+```
+
+- After review feedback, added negative numeric assignment coverage and reran
+  targeted MTR successfully:
+
+```bash
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_resource_sysvars pq_vars pq_commercial_max_threads \
+  --vardir=/tmp/pq-d26-final2-vardir \
+  --tmpdir=/tmp/pq-d26-final2-tmpdir
+```
+
+Review:
+
+- Independent review verdict: ACCEPT.
+- Lightweight re-review after invalid-value coverage: ACCEPT.
+
+Residual risk:
+
+- These variables are intentionally not yet connected to commercial optimizer
+  selection, cost comparison, or graceful fallback behavior. Those semantics are
+  tracked as follow-up commercial-port tasks.

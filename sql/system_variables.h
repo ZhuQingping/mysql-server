@@ -525,6 +525,30 @@ struct System_variables {
   ulonglong parallel_cost_threshold;
 
   /**
+    @sa Sys_parallel_rows_threshold
+    Minimum estimated fetched rows for commercial PQ table selection.
+  */
+  ulong parallel_rows_threshold;
+
+  /**
+    @sa Sys_parallel_tuple_cost
+    Cost of transferring one tuple from worker to leader.
+  */
+  double parallel_tuple_cost;
+
+  /**
+    @sa Sys_parallel_setup_cost
+    Cost of starting and initializing PQ workers.
+  */
+  double parallel_setup_cost;
+
+  /**
+    @sa Sys_parallel_graceful_fallback
+    Whether PQ setup failure may fall back to serial execution in place.
+  */
+  bool parallel_graceful_fallback;
+
+  /**
     @sa Sys_parallel_memory_limit
     Maximum memory (in bytes) available for parallel query allocations.
   */

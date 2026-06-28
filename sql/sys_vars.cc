@@ -7756,6 +7756,31 @@ static Sys_var_ulonglong Sys_parallel_cost_threshold(
     SESSION_VAR(parallel_cost_threshold), CMD_LINE(REQUIRED_ARG),
     VALID_RANGE(0, (ulonglong) ~(intptr)0), DEFAULT(10000), BLOCK_SIZE(1));
 
+static Sys_var_ulong Sys_parallel_rows_threshold(
+    "parallel_rows_threshold",
+    "Minimum fetched rows for a table to be considered for parallel query",
+    HINT_UPDATEABLE SESSION_VAR(parallel_rows_threshold),
+    CMD_LINE(REQUIRED_ARG), VALID_RANGE(0, ULONG_MAX), DEFAULT(10000),
+    BLOCK_SIZE(1), NO_MUTEX_GUARD, NOT_IN_BINLOG);
+
+static Sys_var_double Sys_parallel_tuple_cost(
+    "parallel_tuple_cost",
+    "Cost of transmitting one tuple from a parallel query worker to leader",
+    HINT_UPDATEABLE SESSION_VAR(parallel_tuple_cost), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, DBL_MAX), DEFAULT(1.5), NO_MUTEX_GUARD, NOT_IN_BINLOG);
+
+static Sys_var_double Sys_parallel_setup_cost(
+    "parallel_setup_cost",
+    "Cost of starting and initializing parallel query workers",
+    HINT_UPDATEABLE SESSION_VAR(parallel_setup_cost), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, DBL_MAX), DEFAULT(250.0), NO_MUTEX_GUARD, NOT_IN_BINLOG);
+
+static Sys_var_bool Sys_parallel_graceful_fallback(
+    "parallel_graceful_fallback",
+    "Allow parallel query setup failure to fall back to serial execution",
+    HINT_UPDATEABLE SESSION_VAR(parallel_graceful_fallback), CMD_LINE(OPT_ARG),
+    DEFAULT(true));
+
 static Sys_var_ulonglong Sys_parallel_memory_limit(
     "parallel_memory_limit",
     "Maximum memory in bytes available for parallel query "
