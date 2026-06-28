@@ -16,6 +16,11 @@
   pq_read_threaded_shadow_dop1 pq_read_threaded_experimental_vars_noop`
   targeted MTR。任务书和完成报告见
   [commercial-port-d22-fullscan-dop-resolver.md](commercial-port-d22-fullscan-dop-resolver.md)。
+- Current task selected: D5 default fullscan multi-range coverage 已完成设计
+  任务书，下一步进入 TDD 测试实现。D5 目标是不改生产源码，新增 no-debug
+  `pq_commercial_fullscan_multirange`，证明默认 DOP2/DOP4 threaded visible
+  fullscan 能完整 drain 多个 InnoDB PQ ranges。任务书见
+  [commercial-port-d23-fullscan-multirange-default.md](commercial-port-d23-fullscan-multirange-default.md)。
 - Previous task selected: D2 default threaded fullscan void-pull 已完成本地编码、
   targeted 验证和独立 review，并修复 review 提出的 InnoDB worker-init
   double-free 与 worker THD kill propagation 问题。普通 eligible DOP2
