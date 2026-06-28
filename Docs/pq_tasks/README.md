@@ -32,6 +32,14 @@
   独立 review 与补充覆盖后的轻量复审均已 ACCEPT。
   任务书和完成报告见
   [commercial-port-d26-resource-sysvars.md](commercial-port-d26-resource-sysvars.md)。
+- Current task selected: D9 commercial control sysvars 已规划。D9 补齐商用
+  测试套高频依赖的 `force_parallel_execute`、`parallel_fail_retry`、
+  `pq_msg_queue_size`、`pq_msg_queue_spin_lock`、
+  `innodb_parallel_select_count`、`pq_hash_join_max_hash_table_refills` 和
+  `op_over_pq_offset_threshold` 变量合同；本小步只做 sysvar 可见性、默认值、
+  SET/DEFAULT 和边界覆盖，不接 optimizer、fallback retry、message queue、
+  InnoDB count 或 hash join 行为。任务书见
+  [commercial-port-d27-control-sysvars.md](commercial-port-d27-control-sysvars.md)。
 - Previous local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
   本地编码、targeted 验证、首轮 review 修正和 final review。`parallel_default_dop`
   变量合同已对齐到 `0..1024`；DOP0 不进入 PQ；DOP1..256 eligible clustered
