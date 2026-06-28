@@ -5,21 +5,16 @@
 ## Current Summary
 
 - Last synced: 2026-06-28
-- Latest local update: 2026-06-28 D3 default DOP4 fullscan void-pull 已完成
-  本地编码、targeted 验证、首轮 review 修正和 final review。
-  普通 eligible `parallel_default_dop=4` clustered fullscan 现在默认复用 D2
-  `ha_pq_next(void*)` worker-thread producer topology；显式
-  `parallel_query_experimental_threaded_dop4` 和
-  `pq_read_threaded_dop4_shadow_path` 仍保留旧 shadow/callback producer 覆盖。
-  验证已通过：`mysqld` build、`pq_commercial_fullscan
-  pq_read_threaded_pqwr_record_gather pq_read_threaded_dop4_worker_error
-  pq_read_threaded_dop4_external_kill pq_stats` targeted MTR。任务书和完成报告见
-  [commercial-port-d21-default-dop4-fullscan-void-pull.md](commercial-port-d21-default-dop4-fullscan-void-pull.md)。
-- Current task selected: D4 fullscan DOP resolver alignment 已完成设计任务书，
-  下一步进入 TDD 编码。D4 目标是把已打开的 threaded visible fullscan path 的
-  DOP 合同向商用实现对齐：`parallel_default_dop=0..1024`，DOP0 不进入 PQ，
-  正数 DOP 使用对应 worker 数；暂不迁移完整 `PQ()` hint parser、range/ref/ICP、
-  ORDER BY 或 GROUP BY。任务书见
+- Latest local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
+  本地编码、targeted 验证、首轮 review 修正和 final review。`parallel_default_dop`
+  变量合同已对齐到 `0..1024`；DOP0 不进入 PQ；DOP1..256 eligible clustered
+  fullscan 使用 threaded visible `ha_pq_next(void*)` worker path；DOP257..1024
+  当前因 InnoDB PQ 执行上限仍 fail-closed 到 serial iterator。验证已通过：
+  `mysqld` build、`pq_vars pq_commercial_fullscan_dop pq_commercial_fullscan
+  pq_read_threaded_dop4_worker_error pq_read_threaded_dop4_external_kill
+  pq_stats pq_read_threaded_aggregate_fallback_read_view pq_exchange_rows_dop1
+  pq_read_threaded_shadow_dop1 pq_read_threaded_experimental_vars_noop`
+  targeted MTR。任务书和完成报告见
   [commercial-port-d22-fullscan-dop-resolver.md](commercial-port-d22-fullscan-dop-resolver.md)。
 - Previous task selected: D2 default threaded fullscan void-pull 已完成本地编码、
   targeted 验证和独立 review，并修复 review 提出的 InnoDB worker-init

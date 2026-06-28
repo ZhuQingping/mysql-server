@@ -7745,7 +7745,7 @@ static Sys_var_uint Sys_parallel_default_dop(
     "Default degree of parallelism (number of worker threads) "
     "for parallel query execution",
     SESSION_VAR(parallel_default_dop), CMD_LINE(REQUIRED_ARG),
-    VALID_RANGE(1, 256), DEFAULT(4), BLOCK_SIZE(1));
+    VALID_RANGE(0, 1024), DEFAULT(4), BLOCK_SIZE(1));
 
 static Sys_var_ulonglong Sys_parallel_cost_threshold(
     "parallel_cost_threshold",

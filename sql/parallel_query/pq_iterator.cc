@@ -370,7 +370,9 @@ bool PQTableScanIterator::Init() {
   // errors are reported before serial iterator state is initialized.
   uint actual_dop = 0;
   uint requested_dop = thd()->variables.parallel_default_dop;
-  if (requested_dop == 0) requested_dop = 1;
+  if (requested_dop == 0) {
+    return init_serial_fallback();
+  }
   bool force_threaded_pqwr_record_gather_path = false;
   DBUG_EXECUTE_IF("pq_read_threaded_pqwr_record_gather_path", {
     force_threaded_pqwr_record_gather_path = true;
@@ -901,8 +903,8 @@ bool PQTableScanIterator::should_enter_threaded_visible_void_pull_fullscan_path(
     uint requested_dop) const {
   const bool enabled =
       thd() != nullptr && m_join != nullptr && m_join->pq_eligible &&
-      thd()->variables.parallel_query &&
-      (requested_dop == 2 || requested_dop == 4);
+      thd()->variables.parallel_query && requested_dop > 0 &&
+      requested_dop <= PQ_Leader_context::MAX_THREADS;
   return enabled && table() != nullptr && table()->s != nullptr &&
          table()->s->blob_fields == 0 && table()->s->reclength > 0 &&
          pq_table_has_read_fields(table());
@@ -1228,6 +1230,11 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTableScanIterator(
   // must not spawn sub-workers.
   // -----------------------------------------------------------------
   if (thd->pq_is_worker) {
+    return nullptr;
+  }
+
+  const uint requested_dop = thd->variables.parallel_default_dop;
+  if (requested_dop == 0 || requested_dop > PQ_Leader_context::MAX_THREADS) {
     return nullptr;
   }
 

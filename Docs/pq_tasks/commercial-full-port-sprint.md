@@ -240,11 +240,13 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   和 `pq_read_threaded_dop4_shadow_path` 旧 shadow/callback producer 覆盖。
   任务书和完成报告见
   [commercial-port-d21-default-dop4-fullscan-void-pull.md](commercial-port-d21-default-dop4-fullscan-void-pull.md)。
-- D4 fullscan DOP resolver alignment 已完成设计任务书，下一步进入 TDD 编码。
-  该任务继续沿 D2/D3 已打开的 threaded visible fullscan path 对齐商用入口
-  DOP 合同：`parallel_default_dop=0..1024`，DOP0 不进入 PQ，正数 DOP 使用
-  对应 worker 数；完整 `PQ()` hint parser、range/ref/ICP、ORDER BY 和
-  GROUP BY 不在本小步内。任务书见
+- D4 fullscan DOP resolver alignment 已完成本地编码、targeted 验证、首轮
+  review 修正和 final review。该任务继续沿 D2/D3 已打开的 threaded visible
+  fullscan path 对齐商用入口 DOP 合同：`parallel_default_dop=0..1024`，DOP0
+  不进入 PQ，DOP1..256 eligible clustered fullscan 使用对应 worker 数；
+  DOP257..1024 当前因 InnoDB PQ 执行上限仍 fail-closed 到 serial iterator。
+  完整 `PQ()` hint parser、range/ref/ICP、ORDER BY 和 GROUP BY 不在本小步内。
+  任务书和完成报告见
   [commercial-port-d22-fullscan-dop-resolver.md](commercial-port-d22-fullscan-dop-resolver.md)。
 
 ## Batch A 审计结果
