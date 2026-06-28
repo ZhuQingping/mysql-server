@@ -7741,6 +7741,11 @@ static Sys_var_bool Sys_parallel_query(
     "Enable or disable parallel query execution for the session",
     SESSION_VAR(parallel_query), CMD_LINE(OPT_ARG), DEFAULT(false));
 
+static Sys_var_bool Sys_sql_force_parallel_execute(
+    "force_parallel_execute", "Force parallel execute in session",
+    HINT_UPDATEABLE SESSION_VAR(force_parallel_execute), CMD_LINE(OPT_ARG),
+    DEFAULT(false));
+
 static Sys_var_uint Sys_parallel_default_dop(
     "parallel_default_dop",
     "Default degree of parallelism (number of worker threads) "
@@ -7780,6 +7785,48 @@ static Sys_var_bool Sys_parallel_graceful_fallback(
     "Allow parallel query setup failure to fall back to serial execution",
     HINT_UPDATEABLE SESSION_VAR(parallel_graceful_fallback), CMD_LINE(OPT_ARG),
     DEFAULT(true));
+
+static Sys_var_bool Sys_parallel_fail_retry(
+    "parallel_fail_retry",
+    "Whether to automatically retry failed parallel queries with parallel query "
+    "disabled",
+    SESSION_VAR(parallel_fail_retry), CMD_LINE(OPT_ARG), DEFAULT(true));
+
+static Sys_var_ulong Sys_pq_msg_queue_size(
+    "pq_msg_queue_size", "The size of parallel query message queue",
+    SESSION_VAR(pq_msg_queue_size), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(1048576, 1073741824), DEFAULT(1048576), BLOCK_SIZE(1),
+    NO_MUTEX_GUARD, NOT_IN_BINLOG);
+
+static Sys_var_ulong Sys_pq_msg_queue_spin_lock(
+    "pq_msg_queue_spin_lock",
+    "Spin count while waiting on parallel query message queue",
+    SESSION_VAR(pq_msg_queue_spin_lock), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(100, ULONG_MAX), DEFAULT(1000), BLOCK_SIZE(1), NO_MUTEX_GUARD,
+    NOT_IN_BINLOG);
+
+static Sys_var_bool Sys_sql_innodb_parallel_select_count(
+    "innodb_parallel_select_count",
+    "Force COUNT(*) using InnoDB-based parallel execution",
+    HINT_UPDATEABLE SESSION_VAR(innodb_parallel_select_count), CMD_LINE(OPT_ARG),
+    DEFAULT(true), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(nullptr),
+    ON_UPDATE(nullptr), DEPRECATED_VAR(""));
+
+static Sys_var_ulong Sys_pq_hash_join_max_hash_table_refills(
+    "pq_hash_join_max_hash_table_refills",
+    "Upper limit of estimated hash-table refills before disabling parallel "
+    "query hash join",
+    SESSION_VAR(pq_hash_join_max_hash_table_refills), CMD_LINE(OPT_ARG),
+    VALID_RANGE(1, std::numeric_limits<ulong>::max()), DEFAULT(1),
+    BLOCK_SIZE(1), NO_MUTEX_GUARD, NOT_IN_BINLOG);
+
+static Sys_var_ulong Sys_op_over_pq_offset_threshold(
+    "op_over_pq_offset_threshold",
+    "Minimum OFFSET threshold where offset pushdown takes precedence over "
+    "parallel query",
+    HINT_UPDATEABLE SESSION_VAR(op_over_pq_offset_threshold),
+    CMD_LINE(REQUIRED_ARG), VALID_RANGE(0, ULONG_MAX), DEFAULT(1000),
+    BLOCK_SIZE(1), NO_MUTEX_GUARD, NOT_IN_BINLOG);
 
 static Sys_var_ulonglong Sys_parallel_memory_limit(
     "parallel_memory_limit",

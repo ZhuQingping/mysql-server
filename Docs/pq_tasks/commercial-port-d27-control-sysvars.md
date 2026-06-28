@@ -16,7 +16,7 @@ allocation、InnoDB count fast path 或 hash join 行为。
 
 ## 状态
 
-Status: planned.
+Status: completed.
 
 ## 背景
 
@@ -133,14 +133,50 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## Completion Report
 
-Status: pending.
+Status: completed.
 
-Changed files: pending.
+Changed files:
 
-Implementation: pending.
+- `sql/system_variables.h`
+- `sql/sys_vars.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_control_sysvars.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_control_sysvars.result`
+- `mysql-test/suite/parallel_query/t/pq_vars.test`
+- `mysql-test/suite/parallel_query/r/pq_vars.result`
 
-Verification: pending.
+Implementation:
 
-Review: pending.
+- Added commercial-compatible session variable storage for:
+  `force_parallel_execute`, `parallel_fail_retry`, `pq_msg_queue_size`,
+  `pq_msg_queue_spin_lock`, `innodb_parallel_select_count`,
+  `pq_hash_join_max_hash_table_refills`, and `op_over_pq_offset_threshold`.
+- Added sysvar declarations with commercial defaults/ranges and flags.
+- Kept this task contract-only. No optimizer, fallback retry, MQ allocation,
+  InnoDB count, hash join, handler, or worker execution behavior was wired in.
+- Extended `pq_vars` so the common variable contract test covers this group.
 
-Residual risk: pending.
+Verification:
+
+- RED observed before production changes:
+  `pq_commercial_control_sysvars` failed with unknown
+  `force_parallel_execute`.
+- `git diff --check`: passed.
+- `cmake --build build-ninja --target mysqld -j 8`: passed.
+- Targeted MTR passed:
+
+```bash
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_control_sysvars pq_vars pq_commercial_resource_sysvars \
+  --vardir=/tmp/pq-d27-final-vardir \
+  --tmpdir=/tmp/pq-d27-final-tmpdir
+```
+
+Review: independent review verdict: ACCEPT.
+
+Residual risk:
+
+- These variables are intentionally not yet connected to their commercial
+  execution semantics. Follow-up tasks must wire `force_parallel_execute`,
+  fallback retry, MQ sizing, InnoDB count, hash join refill policy, and offset
+  priority behavior where the reference implementation uses them.

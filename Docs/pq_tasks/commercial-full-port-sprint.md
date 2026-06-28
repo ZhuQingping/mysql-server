@@ -29,14 +29,16 @@ Last synced: 2026-06-28
   Independent review accepted, and lightweight re-review accepted the added
   invalid-value coverage. Task report:
   [commercial-port-d26-resource-sysvars.md](commercial-port-d26-resource-sysvars.md).
-- D9 commercial control sysvars: planned.
+- D9 commercial control sysvars: completed.
   Adds the next high-frequency commercial variable contract group:
   `force_parallel_execute`, `parallel_fail_retry`, `pq_msg_queue_size`,
   `pq_msg_queue_spin_lock`, `innodb_parallel_select_count`,
   `pq_hash_join_max_hash_table_refills`, and `op_over_pq_offset_threshold`.
   This task is contract-only and must not wire those variables into optimizer,
   fallback retry, message queue allocation, InnoDB count, or hash join behavior.
-  Task plan:
+  `mysqld` build, `git diff --check`, and targeted MTR
+  `pq_commercial_control_sysvars pq_vars pq_commercial_resource_sysvars` pass.
+  Independent review accepted. Task report:
   [commercial-port-d27-control-sysvars.md](commercial-port-d27-control-sysvars.md).
 
 ## 目标

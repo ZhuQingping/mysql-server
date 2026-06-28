@@ -513,6 +513,12 @@ struct System_variables {
   bool parallel_query;
 
   /**
+    @sa Sys_sql_force_parallel_execute
+    Force PQ eligibility checks to prefer parallel execution where supported.
+  */
+  bool force_parallel_execute;
+
+  /**
     @sa Sys_parallel_default_dop
     Default degree of parallelism (number of worker threads).
   */
@@ -547,6 +553,42 @@ struct System_variables {
     Whether PQ setup failure may fall back to serial execution in place.
   */
   bool parallel_graceful_fallback;
+
+  /**
+    @sa Sys_parallel_fail_retry
+    Whether failed PQ execution may retry with PQ disabled.
+  */
+  bool parallel_fail_retry;
+
+  /**
+    @sa Sys_pq_msg_queue_size
+    Per-worker PQ message queue size.
+  */
+  ulong pq_msg_queue_size;
+
+  /**
+    @sa Sys_pq_msg_queue_spin_lock
+    Spin count while waiting on PQ message queue.
+  */
+  ulong pq_msg_queue_spin_lock;
+
+  /**
+    @sa Sys_sql_innodb_parallel_select_count
+    Enable InnoDB-side parallel COUNT(*) where supported.
+  */
+  bool innodb_parallel_select_count;
+
+  /**
+    @sa Sys_pq_hash_join_max_hash_table_refills
+    Maximum estimated hash-table refills before disabling PQ hash join.
+  */
+  ulong pq_hash_join_max_hash_table_refills;
+
+  /**
+    @sa Sys_op_over_pq_offset_threshold
+    OFFSET threshold where offset pushdown takes precedence over PQ.
+  */
+  ulong op_over_pq_offset_threshold;
 
   /**
     @sa Sys_parallel_memory_limit
