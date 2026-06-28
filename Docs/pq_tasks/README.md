@@ -15,6 +15,12 @@
   pq_read_threaded_pqwr_record_gather pq_read_threaded_dop4_worker_error
   pq_read_threaded_dop4_external_kill pq_stats` targeted MTR。任务书和完成报告见
   [commercial-port-d21-default-dop4-fullscan-void-pull.md](commercial-port-d21-default-dop4-fullscan-void-pull.md)。
+- Current task selected: D4 fullscan DOP resolver alignment 已完成设计任务书，
+  下一步进入 TDD 编码。D4 目标是把已打开的 threaded visible fullscan path 的
+  DOP 合同向商用实现对齐：`parallel_default_dop=0..1024`，DOP0 不进入 PQ，
+  正数 DOP 使用对应 worker 数；暂不迁移完整 `PQ()` hint parser、range/ref/ICP、
+  ORDER BY 或 GROUP BY。任务书见
+  [commercial-port-d22-fullscan-dop-resolver.md](commercial-port-d22-fullscan-dop-resolver.md)。
 - Previous task selected: D2 default threaded fullscan void-pull 已完成本地编码、
   targeted 验证和独立 review，并修复 review 提出的 InnoDB worker-init
   double-free 与 worker THD kill propagation 问题。普通 eligible DOP2
