@@ -5,7 +5,13 @@
 ## Current Summary
 
 - Last synced: 2026-06-28
-- Latest local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
+- Latest local update: 2026-06-28 D6 EXPLAIN DOP cap alignment 已启动。
+  D4 已将 `parallel_default_dop` 变量合同对齐到 `0..1024`，执行工厂对
+  DOP0 和 DOP257..1024 已 fail-closed 到串行；D6 负责把传统 EXPLAIN、
+  FORMAT=TREE 和 FORMAT=JSON 的 PQ 注解与该执行 gate 对齐，避免 DOP0 /
+  超上限 DOP 仍展示为 eligible。任务书见
+  [commercial-port-d24-explain-dop-cap.md](commercial-port-d24-explain-dop-cap.md)。
+- Previous local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
   本地编码、targeted 验证、首轮 review 修正和 final review。`parallel_default_dop`
   变量合同已对齐到 `0..1024`；DOP0 不进入 PQ；DOP1..256 eligible clustered
   fullscan 使用 threaded visible `ha_pq_next(void*)` worker path；DOP257..1024

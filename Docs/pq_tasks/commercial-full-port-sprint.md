@@ -2,6 +2,14 @@
 
 Last synced: 2026-06-28
 
+## 当前小任务
+
+- D6 EXPLAIN DOP cap alignment: in progress.
+  Runtime factory already serial-falls-back for DOP0 and DOP values above the
+  current fullscan cap. D6 aligns traditional EXPLAIN, FORMAT=TREE, and
+  FORMAT=JSON annotations with that runtime gate. Task plan:
+  [commercial-port-d24-explain-dop-cap.md](commercial-port-d24-explain-dop-cap.md).
+
 ## 目标
 
 将 `/Users/zhuqingping/Work/Database/MySQL/taurusdbondstore` 中已经商用的
