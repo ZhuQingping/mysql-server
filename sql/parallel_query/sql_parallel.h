@@ -194,6 +194,7 @@ enum class PQ_worker_task : uint {
   NOOP = 0,
   CALLBACK_LIMITED_PRODUCER,
   CALLBACK_PQWR_PRODUCER,
+  VOID_PULL_RECORD_IMAGE_PRODUCER,
   QUERY_RESULT_MQ_PROBE,
   EXECUTE_ITERATOR_SMOKE,
   EXECUTE_ITERATOR_CALL_SMOKE
@@ -551,6 +552,11 @@ struct PQ_global_stats {
   std::atomic<uint64> visible_void_pull_eofs{0};  ///< D1.8 EOFs
   std::atomic<uint64> visible_void_pull_cleanup{0};  ///< D1.8 cleanup
   std::atomic<uint64> visible_void_pull_failures{0};  ///< D1.8 failures
+  std::atomic<uint64> visible_void_pull_threaded_selected{0};  ///< D2 path
+  std::atomic<uint64> visible_void_pull_threaded_rows{0};  ///< D2 rows
+  std::atomic<uint64> visible_void_pull_threaded_finishes{0};  ///< D2 FINISH
+  std::atomic<uint64> visible_void_pull_threaded_workers{0};  ///< D2 workers
+  std::atomic<uint64> visible_void_pull_threaded_failures{0};  ///< D2 failures
   std::atomic<uint64> worker_result_smoke_rows{0};  ///< Worker result frames
   std::atomic<uint64> worker_result_smoke_finishes{0};  ///< FINISH frames
   std::atomic<uint64> worker_result_smoke_errors{0};  ///< ERROR frames
@@ -1130,6 +1136,11 @@ struct PQ_global_stats {
     visible_void_pull_eofs.store(0, std::memory_order_relaxed);
     visible_void_pull_cleanup.store(0, std::memory_order_relaxed);
     visible_void_pull_failures.store(0, std::memory_order_relaxed);
+    visible_void_pull_threaded_selected.store(0, std::memory_order_relaxed);
+    visible_void_pull_threaded_rows.store(0, std::memory_order_relaxed);
+    visible_void_pull_threaded_finishes.store(0, std::memory_order_relaxed);
+    visible_void_pull_threaded_workers.store(0, std::memory_order_relaxed);
+    visible_void_pull_threaded_failures.store(0, std::memory_order_relaxed);
     worker_result_smoke_rows.store(0, std::memory_order_relaxed);
     worker_result_smoke_finishes.store(0, std::memory_order_relaxed);
     worker_result_smoke_errors.store(0, std::memory_order_relaxed);
@@ -2269,6 +2280,16 @@ class Gather_operator {
   bool run_worker_callback_pqwr_threaded_producer(THD *leader_thd,
                                                   TABLE *leader_table,
                                                   uint32 max_rows);
+
+  /**
+    Start worker-thread void-pull producers that send typed record images.
+
+    This is the D2 fullscan bridge: each worker opens its own TABLE/handler,
+    initializes a typed worker scan context, pulls rows via ha_pq_next(void*),
+    and enqueues ROW + FINISH messages into this gather's Exchange.
+  */
+  bool run_worker_void_pull_threaded_producer(THD *leader_thd,
+                                              TABLE *leader_table);
 
   /**
     Abort all workers and close MQ producers.

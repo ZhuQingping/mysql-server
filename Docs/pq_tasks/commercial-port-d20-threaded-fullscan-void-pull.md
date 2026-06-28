@@ -26,7 +26,8 @@ InnoDB PQ handler bridge, MTR `parallel_query` suite.
 
 ## 状态
 
-Status: design ready；等待编码。
+Status: completed；targeted build/MTR passed；independent review accepted after
+Important fixes。
 
 ## 背景
 
@@ -310,3 +311,82 @@ Run the same targeted verification after fixes.
 - If full commercial worker plan cloning is required before threaded void-pull
   can be safely enabled, stop after RED/design and record the blocker. Do not
   fake worker launch counters without a real worker thread.
+
+## Completion Report
+
+Completed at: 2026-06-28 08:23 CST.
+
+Changed files:
+
+- `sql/parallel_query/sql_parallel.h`
+- `sql/parallel_query/sql_parallel.cc`
+- `sql/parallel_query/pq_iterator.h`
+- `sql/parallel_query/pq_iterator.cc`
+- `sql/mysqld.cc`
+- `storage/innobase/handler/ha_innodb_pq.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_fullscan.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_fullscan.result`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+- `Docs/pq_tasks/commercial-port-d20-threaded-fullscan-void-pull.md`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/commercial-full-port-sprint.md`
+
+Implementation:
+
+- Added `PQ_worker_task::VOID_PULL_RECORD_IMAGE_PRODUCER`.
+- Added `Gather_operator::run_worker_void_pull_threaded_producer()`, which
+  assigns worker tasks, starts real worker threads, and increments
+  `Parallel_workers_launched`.
+- Added worker task body that opens worker-owned TABLE/handler, initializes
+  typed worker context, loops through `ha_pq_next(worker_record, leader_ctx)`,
+  enqueues typed record-image ROW messages into `Exchange_nosort`, sends FINISH,
+  and cleans worker context/table.
+- Added default D2 `PQTableScanIterator` path before the old D1.9 synchronous
+  visible void-pull path. Explicit `pq_visible_void_pull_fullscan_path` still
+  forces the old synchronous path; explicit
+  `pq_read_threaded_pqwr_record_gather_path` still forces the legacy PQWR path.
+- Added `Parallel_visible_void_pull_threaded_*` status counters and kept legacy
+  `Parallel_visible_void_pull_*` counters as the visible void-pull family
+  counters.
+- Fixed review findings:
+  - removed double-free on `pq_worker_scan_init()` error path in
+    `ha_innodb_pq.cc`;
+  - `propagate_kill_to_workers()` now also sets worker THD `killed`.
+
+TDD RED:
+
+```bash
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan \
+  --vardir=/tmp/pq-d20-red-vardir \
+  --tmpdir=/tmp/pq-d20-red-tmpdir
+```
+
+Expected failure observed: first default DOP2 fullscan window expected
+`workers_delta=2`, current D1.9 implementation returned `workers_delta=0`.
+
+Verification:
+
+```bash
+git diff --check
+cmake --build build-ninja --target mysqld -j 8
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats \
+  --vardir=/tmp/pq-d20-final-vardir \
+  --tmpdir=/tmp/pq-d20-final-tmpdir
+```
+
+Result: all targeted tests passed.
+
+Review:
+
+- Independent Review Agent found no Critical issues.
+- Important findings were fixed before final verification:
+  - InnoDB worker-init double-free error path;
+  - worker THD `killed` propagation during leader kill cleanup.
+- Minor note: legacy `Parallel_visible_void_pull_rows` and new
+  `Parallel_visible_void_pull_threaded_rows` both count D2 rows by design. The
+  former tracks visible void-pull family rows; the latter tracks the threaded
+  D2 topology.

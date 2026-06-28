@@ -3888,6 +3888,96 @@ bool pq_run_callback_pqwr_producer_task(PQ_worker_info *worker,
   return failed;
 }
 
+bool pq_run_void_pull_record_image_producer_task(PQ_worker_info *worker,
+                                                 Gather_operator *gather) {
+  if (worker == nullptr || gather == nullptr ||
+      worker->m_open_ctx.leader_table == nullptr ||
+      worker->m_open_ctx.leader_ctx == nullptr ||
+      worker->m_worker_thd == nullptr) {
+    return true;
+  }
+
+  auto *exchange = gather->get_exchange();
+  if (exchange == nullptr ||
+      exchange->get_exchange_type() != Exchange::EXCHANGE_NOSORT) {
+    return true;
+  }
+  auto *nosort = static_cast<Exchange_nosort *>(exchange);
+
+  if (worker->m_task_force_error) {
+    worker->m_error_code = HA_ERR_INTERNAL_ERROR;
+    pq_global_stats.visible_void_pull_threaded_failures.fetch_add(
+        1, std::memory_order_relaxed);
+    (void)nosort->enqueue_error_smoke(worker->m_worker_id);
+    return true;
+  }
+
+  bool failed = pq_open_worker_table(&worker->m_open_ctx);
+  if (!failed) {
+    failed = worker->m_open_ctx.worker_handler->pq_worker_scan_init(
+                 &worker->m_open_ctx, &worker->m_worker_ctx) != 0 ||
+             worker->m_worker_ctx == nullptr;
+  }
+
+  uint32 rows_sent = 0;
+  bool eof = false;
+  while (!failed && !eof) {
+    if (worker->m_worker_thd->killed != 0 ||
+        worker->m_status.load(std::memory_order_acquire) ==
+            PQ_Worker_status::ABORTED) {
+      worker->m_error_code = ER_QUERY_INTERRUPTED;
+      failed = true;
+      break;
+    }
+
+    const int error = worker->m_open_ctx.worker_handler->ha_pq_next(
+        worker->m_open_ctx.worker_table->record[0],
+        worker->m_open_ctx.leader_ctx);
+    if (error == HA_ERR_END_OF_FILE) {
+      eof = true;
+      break;
+    }
+    if (error != 0) {
+      worker->m_error_code = error;
+      failed = true;
+      break;
+    }
+    failed = nosort->enqueue_record_image(worker->m_worker_id,
+                                          worker->m_open_ctx.worker_table);
+    if (!failed) ++rows_sent;
+  }
+
+  if (!failed) {
+    failed = nosort->enqueue_finish_smoke(worker->m_worker_id);
+    if (!failed) {
+      pq_global_stats.visible_void_pull_threaded_finishes.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+  }
+
+  if (worker->m_worker_ctx != nullptr &&
+      worker->m_open_ctx.worker_handler != nullptr) {
+    worker->m_open_ctx.worker_handler->pq_worker_scan_end(
+        worker->m_worker_ctx);
+    worker->m_worker_ctx = nullptr;
+  }
+  if (worker->m_open_ctx.worker_table != nullptr) {
+    pq_close_worker_table(&worker->m_open_ctx, failed);
+  }
+
+  worker->m_task_rows_sent.store(rows_sent, std::memory_order_release);
+  if (!failed) {
+    pq_global_stats.visible_void_pull_threaded_rows.fetch_add(
+        rows_sent, std::memory_order_relaxed);
+  } else {
+    pq_global_stats.visible_void_pull_threaded_failures.fetch_add(
+        1, std::memory_order_relaxed);
+    if (worker->m_error_code == 0) worker->m_error_code = HA_ERR_INTERNAL_ERROR;
+    (void)nosort->enqueue_error_smoke(worker->m_worker_id);
+  }
+  return failed;
+}
+
 bool pq_run_query_result_mq_probe_task(PQ_worker_info *worker) {
   if (worker == nullptr || worker->m_worker_thd == nullptr ||
       worker->m_mq_handle == nullptr) {
@@ -4083,6 +4173,8 @@ bool pq_run_worker_thread_task(PQ_worker_info *worker,
       return pq_run_callback_limited_producer_task(worker, gather);
     case PQ_worker_task::CALLBACK_PQWR_PRODUCER:
       return pq_run_callback_pqwr_producer_task(worker, gather);
+    case PQ_worker_task::VOID_PULL_RECORD_IMAGE_PRODUCER:
+      return pq_run_void_pull_record_image_producer_task(worker, gather);
     case PQ_worker_task::QUERY_RESULT_MQ_PROBE:
       return pq_run_query_result_mq_probe_task(worker);
     case PQ_worker_task::EXECUTE_ITERATOR_SMOKE:
@@ -4799,6 +4891,64 @@ bool Gather_operator::run_worker_callback_pqwr_threaded_producer(
   return false;
 }
 
+bool Gather_operator::run_worker_void_pull_threaded_producer(
+    THD *leader_thd, TABLE *leader_table) {
+  if (leader_thd == nullptr || leader_table == nullptr || m_dop == 0 ||
+      !m_initialized || m_thread_budget_acquired) {
+    return true;
+  }
+
+  auto *exchange = get_exchange();
+  if (exchange == nullptr ||
+      exchange->get_exchange_type() != Exchange::EXCHANGE_NOSORT) {
+    return true;
+  }
+
+  for (uint32 i = 0; i < m_dop; ++i) {
+    auto *worker = get_worker(i);
+    if (worker == nullptr) return true;
+    if (worker->m_open_ctx.leader_table == nullptr ||
+        worker->m_open_ctx.leader_ctx == nullptr ||
+        worker->m_open_ctx.actual_dop != m_dop) {
+      return true;
+    }
+
+    worker->m_task = PQ_worker_task::VOID_PULL_RECORD_IMAGE_PRODUCER;
+    worker->m_task_max_rows = std::numeric_limits<uint32>::max();
+    worker->m_task_force_error = false;
+    DBUG_EXECUTE_IF("pq_visible_void_pull_threaded_force_worker_error", {
+      worker->m_task_force_error = (i == 0);
+    });
+    worker->m_task_rows_sent.store(0, std::memory_order_release);
+  }
+
+  bool enforce_thread_budget = parallel_max_threads > 0;
+  DBUG_EXECUTE_IF("pq_read_threaded_force_thread_budget_refuse", {
+    enforce_thread_budget = true;
+  });
+  if (enforce_thread_budget) {
+    if (!check_pq_running_threads(m_dop, 0)) return true;
+    m_thread_budget_acquired = true;
+  }
+
+  if (start_workers(leader_thd)) {
+    if (m_thread_budget_acquired) {
+      release_pq_running_threads(m_dop);
+      m_thread_budget_acquired = false;
+    }
+    for (uint32 i = 0; i < m_dop; ++i) {
+      auto *worker = get_worker(i);
+      if (worker != nullptr) worker->m_task = PQ_worker_task::NOOP;
+    }
+    return true;
+  }
+
+  pq_global_stats.workers_launched.fetch_add(m_dop, std::memory_order_relaxed);
+  pq_global_stats.visible_void_pull_threaded_workers.fetch_add(
+      m_dop, std::memory_order_relaxed);
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Gather_operator: abort_workers (stub)
 // ---------------------------------------------------------------------------
@@ -4932,9 +5082,12 @@ void Gather_operator::propagate_kill_to_workers(THD *leader_thd
                                                  [[maybe_unused]]) {
   if (!m_initialized) return;
 
-  // Set all worker statuses to KILLED.
   for (uint32 i = 0; i < m_dop; i++) {
     if (m_workers[i] == nullptr) continue;
+    if (m_workers[i]->m_worker_thd != nullptr &&
+        m_workers[i]->m_worker_thd->killed == 0) {
+      m_workers[i]->m_worker_thd->killed = THD::KILL_QUERY;
+    }
     if (!m_workers[i]->is_terminal()) {
       m_workers[i]->transition_status(PQ_Worker_status::KILLED);
     }
@@ -4951,10 +5104,6 @@ void Gather_operator::propagate_kill_to_workers(THD *leader_thd
       }
     }
   }
-
-  // Phase 5+ will also:
-  // - Set THD::killed on each worker THD
-  // - Send ABORT control token to each worker's MQ
 
   m_all_finished = true;
 }

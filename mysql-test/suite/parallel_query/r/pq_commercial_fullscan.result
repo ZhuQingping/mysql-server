@@ -47,7 +47,7 @@ AS rows_delta,
 WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
 AS workers_delta;
 executed_delta	fallback_delta	rows_delta	workers_delta
-1	0	8	0
+1	0	8	2
 SET SESSION parallel_query_experimental_threaded_dop=ON;
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
@@ -89,7 +89,7 @@ AS rows_delta,
 WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
 AS workers_delta;
 executed_delta	fallback_delta	rows_delta	workers_delta
-1	0	8	0
+1	0	8	2
 SET @pq_executed_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -128,7 +128,7 @@ AS rows_delta,
 WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
 AS workers_delta;
 executed_delta	fallback_delta	rows_delta	workers_delta
-1	0	8	0
+1	0	8	2
 SET SESSION parallel_query_experimental_threaded_dop=OFF;
 SET SESSION parallel_query_experimental_threaded_dop4=ON;
 SET SESSION parallel_default_dop=4;
@@ -235,6 +235,26 @@ SET @default_void_failures_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
 WHERE variable_name = 'Parallel_visible_void_pull_failures');
+SET @threaded_void_selected_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_selected');
+SET @threaded_void_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_rows');
+SET @threaded_void_finishes_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_finishes');
+SET @threaded_void_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_workers');
+SET @threaded_void_failures_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_failures');
 SET @default_pqwr_selected_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status
@@ -292,6 +312,24 @@ WHERE variable_name = 'Parallel_visible_pqwr_record_gather_rows') -
 @default_pqwr_rows_before AS default_pqwr_rows_delta;
 default_pqwr_selected_delta	default_pqwr_rows_delta
 0	0
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_selected') -
+@threaded_void_selected_before AS threaded_void_selected_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_rows') -
+@threaded_void_rows_before AS threaded_void_rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_finishes') -
+@threaded_void_finishes_before AS threaded_void_finishes_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_workers') -
+@threaded_void_workers_before AS threaded_void_workers_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_visible_void_pull_threaded_failures') -
+@threaded_void_failures_before AS threaded_void_failures_delta;
+threaded_void_selected_delta	threaded_void_rows_delta	threaded_void_finishes_delta	threaded_void_workers_delta	threaded_void_failures_delta
+1	8	2	2	0
 SET @void_pull_rows_before = (
 SELECT CAST(variable_value AS UNSIGNED)
 FROM performance_schema.global_status

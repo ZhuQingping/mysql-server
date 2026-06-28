@@ -170,8 +170,15 @@ class PQTableScanIterator final : public TableRowIterator {
   /** @return true when the visible void-pull fullscan path may run. */
   bool should_enter_visible_void_pull_fullscan_path(uint requested_dop) const;
 
+  /** @return true when default threaded visible void-pull may run. */
+  bool should_enter_threaded_visible_void_pull_fullscan_path(
+      uint requested_dop) const;
+
   /** Initialize the visible void-pull fullscan path. */
   bool init_visible_void_pull_fullscan_path();
+
+  /** Initialize the default threaded visible void-pull fullscan path. */
+  bool init_threaded_visible_void_pull_fullscan_path(uint requested_dop);
 
   /** @return true while serial fallback is still allowed. */
   bool can_fallback_serial() const {
@@ -205,6 +212,7 @@ class PQTableScanIterator final : public TableRowIterator {
   Runtime_state m_runtime_state{Runtime_state::SAFE_FALLBACK};
   bool m_use_worker_result_record_gather{false};
   bool m_use_visible_void_pull{false};
+  bool m_use_threaded_visible_void_pull{false};
   bool m_leader_ctx_from_ha_pq_init{false};
   bool m_fallback_counted{false};  ///< Count per query iterator, not per Init()
   bool m_executed_counted{false};  ///< Count real PQ execution at first row

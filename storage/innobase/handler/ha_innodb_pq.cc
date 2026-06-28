@@ -591,7 +591,6 @@ int ha_innobase::pq_worker_scan_init(PQ_Worker_open_context *open_ctx,
   const int index_result = change_active_index(active_index);
   if (index_result != 0) {
     ut::delete_(sql_worker);
-    ut::delete_(innodb_worker);
     return index_result;
   }
   build_template(false);

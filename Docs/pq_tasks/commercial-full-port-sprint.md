@@ -224,11 +224,13 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   D1.8 已验证的 `ha_pq_next(void*)` visible void-pull path，旧 PQWR
   record-gather 路径保留为显式 DBUG regression hook。任务书和完成报告见
   [commercial-port-d19-default-fullscan-void-pull.md](commercial-port-d19-default-fullscan-void-pull.md)。
-- D2 default threaded fullscan void-pull 已完成设计任务书，下一步进入 TDD
-  编码。该任务收敛 D1.9 与商用 fullscan topology 的核心差异：默认 DOP2
-  clustered fullscan 必须启动真实 worker 线程，由 worker 生产 row frame，
-  leader 复用现有 Exchange/MQ `Read()` loop 消费；D1.9 同步 void-pull 和旧
-  PQWR record-gather path 保留为显式 regression hook。任务书见
+- D2 default threaded fullscan void-pull 已完成本地编码、targeted 验证和
+  独立 review，并修复 review 提出的 InnoDB worker-init double-free 与
+  worker THD kill propagation 问题。该任务收敛 D1.9 与商用 fullscan topology
+  的核心差异：默认 DOP2 clustered fullscan 现在启动真实 worker 线程，由
+  worker 调 `ha_pq_next(void*)` 生产 record-image row，leader 复用现有
+  Exchange/MQ `Read()` loop 消费；D1.9 同步 void-pull 和旧 PQWR
+  record-gather path 保留为显式 regression hook。任务书和完成报告见
   [commercial-port-d20-threaded-fullscan-void-pull.md](commercial-port-d20-threaded-fullscan-void-pull.md)。
 
 ## Batch A 审计结果

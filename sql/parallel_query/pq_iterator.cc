@@ -375,21 +375,37 @@ bool PQTableScanIterator::Init() {
   DBUG_EXECUTE_IF("pq_read_threaded_pqwr_record_gather_path", {
     force_threaded_pqwr_record_gather_path = true;
   });
+  bool force_visible_void_pull_fullscan_path = false;
+  DBUG_EXECUTE_IF("pq_visible_void_pull_fullscan_path", {
+    force_visible_void_pull_fullscan_path = true;
+  });
+  const bool threaded_visible_void_pull_fullscan_path =
+      !force_threaded_pqwr_record_gather_path &&
+      !force_visible_void_pull_fullscan_path &&
+      should_enter_threaded_visible_void_pull_fullscan_path(requested_dop);
   const bool visible_void_pull_fullscan_path =
       !force_threaded_pqwr_record_gather_path &&
+      !threaded_visible_void_pull_fullscan_path &&
       should_enter_visible_void_pull_fullscan_path(requested_dop);
   const bool threaded_pqwr_record_gather_path =
       force_threaded_pqwr_record_gather_path ||
       (!visible_void_pull_fullscan_path &&
+       !threaded_visible_void_pull_fullscan_path &&
        should_enter_threaded_pqwr_record_gather_path(requested_dop));
   const bool threaded_read_shadow_path =
       !threaded_pqwr_record_gather_path &&
       !visible_void_pull_fullscan_path &&
+      !threaded_visible_void_pull_fullscan_path &&
       should_enter_threaded_read_shadow_path(requested_dop);
   const bool read_shadow_path =
       !threaded_read_shadow_path && !threaded_pqwr_record_gather_path &&
       !visible_void_pull_fullscan_path &&
+      !threaded_visible_void_pull_fullscan_path &&
       should_enter_read_shadow_path(requested_dop);
+
+  if (threaded_visible_void_pull_fullscan_path) {
+    return init_threaded_visible_void_pull_fullscan_path(requested_dop);
+  }
 
   if (visible_void_pull_fullscan_path) {
     return init_visible_void_pull_fullscan_path();
@@ -657,6 +673,8 @@ bool PQTableScanIterator::Init() {
 
 void PQTableScanIterator::cleanup_pq_resources(bool abort_workers) {
   const bool visible_void_pull_cleanup = m_use_visible_void_pull;
+  const bool threaded_visible_void_pull_cleanup =
+      m_use_threaded_visible_void_pull;
   if (m_use_visible_void_pull && m_gather != nullptr) {
     THD *leader_thd = thd();
     auto *worker = m_gather->get_worker(0);
@@ -673,6 +691,11 @@ void PQTableScanIterator::cleanup_pq_resources(bool abort_workers) {
     }
   }
   m_use_visible_void_pull = false;
+  if (m_use_threaded_visible_void_pull) {
+    pq_global_stats.visible_void_pull_cleanup.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  m_use_threaded_visible_void_pull = false;
 
   if (m_record_gather != nullptr) {
     m_record_gather->mq_scan_end();
@@ -685,7 +708,10 @@ void PQTableScanIterator::cleanup_pq_resources(bool abort_workers) {
     if (abort_workers && m_gather->is_initialized()) {
       m_gather->abort_workers(thd());
     }
-    auto *worker = visible_void_pull_cleanup ? m_gather->get_worker(0) : nullptr;
+    auto *worker =
+        (visible_void_pull_cleanup || threaded_visible_void_pull_cleanup)
+            ? m_gather->get_worker(0)
+            : nullptr;
     if (worker != nullptr && worker->m_open_ctx.worker_thd != nullptr) {
       worker->m_open_ctx.worker_thd->store_globals();
     }
@@ -764,6 +790,53 @@ bool PQTableScanIterator::init_visible_void_pull_fullscan_path() {
   return false;
 }
 
+bool PQTableScanIterator::init_threaded_visible_void_pull_fullscan_path(
+    uint requested_dop) {
+  if (requested_dop == 0) return true;
+
+  m_gather = new Gather_operator(requested_dop);
+  if (m_gather == nullptr || m_gather->init()) {
+    cleanup_pq_resources(true);
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return true;
+  }
+
+  table()->file->pq_ref = false;
+  table()->file->pq_ref_depend = false;
+  table()->file->pq_range_type = PQ_QUICK_SELECT_NONE;
+  table()->file->ha_set_reverse_scan(false);
+  const int init_error = table()->file->ha_pq_init(requested_dop, MAX_KEY);
+  if (init_error != 0 || table()->file->pq_ctx == nullptr) {
+    cleanup_pq_resources(true);
+    PrintError(init_error != 0 ? init_error : HA_ERR_INTERNAL_ERROR);
+    return true;
+  }
+  table()->file->pq_table_scan = true;
+  m_leader_ctx = static_cast<PQ_Leader_context *>(table()->file->pq_ctx);
+  m_leader_ctx_from_ha_pq_init = true;
+  m_use_threaded_visible_void_pull = true;
+
+  if (m_gather->configure_worker_open_contexts(table(), m_leader_ctx,
+                                               requested_dop)) {
+    cleanup_pq_resources(true);
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return true;
+  }
+
+  if (m_gather->run_worker_void_pull_threaded_producer(thd(), table())) {
+    cleanup_pq_resources(true);
+    PrintError(HA_ERR_INTERNAL_ERROR);
+    return true;
+  }
+
+  pq_global_stats.visible_void_pull_selected.fetch_add(
+      1, std::memory_order_relaxed);
+  pq_global_stats.visible_void_pull_threaded_selected.fetch_add(
+      1, std::memory_order_relaxed);
+  mark_pq_started();
+  return false;
+}
+
 bool PQTableScanIterator::should_enter_read_shadow_path(
     uint requested_dop) const {
   bool enabled = false;
@@ -810,6 +883,16 @@ bool PQTableScanIterator::should_enter_visible_void_pull_fullscan_path(
   DBUG_EXECUTE_IF("pq_visible_void_pull_fullscan_path", {
     enabled = true;
   });
+  return enabled && table() != nullptr && table()->s != nullptr &&
+         table()->s->blob_fields == 0 && table()->s->reclength > 0 &&
+         pq_table_has_read_fields(table());
+}
+
+bool PQTableScanIterator::should_enter_threaded_visible_void_pull_fullscan_path(
+    uint requested_dop) const {
+  const bool enabled =
+      thd() != nullptr && m_join != nullptr && m_join->pq_eligible &&
+      thd()->variables.parallel_query && requested_dop == 2;
   return enabled && table() != nullptr && table()->s != nullptr &&
          table()->s->blob_fields == 0 && table()->s->reclength > 0 &&
          pq_table_has_read_fields(table());
@@ -964,6 +1047,10 @@ int PQTableScanIterator::Read() {
         pq_global_stats.visible_pqwr_record_gather_rows.fetch_add(
             1, std::memory_order_relaxed);
       }
+      if (m_use_threaded_visible_void_pull) {
+        pq_global_stats.visible_void_pull_rows.fetch_add(
+            1, std::memory_order_relaxed);
+      }
       DBUG_EXECUTE_IF("pq_leader_row_stream_smoke", {
         pq_global_stats.leader_row_stream_smoke_rows.fetch_add(
             1, std::memory_order_relaxed);
@@ -976,6 +1063,10 @@ int PQTableScanIterator::Read() {
     }
 
     if (status == Exchange_nosort::Materialize_status::EOF_REACHED) {
+      if (m_use_threaded_visible_void_pull) {
+        pq_global_stats.visible_void_pull_eofs.fetch_add(
+            1, std::memory_order_relaxed);
+      }
       const auto error_state = m_gather->resolve_error_priority(thd());
       if (error_state.has_error()) {
         int error_code = HA_ERR_INTERNAL_ERROR;
@@ -1018,6 +1109,10 @@ int PQTableScanIterator::Read() {
           1, std::memory_order_relaxed);
     });
     const auto error_state = m_gather->resolve_error_priority(thd());
+    if (m_use_threaded_visible_void_pull) {
+      pq_global_stats.visible_void_pull_failures.fetch_add(
+          1, std::memory_order_relaxed);
+    }
     int error_code = HA_ERR_INTERNAL_ERROR;
     if (error_state.has_error() && error_state.error_code != 0) {
       error_code = error_state.error_code;

@@ -10463,6 +10463,16 @@ DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_cleanup,
                                       visible_void_pull_cleanup)
 DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_failures,
                                       visible_void_pull_failures)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_threaded_selected,
+                                      visible_void_pull_threaded_selected)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_threaded_rows,
+                                      visible_void_pull_threaded_rows)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_threaded_finishes,
+                                      visible_void_pull_threaded_finishes)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_threaded_workers,
+                                      visible_void_pull_threaded_workers)
+DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC(visible_void_pull_threaded_failures,
+                                      visible_void_pull_threaded_failures)
 
 #undef DEFINE_PQ_LEADER_ROW_STREAM_SHOW_FUNC
 
@@ -12701,6 +12711,21 @@ SHOW_VAR status_vars[] = {
      (char *)&show_pq_visible_void_pull_rows, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
     {"Parallel_visible_void_pull_selected",
      (char *)&show_pq_visible_void_pull_selected, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_threaded_failures",
+     (char *)&show_pq_visible_void_pull_threaded_failures, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_threaded_finishes",
+     (char *)&show_pq_visible_void_pull_threaded_finishes, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_threaded_rows",
+     (char *)&show_pq_visible_void_pull_threaded_rows, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_threaded_selected",
+     (char *)&show_pq_visible_void_pull_threaded_selected, SHOW_FUNC,
+     SHOW_SCOPE_GLOBAL},
+    {"Parallel_visible_void_pull_threaded_workers",
+     (char *)&show_pq_visible_void_pull_threaded_workers, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
     {"Parallel_workers_launched", (char *)&show_pq_workers_launched, SHOW_FUNC,
      SHOW_SCOPE_GLOBAL},
