@@ -13,7 +13,15 @@
   `mysqld` build、`pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats`
   targeted MTR。任务书和完成报告见
   [commercial-port-d18-visible-void-pull-fullscan.md](commercial-port-d18-visible-void-pull-fullscan.md)。
-- Current task selected: D1.9 default fullscan void-pull gate 已完成本地编码、
+- Current task selected: D2 default threaded fullscan void-pull 已完成设计任务书，
+  下一步进入 TDD 编码。D2 目标是把普通 eligible DOP2 clustered fullscan 从
+  D1.9 的 leader 同步 `ha_pq_next(void*)` path 推进到真实 worker-thread
+  producer topology：worker 线程生产 row，leader 通过现有 Exchange/MQ
+  `Read()` loop 消费，从而更接近 taurusdbondstore 商用
+  `ParallelScanIterator -> pq_launch_worker -> PQblockScanIterator` 路径。
+  任务书见
+  [commercial-port-d20-threaded-fullscan-void-pull.md](commercial-port-d20-threaded-fullscan-void-pull.md)。
+- Previous task selected: D1.9 default fullscan void-pull gate 已完成本地编码、
   targeted 验证和独立 review。该任务将普通 eligible DOP2 clustered
   fullscan 默认路径切到 D1.8 已验证的 `ha_pq_next(void*)` visible
   void-pull path，旧 PQWR record-gather 路径保留为显式 DBUG regression hook。
