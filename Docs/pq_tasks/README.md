@@ -61,6 +61,15 @@
   `pq_commercial_limit_no_order_by pq_explain_fallback pq_vars` 已本地通过，
   独立 review 已 ACCEPT，review 建议的 `SET_VAR` hint 覆盖已补充。任务书和完成报告见
   [commercial-port-d29-limit-no-order-by.md](commercial-port-d29-limit-no-order-by.md)。
+- Current task selected: D30 pq_support_features_switch contract 已完成。
+  D30 补齐商用 `pq_support_features_switch` flagset 变量和
+  `THD::pq_support_features_switch_flag()` 源码契约，为后续 simple aggregate、
+  count distinct、correlated subquery、hash join spill 和 insert-select 场景
+  迁移提供配置基座。本小步不把这些 flag 接入 optimizer eligibility 或执行路径。
+  `mysqld` build、`git diff --check` 和 targeted MTR
+  `pq_commercial_support_features_switch pq_vars` 已通过；独立 review 已
+  ACCEPT，并已补充 `SET GLOBAL` 和 numeric boundary 覆盖。任务书和完成报告见
+  [commercial-port-d30-support-features-switch.md](commercial-port-d30-support-features-switch.md)。
 - Previous local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
   本地编码、targeted 验证、首轮 review 修正和 final review。`parallel_default_dop`
   变量合同已对齐到 `0..1024`；DOP0 不进入 PQ；DOP1..256 eligible clustered

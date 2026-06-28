@@ -45,6 +45,17 @@ class JOIN;
 struct TABLE;
 class Table_ref;
 
+/* @@pq_support_features_switch flags. */
+#define PQ_SUPPORT_FEATURES_SWITCH_SIMPLE_AGG (1ULL << 0)
+#define PQ_SUPPORT_FEATURES_SWITCH_COUNT_DISTINCT (1ULL << 1)
+#define PQ_SUPPORT_FEATURES_SWITCH_CORRELATED_SUBQUERY (1ULL << 2)
+#define PQ_SUPPORT_FEATURES_SWITCH_HASH_JOIN_SPILL_TO_DISK (1ULL << 3)
+#define PQ_SUPPORT_FEATURES_SWITCH_INSERT_SELECT (1ULL << 4)
+
+static constexpr const unsigned long long PQ_SUPPORT_FEATURES_SWITCH_DEFAULT{
+    PQ_SUPPORT_FEATURES_SWITCH_SIMPLE_AGG |
+    PQ_SUPPORT_FEATURES_SWITCH_CORRELATED_SUBQUERY};
+
 /**
   Reason why a query block is not suitable for parallel execution.
 

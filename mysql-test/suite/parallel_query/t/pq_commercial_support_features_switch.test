@@ -1,0 +1,51 @@
+# Test: pq_commercial_support_features_switch
+# Commercial PQ support feature flagset sysvar contract.
+
+--source include/have_innodb_16k.inc
+
+SELECT @@session.pq_support_features_switch;
+SELECT @@global.pq_support_features_switch;
+
+SET SESSION pq_support_features_switch='simple_aggregate=off';
+SELECT @@session.pq_support_features_switch;
+
+SET SESSION pq_support_features_switch='simple_aggregate=default';
+SELECT @@session.pq_support_features_switch;
+
+SET SESSION pq_support_features_switch='count_distinct=on';
+SELECT @@session.pq_support_features_switch;
+
+SET SESSION pq_support_features_switch='hash_join_spill_to_disk=on,insert_select=on';
+SELECT @@session.pq_support_features_switch;
+
+SELECT /*+ SET_VAR(pq_support_features_switch='insert_select=off') */ @@session.pq_support_features_switch;
+
+SET SESSION pq_support_features_switch=0;
+SELECT @@session.pq_support_features_switch;
+
+SET SESSION pq_support_features_switch=31;
+SELECT @@session.pq_support_features_switch;
+
+SET SESSION pq_support_features_switch=32;
+SELECT @@session.pq_support_features_switch;
+
+SET SESSION pq_support_features_switch=63;
+SELECT @@session.pq_support_features_switch;
+
+--error ER_WRONG_VALUE_FOR_VAR
+SET SESSION pq_support_features_switch=64;
+
+--error ER_WRONG_VALUE_FOR_VAR
+SET SESSION pq_support_features_switch='simple_agg=on';
+
+SET SESSION pq_support_features_switch=DEFAULT;
+SELECT @@session.pq_support_features_switch;
+
+SET GLOBAL pq_support_features_switch='count_distinct=on,insert_select=on';
+connect(global_feature_switch_con,localhost,root,,);
+connection global_feature_switch_con;
+SELECT @@session.pq_support_features_switch;
+disconnect global_feature_switch_con;
+connection default;
+SET GLOBAL pq_support_features_switch=DEFAULT;
+SET SESSION pq_support_features_switch=DEFAULT;

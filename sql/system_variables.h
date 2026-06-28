@@ -561,6 +561,12 @@ struct System_variables {
   bool parallel_limit_no_order_by;
 
   /**
+    @sa Sys_pq_support_features_switch
+    Commercial PQ feature flags enabled for this session.
+  */
+  ulonglong pq_support_features_switch;
+
+  /**
     @sa Sys_parallel_fail_retry
     Whether failed PQ execution may retry with PQ disabled.
   */

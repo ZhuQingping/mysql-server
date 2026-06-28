@@ -108,6 +108,7 @@
 #include "sql/my_decimal.h"
 #include "sql/opt_trace_context.h"
 #include "sql/options_mysqld.h"
+#include "sql/parallel_query/pq_optimizer.h"      // PQ support feature flags
 #include "sql/parallel_query/pq_resource_stat.h"  // parallel_max_threads
 #include "sql/protocol_classic.h"
 #include "sql/psi_memory_key.h"
@@ -7792,6 +7793,25 @@ static Sys_var_bool Sys_parallel_limit_no_order_by(
     "ORDER BY clause",
     HINT_UPDATEABLE SESSION_VAR(parallel_limit_no_order_by), CMD_LINE(OPT_ARG),
     DEFAULT(true));
+
+static const char *pq_support_features_names[] = {"simple_aggregate",
+                                                  "count_distinct",
+                                                  "correlated_subquery",
+                                                  "hash_join_spill_to_disk",
+                                                  "insert_select",
+                                                  "default",
+                                                  NullS};
+
+static Sys_var_flagset Sys_pq_support_features_switch(
+    "pq_support_features_switch",
+    "pq_support_features_switch=option=val[,option=val...], where option is "
+    "one of {simple_aggregate, count_distinct, correlated_subquery, "
+    "hash_join_spill_to_disk, insert_select} and val is one of {on, off, "
+    "default}",
+    HINT_UPDATEABLE SESSION_VAR(pq_support_features_switch),
+    CMD_LINE(REQUIRED_ARG), pq_support_features_names,
+    DEFAULT(PQ_SUPPORT_FEATURES_SWITCH_DEFAULT), NO_MUTEX_GUARD, NOT_IN_BINLOG,
+    ON_CHECK(nullptr), ON_UPDATE(nullptr));
 
 static Sys_var_bool Sys_parallel_fail_retry(
     "parallel_fail_retry",

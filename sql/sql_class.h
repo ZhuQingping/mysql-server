@@ -1811,6 +1811,11 @@ class THD : public MDL_context_owner,
     return (variables.optimizer_switch & flag);
   }
 
+  /** Tells whether the given pq_support_features_switch flag is on */
+  inline bool pq_support_features_switch_flag(ulonglong flag) const {
+    return (variables.pq_support_features_switch & flag);
+  }
+
   enum binlog_filter_state {
     BINLOG_FILTER_UNKNOWN,
     BINLOG_FILTER_CLEAR,

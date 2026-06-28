@@ -60,6 +60,15 @@ Last synced: 2026-06-28
   Independent review accepted, and optional `SET_VAR` hint coverage was added.
   Task report:
   [commercial-port-d29-limit-no-order-by.md](commercial-port-d29-limit-no-order-by.md).
+- D30 pq_support_features_switch contract: completed.
+  Adds the commercial `pq_support_features_switch` flagset sysvar and
+  `THD::pq_support_features_switch_flag()` source contract. This step is
+  contract-only and does not wire the flags into optimizer eligibility or PQ
+  execution behavior. `mysqld` build, `git diff --check`, and targeted MTR
+  `pq_commercial_support_features_switch pq_vars` pass locally. Independent
+  review accepted; suggested `SET GLOBAL` and numeric boundary coverage was
+  added. Task report:
+  [commercial-port-d30-support-features-switch.md](commercial-port-d30-support-features-switch.md).
 
 ## 目标
 
