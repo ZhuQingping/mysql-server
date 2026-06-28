@@ -16,7 +16,7 @@ those cases as PQ eligible execution candidates.
 
 ## 状态
 
-Status: in progress.
+Status: completed.
 
 ## 允许修改
 
@@ -96,14 +96,70 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## Completion Report
 
-Status: pending.
+Status: completed.
 
-Changed files: pending.
+Changed files:
 
-Implementation: pending.
+- `sql/parallel_query/pq_optimizer.h`
+- `sql/parallel_query/pq_optimizer.cc`
+- `sql/opt_explain.cc`
+- `sql/join_optimizer/explain_access_path.cc`
+- `mysql-test/suite/parallel_query/t/pq_explain_dop_cap.test`
+- `mysql-test/suite/parallel_query/r/pq_explain_dop_cap.result`
+- `Docs/pq_tasks/commercial-port-d24-explain-dop-cap.md`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/commercial-full-port-sprint.md`
 
-Verification: pending.
+Implementation:
 
-Review: pending.
+- Added `pq_fullscan_requested_dop()` and
+  `pq_fullscan_dop_unsuite_reason()` so EXPLAIN uses a single fullscan DOP
+  executability check.
+- Added `DOP_DISABLED` and `DOP_EXCEEDS_EXECUTION_CAP` unsuite reasons.
+- Traditional EXPLAIN, FORMAT=TREE, and FORMAT=JSON now report DOP0 and
+  DOP1024 as `Not parallel` / `not_parallel` instead of eligible.
+- In-cap DOP values, such as DOP3, keep the existing eligible annotation and
+  DOP display.
+- No runtime execution gate or sysvar range behavior was changed.
 
-Residual risk: pending.
+Verification:
+
+RED before production changes:
+
+```text
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_explain_dop_cap \
+  --vardir=/tmp/pq-d24-red-vardir \
+  --tmpdir=/tmp/pq-d24-red-tmpdir
+```
+
+Result: failed as expected because DOP0 and DOP1024 still showed the eligible
+annotation.
+
+GREEN / targeted:
+
+```text
+git diff --check
+cmake --build build-ninja --target mysqld -j 8
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_explain_dop_cap pq_explain_eligible pq_explain_json_tree_minimal \
+  pq_commercial_fullscan_dop \
+  --vardir=/tmp/pq-d24-targeted-vardir \
+  --tmpdir=/tmp/pq-d24-targeted-tmpdir
+```
+
+Result: build passed; all 5 MTR entries passed, including shutdown report.
+
+Review:
+
+- Independent review agent: ACCEPT.
+- Findings: no Critical, Important, or Minor issues.
+
+Residual risk:
+
+- `pq_optimizer.cc` now includes `pq_handler.h` for
+  `PQ_Leader_context::MAX_THREADS`. The dependency is limited to the `.cc` and
+  verified by the `mysqld` build.
+- This task aligns EXPLAIN for the current fullscan path only; later
+  non-fullscan commercial paths may need their own execution-cap display rules.

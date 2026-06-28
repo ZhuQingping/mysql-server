@@ -85,6 +85,8 @@ enum class PQUnsuiteReason {
   NON_FULL_TABLE_SCAN,      // Access path is not full table scan
   COST_BELOW_THRESHOLD,     // Estimated cost below parallel_cost_threshold
   UNSUPPORTED_AGGREGATE,    // Has aggregate function not supported by PQ V1
+  DOP_DISABLED,             // Requested DOP is 0, so PQ execution is disabled
+  DOP_EXCEEDS_EXECUTION_CAP,  // Requested DOP exceeds current execution cap
   UNSUPPORTED_BY_PHASE1,    // Check deferred to later phase
 
   // Keep last - sentinel for array size and iteration
@@ -382,6 +384,20 @@ const char *pq_unsuite_reason_to_string(PQUnsuiteReason reason);
   execution.
 */
 const char *pq_v1_explain_eligible_label();
+
+/**
+  Return the DOP currently requested for fullscan PQ execution.
+
+  D6 intentionally matches TryCreatePQTableScanIterator(), which uses the
+  session default DOP for the current fullscan path.
+*/
+uint pq_fullscan_requested_dop(const THD *thd);
+
+/**
+  Return NONE when the requested fullscan DOP is executable by the current PQ
+  fullscan path, otherwise return the reason EXPLAIN should display.
+*/
+PQUnsuiteReason pq_fullscan_dop_unsuite_reason(uint requested_dop);
 
 /**
   Write eligibility result into Phase 0/1 inert fields.

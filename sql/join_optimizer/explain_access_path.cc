@@ -963,19 +963,26 @@ static std::unique_ptr<Json_object> SetObjectMembers(
       THD *thd = current_thd;
       if (join != nullptr && thd->variables.parallel_query) {
         if (join->pq_eligible) {
-          uint dop = join->pq_dop > 0
-                         ? join->pq_dop
-                         : thd->variables.parallel_default_dop;
-          description += string(", parallel query ") +
-                         pq_v1_explain_eligible_label() + " (dop=" +
-                         std::to_string(dop) + ")";
-          error |= AddMemberToObject<Json_int>(obj, "pq_dop", dop);
-          error |= AddMemberToObject<Json_string>(
-              obj, "parallel_query", pq_v1_explain_eligible_label());
-          error |= AddMemberToObject<Json_string>(
-              obj, "parallel_query_state",
-              pq_execution_state_to_string(pq_execution_state_from_uint(
-                  thd->pq_execution_state)));
+          const uint dop = pq_fullscan_requested_dop(thd);
+          const PQUnsuiteReason dop_reason =
+              pq_fullscan_dop_unsuite_reason(dop);
+          if (dop_reason == PQUnsuiteReason::NONE) {
+            description += string(", parallel query ") +
+                           pq_v1_explain_eligible_label() + " (dop=" +
+                           std::to_string(dop) + ")";
+            error |= AddMemberToObject<Json_int>(obj, "pq_dop", dop);
+            error |= AddMemberToObject<Json_string>(
+                obj, "parallel_query", pq_v1_explain_eligible_label());
+            error |= AddMemberToObject<Json_string>(
+                obj, "parallel_query_state",
+                pq_execution_state_to_string(pq_execution_state_from_uint(
+                    thd->pq_execution_state)));
+          } else {
+            const char *reason_str = pq_unsuite_reason_to_string(dop_reason);
+            description += string(", not parallel (") + reason_str + ")";
+            error |= AddMemberToObject<Json_string>(obj, "not_parallel",
+                                                     reason_str);
+          }
         } else {
           const char *reason_str =
               pq_unsuite_reason_to_string(join->pq_unsuitable_reason);

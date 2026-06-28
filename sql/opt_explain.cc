@@ -1703,18 +1703,24 @@ bool Explain_join::explain_extra() {
   // ---------------------------------------------------------------
   if (join != nullptr && explain_thd->variables.parallel_query) {
     if (join->pq_eligible) {
-      StringBuffer<64> pq_buff(cs);
-      pq_buff.append(pq_v1_explain_eligible_label());
-      pq_buff.append(", dop=");
-      pq_buff.append_ulonglong(join->pq_dop > 0 ? join->pq_dop
-                                                  : explain_thd->variables
-                                                        .parallel_default_dop);
-      if (push_extra(ET_PARALLEL_QUERY, pq_buff)) return true;
-      if (fmt->is_hierarchical() &&
-          push_extra(ET_PARALLEL_QUERY_STATE,
-                     pq_execution_state_to_string(pq_execution_state_from_uint(
-                         explain_thd->pq_execution_state))))
-        return true;
+      const uint requested_dop = pq_fullscan_requested_dop(explain_thd);
+      const PQUnsuiteReason dop_reason =
+          pq_fullscan_dop_unsuite_reason(requested_dop);
+      if (dop_reason == PQUnsuiteReason::NONE) {
+        StringBuffer<64> pq_buff(cs);
+        pq_buff.append(pq_v1_explain_eligible_label());
+        pq_buff.append(", dop=");
+        pq_buff.append_ulonglong(requested_dop);
+        if (push_extra(ET_PARALLEL_QUERY, pq_buff)) return true;
+        if (fmt->is_hierarchical() &&
+            push_extra(ET_PARALLEL_QUERY_STATE,
+                       pq_execution_state_to_string(pq_execution_state_from_uint(
+                           explain_thd->pq_execution_state))))
+          return true;
+      } else {
+        const char *reason_str = pq_unsuite_reason_to_string(dop_reason);
+        if (push_extra(ET_NOT_PARALLEL, reason_str)) return true;
+      }
     } else {
       // Show fallback reason. PQUnsuitableReason persists in JOIN.
       const char *reason_str =

@@ -38,6 +38,7 @@
 #include "sql/filesort.h"         // Filesort
 #include "sql/parallel_query/exchange_sort.h"  // Exchange_sort
 #include "sql/parallel_query/pq_aggregate.h"  // pq_check_agg_supported
+#include "sql/parallel_query/pq_handler.h"  // PQ_Leader_context::MAX_THREADS
 #include "sql/parallel_query/sql_parallel.h"  // pq_set_execution_state
 #include "sql/range_optimizer/range_optimizer.h"  // QUICK_RANGE
 #include "sql/sql_class.h"        // THD
@@ -87,6 +88,8 @@ static const char *pq_unsuite_reason_names[] = {
     "NON_FULL_TABLE_SCAN",       // PQUnsuiteReason::NON_FULL_TABLE_SCAN
     "COST_BELOW_THRESHOLD",      // PQUnsuiteReason::COST_BELOW_THRESHOLD
     "UNSUPPORTED_AGGREGATE",     // PQUnsuiteReason::UNSUPPORTED_AGGREGATE
+    "DOP_DISABLED",              // PQUnsuiteReason::DOP_DISABLED
+    "DOP_EXCEEDS_EXECUTION_CAP",  // PQUnsuiteReason::DOP_EXCEEDS_EXECUTION_CAP
     "UNSUPPORTED_BY_PHASE1",     // PQUnsuiteReason::UNSUPPORTED_BY_PHASE1
 };
 
@@ -99,6 +102,18 @@ const char *pq_unsuite_reason_to_string(PQUnsuiteReason reason) {
 
 const char *pq_v1_explain_eligible_label() {
   return "eligible, execution disabled, serial fallback";
+}
+
+uint pq_fullscan_requested_dop(const THD *thd) {
+  if (thd == nullptr) return 0;
+  return thd->variables.parallel_default_dop;
+}
+
+PQUnsuiteReason pq_fullscan_dop_unsuite_reason(uint requested_dop) {
+  if (requested_dop == 0) return PQUnsuiteReason::DOP_DISABLED;
+  if (requested_dop > PQ_Leader_context::MAX_THREADS)
+    return PQUnsuiteReason::DOP_EXCEEDS_EXECUTION_CAP;
+  return PQUnsuiteReason::NONE;
 }
 
 bool pq_build_saved_order_group_contract(

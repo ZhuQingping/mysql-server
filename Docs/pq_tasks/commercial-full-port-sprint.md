@@ -4,10 +4,13 @@ Last synced: 2026-06-28
 
 ## 当前小任务
 
-- D6 EXPLAIN DOP cap alignment: in progress.
+- D6 EXPLAIN DOP cap alignment: completed.
   Runtime factory already serial-falls-back for DOP0 and DOP values above the
   current fullscan cap. D6 aligns traditional EXPLAIN, FORMAT=TREE, and
-  FORMAT=JSON annotations with that runtime gate. Task plan:
+  FORMAT=JSON annotations with that runtime gate. Verification passed:
+  `mysqld` build and targeted MTR
+  `pq_explain_dop_cap pq_explain_eligible pq_explain_json_tree_minimal
+  pq_commercial_fullscan_dop`; independent review accepted. Task report:
   [commercial-port-d24-explain-dop-cap.md](commercial-port-d24-explain-dop-cap.md).
 
 ## 目标
