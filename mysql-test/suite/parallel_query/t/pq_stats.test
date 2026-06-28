@@ -1,7 +1,6 @@
 # Test: pq_stats
 # Verify that PQ status variables are visible and track PQ usage.
-# Phase 8: status variables track queries eligible but falling back
-# because the PQ iterator is not yet functional.
+# Status variables track visible PQ execution, fallback, worker, and row deltas.
 
 --source include/have_innodb_16k.inc
 
@@ -46,7 +45,7 @@ SET @pq_workers_before = (
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_workers_launched');
 
-# 4. Run a PQ-eligible query (will fall back to serial in Phase 8)
+# 4. Enable PQ for the execution counter checks below.
 SET SESSION parallel_query=ON;
 SET SESSION parallel_cost_threshold=0;
 
@@ -72,24 +71,24 @@ SELECT @pq_fallback_after_locking - @pq_fallback_before AS fallback_delta;
 
 SELECT * FROM t1;
 
-# 5. Check that fallback counter increased by 1 after real execution
+# 5. Default fullscan execution should not increment fallback.
 SET @pq_fallback_after_scan = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_queries_fallback');
 SELECT @pq_fallback_after_scan - @pq_fallback_before AS fallback_delta;
 
-# 6. Run another PQ-eligible query (SUM aggregate, implicit grouping)
+# 6. Run another PQ-eligible query (SUM aggregate, implicit grouping).
 SELECT SUM(val) FROM t1;
 
-# 7. Verify fallback counter increased further
+# 7. SUM aggregate should not increment fallback.
 SET @pq_fallback_after_sum = (
   SELECT CAST(variable_value AS UNSIGNED)
     FROM performance_schema.global_status
     WHERE variable_name = 'Parallel_queries_fallback');
 SELECT @pq_fallback_after_sum - @pq_fallback_before AS fallback_delta;
 
-# 8. Run a PQ-ineligible query (GROUP BY - should NOT increment)
+# 8. Run a PQ-ineligible query (GROUP BY - should NOT increment fallback).
 SELECT val, COUNT(*) FROM t1 GROUP BY val;
 
 # 9. Verify fallback counter did NOT change for ineligible query

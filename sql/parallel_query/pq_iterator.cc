@@ -379,9 +379,18 @@ bool PQTableScanIterator::Init() {
   DBUG_EXECUTE_IF("pq_visible_void_pull_fullscan_path", {
     force_visible_void_pull_fullscan_path = true;
   });
+  bool force_threaded_read_dop4_shadow_path = false;
+  DBUG_EXECUTE_IF("pq_read_threaded_dop4_shadow_path", {
+    force_threaded_read_dop4_shadow_path = true;
+  });
+  const bool explicit_threaded_read_dop4_shadow_path =
+      requested_dop == 4 &&
+      (force_threaded_read_dop4_shadow_path ||
+       thd()->variables.parallel_query_experimental_threaded_dop4);
   const bool threaded_visible_void_pull_fullscan_path =
       !force_threaded_pqwr_record_gather_path &&
       !force_visible_void_pull_fullscan_path &&
+      !explicit_threaded_read_dop4_shadow_path &&
       should_enter_threaded_visible_void_pull_fullscan_path(requested_dop);
   const bool visible_void_pull_fullscan_path =
       !force_threaded_pqwr_record_gather_path &&
@@ -892,7 +901,8 @@ bool PQTableScanIterator::should_enter_threaded_visible_void_pull_fullscan_path(
     uint requested_dop) const {
   const bool enabled =
       thd() != nullptr && m_join != nullptr && m_join->pq_eligible &&
-      thd()->variables.parallel_query && requested_dop == 2;
+      thd()->variables.parallel_query &&
+      (requested_dop == 2 || requested_dop == 4);
   return enabled && table() != nullptr && table()->s != nullptr &&
          table()->s->blob_fields == 0 && table()->s->reclength > 0 &&
          pq_table_has_read_fields(table());

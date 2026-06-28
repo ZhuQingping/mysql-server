@@ -232,10 +232,13 @@ TMPDIR=/tmp MTR_BINDIR=../build-ninja perl mysql-test-run.pl --suite=parallel_qu
   Exchange/MQ `Read()` loop 消费；D1.9 同步 void-pull 和旧 PQWR
   record-gather path 保留为显式 regression hook。任务书和完成报告见
   [commercial-port-d20-threaded-fullscan-void-pull.md](commercial-port-d20-threaded-fullscan-void-pull.md)。
-- D3 default DOP4 fullscan void-pull 已完成设计任务书，下一步进入 TDD 编码。
-  该任务把普通 eligible `parallel_default_dop=4` clustered fullscan 也切到 D2
-  `ha_pq_next(void*)` worker-thread producer topology，不再要求
-  `parallel_query_experimental_threaded_dop4`。任务书见
+- D3 default DOP4 fullscan void-pull 已完成本地编码、targeted 验证、首轮
+  review 修正和 final review。该任务把普通 eligible
+  `parallel_default_dop=4` clustered fullscan 也切到 D2 `ha_pq_next(void*)`
+  worker-thread producer topology，不再要求
+  `parallel_query_experimental_threaded_dop4`；同时保留显式 experimental DOP4
+  和 `pq_read_threaded_dop4_shadow_path` 旧 shadow/callback producer 覆盖。
+  任务书和完成报告见
   [commercial-port-d21-default-dop4-fullscan-void-pull.md](commercial-port-d21-default-dop4-fullscan-void-pull.md)。
 
 ## Batch A 审计结果

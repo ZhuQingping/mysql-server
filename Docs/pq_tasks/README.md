@@ -5,18 +5,15 @@
 ## Current Summary
 
 - Last synced: 2026-06-28
-- Latest local update: 2026-06-28 D1.8 visible fullscan void-pull gate 已完成
-  本地实现、targeted 验证和独立 review，并已提交为 `3a040d891bd`。该批次新增
-  `pq_visible_void_pull_fullscan_path` DBUG hook，让用户可见 clustered fullscan
-  query 在 `PQTableScanIterator::Read()` 中逐行调用 worker handler
-  `ha_pq_next(void*)`，并保持默认 PQWR fullscan path 不变。验证已通过：
-  `mysqld` build、`pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats`
-  targeted MTR。任务书和完成报告见
-  [commercial-port-d18-visible-void-pull-fullscan.md](commercial-port-d18-visible-void-pull-fullscan.md)。
-- Current task selected: D3 default DOP4 fullscan void-pull 已完成设计任务书，
-  下一步进入 TDD 编码。D3 目标是让普通 eligible `parallel_default_dop=4`
-  clustered fullscan 不再依赖 `parallel_query_experimental_threaded_dop4`，
-  直接复用 D2 `ha_pq_next(void*)` worker-thread producer topology。任务书见
+- Latest local update: 2026-06-28 D3 default DOP4 fullscan void-pull 已完成
+  本地编码、targeted 验证、首轮 review 修正和 final review。
+  普通 eligible `parallel_default_dop=4` clustered fullscan 现在默认复用 D2
+  `ha_pq_next(void*)` worker-thread producer topology；显式
+  `parallel_query_experimental_threaded_dop4` 和
+  `pq_read_threaded_dop4_shadow_path` 仍保留旧 shadow/callback producer 覆盖。
+  验证已通过：`mysqld` build、`pq_commercial_fullscan
+  pq_read_threaded_pqwr_record_gather pq_read_threaded_dop4_worker_error
+  pq_read_threaded_dop4_external_kill pq_stats` targeted MTR。任务书和完成报告见
   [commercial-port-d21-default-dop4-fullscan-void-pull.md](commercial-port-d21-default-dop4-fullscan-void-pull.md)。
 - Previous task selected: D2 default threaded fullscan void-pull 已完成本地编码、
   targeted 验证和独立 review，并修复 review 提出的 InnoDB worker-init

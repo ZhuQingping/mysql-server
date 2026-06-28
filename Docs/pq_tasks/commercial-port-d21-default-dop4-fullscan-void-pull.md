@@ -120,6 +120,11 @@ Implementation:
 - keep explicit DBUG hooks precedence:
   - `pq_read_threaded_pqwr_record_gather_path` still wins;
   - `pq_visible_void_pull_fullscan_path` still forces the old synchronous path.
+- keep explicit legacy DOP4 shadow/callback coverage reachable:
+  - `parallel_query_experimental_threaded_dop4=ON` still selects the old
+    shadow/callback producer;
+  - `pq_read_threaded_dop4_shadow_path` still selects the old shadow/callback
+    producer for debug-only worker error / external kill tests.
 
 Do not make DOP1 default in D3. DOP1 has different commercial value and should
 remain a separate decision.
@@ -147,4 +152,79 @@ Independent review focus:
 
 ## Completion Report
 
-Pending.
+Status: completed.
+
+Changed files:
+
+- `sql/parallel_query/pq_iterator.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_fullscan.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_fullscan.result`
+- `mysql-test/suite/parallel_query/t/pq_stats.test`
+- `mysql-test/suite/parallel_query/r/pq_stats.result`
+
+Implementation:
+
+- Extended default threaded visible void-pull fullscan eligibility from DOP2
+  to DOP2/DOP4.
+- Added explicit DOP4 shadow/callback precedence so
+  `parallel_query_experimental_threaded_dop4=ON` and
+  `pq_read_threaded_dop4_shadow_path` continue to exercise the legacy producer.
+- Converted the existing `pq_commercial_fullscan` DOP4 window from experimental
+  DOP4 to default DOP4, with threaded void-pull selected/rows/FINISH/workers
+  assertions.
+- Updated `pq_stats` fallback/executed expectations for the newly visible
+  DOP4 execution path. `GROUP BY` remains non-fallback.
+
+TDD RED:
+
+```text
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan \
+  --vardir=/tmp/pq-d21-red-vardir \
+  --tmpdir=/tmp/pq-d21-red-tmpdir
+```
+
+Observed expected failure before production code change:
+
+```text
+expected: executed_delta=1 fallback_delta=0 rows_delta=8 workers_delta=4
+actual:   executed_delta=0 fallback_delta=1 rows_delta=0 workers_delta=0
+
+expected threaded_void_selected/rows/finishes/workers/failures = 1/8/4/4/0
+actual   threaded_void_selected/rows/finishes/workers/failures = 0/0/0/0/0
+```
+
+Verification:
+
+```text
+git diff --check
+cmake --build build-ninja --target mysqld -j 8
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_fullscan pq_read_threaded_pqwr_record_gather \
+  pq_read_threaded_dop4_worker_error pq_read_threaded_dop4_external_kill \
+  pq_stats \
+  --vardir=/tmp/pq-d21-final-v3-vardir \
+  --tmpdir=/tmp/pq-d21-final-v3-tmpdir
+```
+
+Result: all 6 tests passed. Build passed with the existing
+`Prepared_statement` final-class virtual destructor warning.
+
+Review:
+
+- First independent review rejected the initial diff because default DOP4
+  visible void-pull shadowed legacy DOP4 shadow/callback tests.
+- Fixed by preserving explicit DOP4 shadow/callback precedence.
+- Final independent review: ACCEPT, no Critical/Important/Minor findings.
+  Reviewer confirmed the DOP4 priority issue is resolved, DOP2 is unchanged,
+  PQWR DBUG gate still wins, visible DBUG gate still wins, and `pq_stats`
+  expectations match D3 behavior.
+
+Residual risk:
+
+- DOP4 now makes ordinary eligible fullscan / implicit aggregate queries count
+  as executed rather than fallback. This is intended for D3 but changes old
+  `pq_stats` expectations.
+- Legacy DOP4 shadow/callback path remains for explicit experimental and DBUG
+  coverage; it is not the default commercial-shaped DOP4 path.
