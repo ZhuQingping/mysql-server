@@ -555,6 +555,12 @@ struct System_variables {
   bool parallel_graceful_fallback;
 
   /**
+    @sa Sys_parallel_limit_no_order_by
+    Whether LIMIT without ORDER BY may remain PQ eligible.
+  */
+  bool parallel_limit_no_order_by;
+
+  /**
     @sa Sys_parallel_fail_retry
     Whether failed PQ execution may retry with PQ disabled.
   */

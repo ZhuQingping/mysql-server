@@ -50,6 +50,16 @@ Last synced: 2026-06-28
   pq_explain_fallback pq_commercial_max_threads` pass locally; independent
   review accepted, and suggested test-strengthening coverage was added. Task report:
   [commercial-port-d28-force-parallel-execute.md](commercial-port-d28-force-parallel-execute.md).
+- D29 parallel_limit_no_order_by behavior alignment: completed.
+  Adds the commercial `parallel_limit_no_order_by` session variable with
+  default ON and wires the existing LIMIT-without-ORDER-BY eligibility gate to
+  that switch. Default ON allows supported LIMIT full scans to remain PQ
+  eligible; explicit OFF restores `LIMIT_NO_ORDER_BY`. RED/GREEN, `mysqld`
+  build, and targeted MTR
+  `pq_commercial_limit_no_order_by pq_explain_fallback pq_vars` pass locally.
+  Independent review accepted, and optional `SET_VAR` hint coverage was added.
+  Task report:
+  [commercial-port-d29-limit-no-order-by.md](commercial-port-d29-limit-no-order-by.md).
 
 ## 目标
 

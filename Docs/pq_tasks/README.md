@@ -53,6 +53,14 @@
   ACCEPT，review 建议的 `parallel_query=OFF` 与 runtime DOP-cap status
   覆盖已补充。任务书和完成报告见
   [commercial-port-d28-force-parallel-execute.md](commercial-port-d28-force-parallel-execute.md)。
+- Current task selected: D29 parallel_limit_no_order_by behavior alignment 已完成。
+  D29 补齐商用 `parallel_limit_no_order_by` session 变量，默认 ON；
+  默认 ON 时 LIMIT 无 ORDER BY 的 supported fullscan 可继续 PQ eligibility，
+  显式 OFF 时保留当前 `LIMIT_NO_ORDER_BY` fallback。RED/GREEN、`mysqld`
+  build 和 targeted MTR
+  `pq_commercial_limit_no_order_by pq_explain_fallback pq_vars` 已本地通过，
+  独立 review 已 ACCEPT，review 建议的 `SET_VAR` hint 覆盖已补充。任务书和完成报告见
+  [commercial-port-d29-limit-no-order-by.md](commercial-port-d29-limit-no-order-by.md)。
 - Previous local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
   本地编码、targeted 验证、首轮 review 修正和 final review。`parallel_default_dop`
   变量合同已对齐到 `0..1024`；DOP0 不进入 PQ；DOP1..256 eligible clustered

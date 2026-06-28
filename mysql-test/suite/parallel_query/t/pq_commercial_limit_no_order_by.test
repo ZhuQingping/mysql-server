@@ -1,0 +1,42 @@
+# Test: pq_commercial_limit_no_order_by
+# Commercial parallel_limit_no_order_by variable and eligibility behavior.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40),(5,50);
+
+SELECT @@session.parallel_limit_no_order_by;
+SELECT @@global.parallel_limit_no_order_by;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+
+# Commercial default allows LIMIT without ORDER BY to remain PQ eligible.
+EXPLAIN SELECT * FROM t1 LIMIT 2;
+
+# SET_VAR hint should be able to restore the conservative fallback for one
+# statement without changing the session default.
+EXPLAIN SELECT /*+ SET_VAR(parallel_limit_no_order_by=OFF) */ * FROM t1 LIMIT 2;
+SELECT @@session.parallel_limit_no_order_by;
+
+# The session switch can restore the conservative fallback.
+SET SESSION parallel_limit_no_order_by=OFF;
+SELECT @@session.parallel_limit_no_order_by;
+EXPLAIN SELECT * FROM t1 LIMIT 2;
+
+# Resetting to default should allow the same shape again.
+SET SESSION parallel_limit_no_order_by=DEFAULT;
+SELECT @@session.parallel_limit_no_order_by;
+EXPLAIN SELECT * FROM t1 LIMIT 2;
+
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE t1;

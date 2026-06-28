@@ -2535,11 +2535,13 @@ bool pq_check_query_block_eligible(THD *thd, Query_block *query_block,
   }
 
   // ================================================================
-  // 11a. Match the commercial default: LIMIT/OFFSET without ORDER BY is
-  //      not a stable row-returning PQ shape. Aggregate queries without
-  //      GROUP BY still return a single logical row and are handled above.
+  // 11a. Commercial compatibility: LIMIT/OFFSET without ORDER BY is allowed by
+  //      default, but the session switch can restore the conservative fallback.
+  //      Aggregate queries without GROUP BY still return a single logical row
+  //      and are handled above.
   // ================================================================
-  if (query_block->has_limit() && !query_block->is_implicitly_grouped()) {
+  if (!thd->variables.parallel_limit_no_order_by && query_block->has_limit() &&
+      !query_block->is_implicitly_grouped()) {
     return pq_reject(info, PQUnsuiteReason::LIMIT_NO_ORDER_BY,
                      "LIMIT without ORDER BY is disabled for PQ");
   }

@@ -1,0 +1,47 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40),(5,50);
+SELECT @@session.parallel_limit_no_order_by;
+@@session.parallel_limit_no_order_by
+1
+SELECT @@global.parallel_limit_no_order_by;
+@@global.parallel_limit_no_order_by
+1
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_default_dop=2;
+EXPLAIN SELECT * FROM t1 LIMIT 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel query eligible, execution disabled, serial fallback, dop=2
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val` from `test`.`t1` limit 2
+EXPLAIN SELECT /*+ SET_VAR(parallel_limit_no_order_by=OFF) */ * FROM t1 LIMIT 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel LIMIT_NO_ORDER_BY
+Warnings:
+Note	1003	/* select#1 */ select /*+ SET_VAR(parallel_limit_no_order_by='OFF') */ `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val` from `test`.`t1` limit 2
+SELECT @@session.parallel_limit_no_order_by;
+@@session.parallel_limit_no_order_by
+1
+SET SESSION parallel_limit_no_order_by=OFF;
+SELECT @@session.parallel_limit_no_order_by;
+@@session.parallel_limit_no_order_by
+0
+EXPLAIN SELECT * FROM t1 LIMIT 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Not parallel LIMIT_NO_ORDER_BY
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val` from `test`.`t1` limit 2
+SET SESSION parallel_limit_no_order_by=DEFAULT;
+SELECT @@session.parallel_limit_no_order_by;
+@@session.parallel_limit_no_order_by
+1
+EXPLAIN SELECT * FROM t1 LIMIT 2;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	Parallel query eligible, execution disabled, serial fallback, dop=2
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`val` AS `val` from `test`.`t1` limit 2
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+DROP TABLE t1;

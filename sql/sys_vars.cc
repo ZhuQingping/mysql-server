@@ -7786,6 +7786,13 @@ static Sys_var_bool Sys_parallel_graceful_fallback(
     HINT_UPDATEABLE SESSION_VAR(parallel_graceful_fallback), CMD_LINE(OPT_ARG),
     DEFAULT(true));
 
+static Sys_var_bool Sys_parallel_limit_no_order_by(
+    "parallel_limit_no_order_by",
+    "Enable parallel query execution when the query has a LIMIT clause but no "
+    "ORDER BY clause",
+    HINT_UPDATEABLE SESSION_VAR(parallel_limit_no_order_by), CMD_LINE(OPT_ARG),
+    DEFAULT(true));
+
 static Sys_var_bool Sys_parallel_fail_retry(
     "parallel_fail_retry",
     "Whether to automatically retry failed parallel queries with parallel query "

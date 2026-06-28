@@ -23,10 +23,12 @@ EXPLAIN SELECT val, COUNT(*) FROM t1 GROUP BY val;
 # 3. DISTINCT causes fallback (HAS_DISTINCT)
 EXPLAIN SELECT DISTINCT val FROM t1;
 
-# 4. Commercial default: LIMIT without ORDER BY is not a stable
-#    row-returning PQ shape.
+# 4. Commercial default allows LIMIT without ORDER BY. Explicitly disabling
+#    the switch restores the conservative fallback reason.
 SET SESSION parallel_cost_threshold=0;
+SET SESSION parallel_limit_no_order_by=OFF;
 EXPLAIN SELECT * FROM t1 LIMIT 2;
+SET SESSION parallel_limit_no_order_by=ON;
 
 # 5. WHERE clause on non-PK column (should still be full scan eligible
 #    if cost threshold is lowered)
@@ -35,5 +37,6 @@ EXPLAIN SELECT * FROM t1 WHERE val > 20;
 # Reset
 SET SESSION parallel_query=OFF;
 SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_limit_no_order_by=ON;
 
 DROP TABLE t1;
