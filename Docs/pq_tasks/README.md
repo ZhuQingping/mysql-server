@@ -13,7 +13,12 @@
   `mysqld` build、`pq_commercial_fullscan pq_read_threaded_pqwr_record_gather pq_stats`
   targeted MTR。任务书和完成报告见
   [commercial-port-d18-visible-void-pull-fullscan.md](commercial-port-d18-visible-void-pull-fullscan.md)。
-- Current task selected: D2 default threaded fullscan void-pull 已完成本地编码、
+- Current task selected: D3 default DOP4 fullscan void-pull 已完成设计任务书，
+  下一步进入 TDD 编码。D3 目标是让普通 eligible `parallel_default_dop=4`
+  clustered fullscan 不再依赖 `parallel_query_experimental_threaded_dop4`，
+  直接复用 D2 `ha_pq_next(void*)` worker-thread producer topology。任务书见
+  [commercial-port-d21-default-dop4-fullscan-void-pull.md](commercial-port-d21-default-dop4-fullscan-void-pull.md)。
+- Previous task selected: D2 default threaded fullscan void-pull 已完成本地编码、
   targeted 验证和独立 review，并修复 review 提出的 InnoDB worker-init
   double-free 与 worker THD kill propagation 问题。普通 eligible DOP2
   clustered fullscan 已从 D1.9 的 leader 同步 `ha_pq_next(void*)` path 推进到
