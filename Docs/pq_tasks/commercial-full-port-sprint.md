@@ -19,6 +19,12 @@ Last synced: 2026-06-28
   review found and fixed large-value narrowing risk; targeted build/MTR passed.
   Task report:
   [commercial-port-d25-parallel-max-threads.md](commercial-port-d25-parallel-max-threads.md).
+- D8 commercial resource sysvars: in progress.
+  Adds the remaining commercial variable contract used by many reference MTRs:
+  `parallel_rows_threshold`, `parallel_tuple_cost`, `parallel_setup_cost`, and
+  `parallel_graceful_fallback`. This task intentionally does not wire those
+  variables into optimizer/execution behavior yet. Task plan:
+  [commercial-port-d26-resource-sysvars.md](commercial-port-d26-resource-sysvars.md).
 
 ## 目标
 

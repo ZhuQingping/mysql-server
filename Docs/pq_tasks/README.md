@@ -22,6 +22,12 @@
   `parallel_max_threads=4294967296` 回归；targeted build/MTR 已通过。任务书
   和完成报告见
   [commercial-port-d25-parallel-max-threads.md](commercial-port-d25-parallel-max-threads.md)。
+- Current task selected: D8 commercial resource sysvars 已启动。D8 补齐商用
+  测试套依赖的 `parallel_rows_threshold`、`parallel_tuple_cost`、
+  `parallel_setup_cost`、`parallel_graceful_fallback` 变量合同；本小步只做
+  sysvar 可见性和默认值，不接 optimizer cost、rows threshold 或 fallback
+  执行语义。任务书见
+  [commercial-port-d26-resource-sysvars.md](commercial-port-d26-resource-sysvars.md)。
 - Previous local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
   本地编码、targeted 验证、首轮 review 修正和 final review。`parallel_default_dop`
   变量合同已对齐到 `0..1024`；DOP0 不进入 PQ；DOP1..256 eligible clustered
