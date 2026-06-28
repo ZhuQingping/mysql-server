@@ -69,6 +69,14 @@ Last synced: 2026-06-28
   review accepted; suggested `SET GLOBAL` and numeric boundary coverage was
   added. Task report:
   [commercial-port-d30-support-features-switch.md](commercial-port-d30-support-features-switch.md).
+- D31 parallel_batch_* sysvar contract: completed.
+  Adds commercial `parallel_batch_max_slot` and `parallel_batch_max_mem_size`
+  session variables used by the commercial Batch_buffer path. This step is
+  contract-only and must not wire them into MQ, Batch_buffer, Record_buffer, or
+  worker execution behavior yet. `mysqld` build, `git diff --check`, and
+  targeted MTR `pq_commercial_batch_sysvars pq_vars` pass locally. Independent
+  review accepted. Task report:
+  [commercial-port-d31-batch-sysvars.md](commercial-port-d31-batch-sysvars.md).
 
 ## 目标
 

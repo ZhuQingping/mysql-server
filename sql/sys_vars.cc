@@ -7813,6 +7813,20 @@ static Sys_var_flagset Sys_pq_support_features_switch(
     DEFAULT(PQ_SUPPORT_FEATURES_SWITCH_DEFAULT), NO_MUTEX_GUARD, NOT_IN_BINLOG,
     ON_CHECK(nullptr), ON_UPDATE(nullptr));
 
+static Sys_var_ulong Sys_parallel_batch_max_slot(
+    "parallel_batch_max_slot",
+    "Maximum slot count for parallel query batch buffers",
+    SESSION_VAR(parallel_batch_max_slot), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, 1024), DEFAULT(8), BLOCK_SIZE(1), NO_MUTEX_GUARD,
+    NOT_IN_BINLOG);
+
+static Sys_var_ulong Sys_parallel_batch_max_mem_size(
+    "parallel_batch_max_mem_size",
+    "Maximum memory size for parallel query batch buffers",
+    SESSION_VAR(parallel_batch_max_mem_size), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, ULONG_MAX), DEFAULT(1024 * 1024), BLOCK_SIZE(1),
+    NO_MUTEX_GUARD, NOT_IN_BINLOG);
+
 static Sys_var_bool Sys_parallel_fail_retry(
     "parallel_fail_retry",
     "Whether to automatically retry failed parallel queries with parallel query "

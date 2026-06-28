@@ -567,6 +567,18 @@ struct System_variables {
   ulonglong pq_support_features_switch;
 
   /**
+    @sa Sys_parallel_batch_max_slot
+    Maximum slot count for commercial PQ batch buffers.
+  */
+  ulong parallel_batch_max_slot;
+
+  /**
+    @sa Sys_parallel_batch_max_mem_size
+    Maximum memory size for commercial PQ batch buffers.
+  */
+  ulong parallel_batch_max_mem_size;
+
+  /**
     @sa Sys_parallel_fail_retry
     Whether failed PQ execution may retry with PQ disabled.
   */

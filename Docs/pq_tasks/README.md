@@ -70,6 +70,13 @@
   `pq_commercial_support_features_switch pq_vars` 已通过；独立 review 已
   ACCEPT，并已补充 `SET GLOBAL` 和 numeric boundary 覆盖。任务书和完成报告见
   [commercial-port-d30-support-features-switch.md](commercial-port-d30-support-features-switch.md)。
+- Current task selected: D31 parallel_batch_* sysvar contract 已完成。
+  D31 补齐商用 `parallel_batch_max_slot` 和 `parallel_batch_max_mem_size`
+  session 变量，为后续 Batch_buffer / MQ 路径平移提供变量契约。本小步不接
+  MQ、Batch_buffer、Record_buffer 或 worker 执行行为。`mysqld` build、
+  `git diff --check` 和 targeted MTR
+  `pq_commercial_batch_sysvars pq_vars` 已通过；独立 review 已 ACCEPT。任务书和完成报告见
+  [commercial-port-d31-batch-sysvars.md](commercial-port-d31-batch-sysvars.md)。
 - Previous local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
   本地编码、targeted 验证、首轮 review 修正和 final review。`parallel_default_dop`
   变量合同已对齐到 `0..1024`；DOP0 不进入 PQ；DOP1..256 eligible clustered
