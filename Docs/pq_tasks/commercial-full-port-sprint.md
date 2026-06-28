@@ -12,6 +12,11 @@ Last synced: 2026-06-28
   `pq_explain_dop_cap pq_explain_eligible pq_explain_json_tree_minimal
   pq_commercial_fullscan_dop`; independent review accepted. Task report:
   [commercial-port-d24-explain-dop-cap.md](commercial-port-d24-explain-dop-cap.md).
+- D7 parallel_max_threads cap alignment: in progress.
+  Current code already has `parallel_max_threads` storage and budget checks,
+  but users cannot configure it. D7 exposes the commercial global sysvar and
+  aligns fullscan EXPLAIN/runtime DOP cap with the configured budget. Task plan:
+  [commercial-port-d25-parallel-max-threads.md](commercial-port-d25-parallel-max-threads.md).
 
 ## 目标
 
