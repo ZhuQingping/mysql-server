@@ -14,11 +14,13 @@
   pq_explain_json_tree_minimal pq_commercial_fullscan_dop`）和独立 review。
   任务书与完成报告见
   [commercial-port-d24-explain-dop-cap.md](commercial-port-d24-explain-dop-cap.md)。
-- Current task selected: D7 parallel_max_threads cap alignment 已启动。
+- Current task selected: D7 parallel_max_threads cap alignment 已完成。
   当前分支已有 `parallel_max_threads` 全局变量和 worker 线程预算检查，但还
   没有 sysvar 暴露；D7 将补齐商用 `parallel_max_threads` 变量，并让
   EXPLAIN 与 `TryCreatePQTableScanIterator()` 使用同一个 fullscan DOP cap
-  helper。任务书见
+  helper。首轮 review 发现大值窄化风险，已修复并补充
+  `parallel_max_threads=4294967296` 回归；targeted build/MTR 已通过。任务书
+  和完成报告见
   [commercial-port-d25-parallel-max-threads.md](commercial-port-d25-parallel-max-threads.md)。
 - Previous local update: 2026-06-28 D4 fullscan DOP resolver alignment 已完成
   本地编码、targeted 验证、首轮 review 修正和 final review。`parallel_default_dop`

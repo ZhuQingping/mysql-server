@@ -87,6 +87,7 @@ enum class PQUnsuiteReason {
   UNSUPPORTED_AGGREGATE,    // Has aggregate function not supported by PQ V1
   DOP_DISABLED,             // Requested DOP is 0, so PQ execution is disabled
   DOP_EXCEEDS_EXECUTION_CAP,  // Requested DOP exceeds current execution cap
+  DOP_EXCEEDS_THREAD_BUDGET,  // Requested DOP exceeds parallel_max_threads
   UNSUPPORTED_BY_PHASE1,    // Check deferred to later phase
 
   // Keep last - sentinel for array size and iteration
@@ -392,6 +393,14 @@ const char *pq_v1_explain_eligible_label();
   session default DOP for the current fullscan path.
 */
 uint pq_fullscan_requested_dop(const THD *thd);
+
+/**
+  Return the effective worker cap for the current fullscan path.
+
+  `parallel_max_threads=0` preserves the existing unlimited resource-budget
+  semantics and therefore returns the compiled fullscan cap.
+*/
+uint pq_fullscan_effective_dop_cap();
 
 /**
   Return NONE when the requested fullscan DOP is executable by the current PQ

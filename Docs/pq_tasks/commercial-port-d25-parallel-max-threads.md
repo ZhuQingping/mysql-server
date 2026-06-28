@@ -18,7 +18,7 @@ budget is non-zero.
 
 ## 状态
 
-Status: in progress.
+Status: completed.
 
 ## 允许修改
 
@@ -102,14 +102,85 @@ TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
 
 ## Completion Report
 
-Status: pending.
+Status: completed.
 
-Changed files: pending.
+Changed files:
 
-Implementation: pending.
+- `sql/sys_vars.cc`
+- `sql/parallel_query/pq_optimizer.h`
+- `sql/parallel_query/pq_optimizer.cc`
+- `sql/parallel_query/pq_iterator.cc`
+- `mysql-test/suite/parallel_query/t/pq_commercial_max_threads.test`
+- `mysql-test/suite/parallel_query/r/pq_commercial_max_threads.result`
+- `Docs/pq_tasks/commercial-port-d25-parallel-max-threads.md`
+- `Docs/pq_tasks/README.md`
+- `Docs/pq_tasks/commercial-full-port-sprint.md`
 
-Verification: pending.
+Implementation:
 
-Review: pending.
+- Added global sysvar `parallel_max_threads`, backed by existing
+  `parallel_max_threads` storage, with commercial default `64`.
+- Added `DOP_EXCEEDS_THREAD_BUDGET` as a stable EXPLAIN not-parallel reason.
+- Added `pq_fullscan_effective_dop_cap()` so DOP checks use:
+  - compiled cap when `parallel_max_threads=0`;
+  - compiled cap when configured budget is above the compiled cap;
+  - configured budget when it is a positive value below the compiled cap.
+- Reused `pq_fullscan_dop_unsuite_reason()` in
+  `TryCreatePQTableScanIterator()`, keeping EXPLAIN and runtime selection
+  aligned.
+- Kept DOP0 and above-compiled-cap behavior from D6.
 
-Residual risk: pending.
+Review fixes:
+
+- First review found an Important issue: directly casting `ulong
+  parallel_max_threads` to `uint` could wrap large configured values.
+- Fixed by comparing in `ulong` before narrowing.
+- Added MTR coverage for `parallel_max_threads=4294967296` so large budgets
+  clamp to the compiled fullscan cap instead of wrapping to zero.
+
+Verification:
+
+RED before production changes:
+
+```text
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_max_threads \
+  --vardir=/tmp/pq-d25-red-vardir \
+  --tmpdir=/tmp/pq-d25-red-tmpdir
+```
+
+Result: failed as expected with unknown system variable
+`parallel_max_threads`.
+
+GREEN / targeted:
+
+```text
+git diff --check
+cmake --build build-ninja --target mysqld -j 8
+cd build-ninja/mysql-test
+TMPDIR=/tmp ./mtr --suite=parallel_query --parallel=1 \
+  pq_commercial_max_threads pq_vars pq_explain_dop_cap \
+  pq_commercial_fullscan_dop pq_commercial_fullscan \
+  --vardir=/tmp/pq-d25-targeted-v2-vardir \
+  --tmpdir=/tmp/pq-d25-targeted-v2-tmpdir
+```
+
+Result: build passed; all 6 MTR entries passed, including shutdown report.
+
+Review:
+
+- First independent review: CHANGES_REQUESTED for `ulong` to `uint` narrowing.
+- Fix applied with additional MTR coverage.
+- Re-review: pending.
+
+Residual risk:
+
+- Default `parallel_max_threads=64` intentionally follows the commercial
+  default, but changes the old current-branch internal behavior where the
+  backing storage default `0` effectively meant unlimited. In this branch,
+  ordinary DOP values above 64 are now blocked by default unless the user sets
+  `parallel_max_threads=0` or a larger positive budget. This is aligned with
+  the commercial migration target and covered by `pq_commercial_max_threads`.
+- D7 only wires the fullscan factory/EXPLAIN cap. Future range/ref/ORDER BY
+  commercial paths must reuse or extend the same budget helper when they are
+  opened.

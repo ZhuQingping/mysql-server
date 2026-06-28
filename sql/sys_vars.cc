@@ -108,6 +108,7 @@
 #include "sql/my_decimal.h"
 #include "sql/opt_trace_context.h"
 #include "sql/options_mysqld.h"
+#include "sql/parallel_query/pq_resource_stat.h"  // parallel_max_threads
 #include "sql/protocol_classic.h"
 #include "sql/psi_memory_key.h"
 #include "sql/query_options.h"
@@ -7762,6 +7763,14 @@ static Sys_var_ulonglong Sys_parallel_memory_limit(
     SESSION_VAR(parallel_memory_limit), CMD_LINE(REQUIRED_ARG),
     VALID_RANGE(0, (ulonglong) ~(intptr)0), DEFAULT(268435456),
     BLOCK_SIZE(1));
+
+static Sys_var_ulong Sys_parallel_max_threads(
+    "parallel_max_threads",
+    "Maximum global worker threads available for parallel query. "
+    "0 disables this resource cap",
+    GLOBAL_VAR(parallel_max_threads), CMD_LINE(REQUIRED_ARG),
+    VALID_RANGE(0, ULONG_MAX), DEFAULT(64), BLOCK_SIZE(1), NO_MUTEX_GUARD,
+    NOT_IN_BINLOG);
 
 static Sys_var_uint Sys_parallel_queue_timeout(
     "parallel_queue_timeout",

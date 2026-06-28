@@ -1,0 +1,134 @@
+# Test: pq_commercial_max_threads
+# Commercial parallel_max_threads variable and fullscan DOP cap behavior.
+
+--source include/have_innodb_16k.inc
+
+--disable_warnings
+DROP TABLE IF EXISTS t1;
+--enable_warnings
+
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40);
+
+SET @saved_parallel_max_threads = @@global.parallel_max_threads;
+
+SELECT @@global.parallel_max_threads;
+
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+
+# Budget below requested DOP should be visible as a non-parallel plan and
+# should not launch PQ workers.
+SET GLOBAL parallel_max_threads=2;
+SET SESSION parallel_default_dop=3;
+
+EXPLAIN SELECT COUNT(*), SUM(val) FROM t1;
+--replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=<cost> rows=<rows>/
+EXPLAIN FORMAT=TREE SELECT COUNT(*), SUM(val) FROM t1;
+--replace_regex /\"query_cost\": \"[^\"]*\"/\"query_cost\": \"<cost>\"/ /\"rows_examined_per_scan\": [0-9]+/\"rows_examined_per_scan\": <rows>/ /\"rows_produced_per_join\": [0-9]+/\"rows_produced_per_join\": <rows>/ /\"read_cost\": \"[^\"]*\"/\"read_cost\": \"<cost>\"/ /\"eval_cost\": \"[^\"]*\"/\"eval_cost\": \"<cost>\"/ /\"prefix_cost\": \"[^\"]*\"/\"prefix_cost\": \"<cost>\"/ /\"data_read_per_join\": \"[^\"]*\"/\"data_read_per_join\": \"<bytes>\"/
+EXPLAIN FORMAT=JSON SELECT COUNT(*), SUM(val) FROM t1;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+SELECT COUNT(*) AS row_count, SUM(val) AS sum_val FROM t1;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+# DOP equal to the budget should still execute.
+SET SESSION parallel_default_dop=2;
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+SELECT COUNT(*) AS row_count, SUM(val) AS sum_val FROM t1;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+    AS fallback_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+    AS rows_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+# Zero preserves the current internal "no resource cap" behavior.
+SET GLOBAL parallel_max_threads=0;
+SET SESSION parallel_default_dop=3;
+EXPLAIN SELECT COUNT(*), SUM(val) FROM t1;
+
+SET @pq_executed_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_workers_before = (
+  SELECT CAST(variable_value AS UNSIGNED)
+    FROM performance_schema.global_status
+    WHERE variable_name = 'Parallel_workers_launched');
+
+SELECT COUNT(*) AS row_count, SUM(val) AS sum_val FROM t1;
+
+SELECT
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+    AS executed_delta,
+  (SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+   WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+    AS workers_delta;
+
+# Very large budgets should clamp to the compiled per-query fullscan cap
+# without unsigned narrowing/wraparound.
+SET GLOBAL parallel_max_threads=4294967296;
+SET SESSION parallel_default_dop=3;
+EXPLAIN SELECT COUNT(*), SUM(val) FROM t1;
+
+SET GLOBAL parallel_max_threads=@saved_parallel_max_threads;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+
+DROP TABLE t1;

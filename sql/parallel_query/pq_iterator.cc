@@ -48,6 +48,7 @@
 #include "sql/parallel_query/pq_clone.h"  // pq_clone_activation_probe
 #include "sql/parallel_query/pq_group_aggregate_iterator.h"
 #include "sql/parallel_query/pq_iterators.h"
+#include "sql/parallel_query/pq_optimizer.h"  // pq_fullscan_dop_unsuite_reason
 #include "sql/parallel_query/pq_resource_stat.h"
 #include "sql/parallel_query/query_result_mq.h"
 #include "sql/parallel_query/sql_parallel.h"  // pq_global_stats
@@ -1234,7 +1235,7 @@ unique_ptr_destroy_only<RowIterator> TryCreatePQTableScanIterator(
   }
 
   const uint requested_dop = thd->variables.parallel_default_dop;
-  if (requested_dop == 0 || requested_dop > PQ_Leader_context::MAX_THREADS) {
+  if (pq_fullscan_dop_unsuite_reason(requested_dop) != PQUnsuiteReason::NONE) {
     return nullptr;
   }
 

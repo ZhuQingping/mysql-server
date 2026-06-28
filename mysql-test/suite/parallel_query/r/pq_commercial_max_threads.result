@@ -1,0 +1,158 @@
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (id INT PRIMARY KEY, val INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,40);
+SET @saved_parallel_max_threads = @@global.parallel_max_threads;
+SELECT @@global.parallel_max_threads;
+@@global.parallel_max_threads
+64
+SET SESSION parallel_query=ON;
+SET SESSION parallel_cost_threshold=0;
+SET GLOBAL parallel_max_threads=2;
+SET SESSION parallel_default_dop=3;
+EXPLAIN SELECT COUNT(*), SUM(val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Not parallel DOP_EXCEEDS_THREAD_BUDGET
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)`,sum(`test`.`t1`.`val`) AS `SUM(val)` from `test`.`t1`
+EXPLAIN FORMAT=TREE SELECT COUNT(*), SUM(val) FROM t1;
+EXPLAIN
+-> Aggregate: count(0), sum(t1.val)  (cost=<cost> rows=<rows>)
+    -> Table scan on t1, not parallel (DOP_EXCEEDS_THREAD_BUDGET)  (cost=<cost> rows=<rows>)
+
+EXPLAIN FORMAT=JSON SELECT COUNT(*), SUM(val) FROM t1;
+EXPLAIN
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "<cost>"
+    },
+    "table": {
+      "table_name": "t1",
+      "access_type": "ALL",
+      "rows_examined_per_scan": <rows>,
+      "rows_produced_per_join": <rows>,
+      "filtered": "100.00",
+      "not_parallel": "DOP_EXCEEDS_THREAD_BUDGET",
+      "cost_info": {
+        "read_cost": "<cost>",
+        "eval_cost": "<cost>",
+        "prefix_cost": "<cost>",
+        "data_read_per_join": "<bytes>"
+      },
+      "used_columns": [
+        "val"
+      ]
+    }
+  }
+}
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)`,sum(`test`.`t1`.`val`) AS `SUM(val)` from `test`.`t1`
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SELECT COUNT(*) AS row_count, SUM(val) AS sum_val FROM t1;
+row_count	sum_val
+4	100
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+AS fallback_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+AS rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS workers_delta;
+executed_delta	fallback_delta	rows_delta	workers_delta
+0	0	0	0
+SET SESSION parallel_default_dop=2;
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_fallback_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback');
+SET @pq_rows_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SELECT COUNT(*) AS row_count, SUM(val) AS sum_val FROM t1;
+row_count	sum_val
+4	100
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_fallback') - @pq_fallback_before
+AS fallback_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_rows_scanned') - @pq_rows_before
+AS rows_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS workers_delta;
+executed_delta	fallback_delta	rows_delta	workers_delta
+1	0	4	2
+SET GLOBAL parallel_max_threads=0;
+SET SESSION parallel_default_dop=3;
+EXPLAIN SELECT COUNT(*), SUM(val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Parallel query eligible, execution disabled, serial fallback, dop=3
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)`,sum(`test`.`t1`.`val`) AS `SUM(val)` from `test`.`t1`
+SET @pq_executed_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed');
+SET @pq_workers_before = (
+SELECT CAST(variable_value AS UNSIGNED)
+FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched');
+SELECT COUNT(*) AS row_count, SUM(val) AS sum_val FROM t1;
+row_count	sum_val
+4	100
+SELECT
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_queries_executed') - @pq_executed_before
+AS executed_delta,
+(SELECT CAST(variable_value AS UNSIGNED) FROM performance_schema.global_status
+WHERE variable_name = 'Parallel_workers_launched') - @pq_workers_before
+AS workers_delta;
+executed_delta	workers_delta
+1	3
+SET GLOBAL parallel_max_threads=4294967296;
+SET SESSION parallel_default_dop=3;
+EXPLAIN SELECT COUNT(*), SUM(val) FROM t1;
+id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	4	100.00	Parallel query eligible, execution disabled, serial fallback, dop=3
+Warnings:
+Note	1003	/* select#1 */ select count(0) AS `COUNT(*)`,sum(`test`.`t1`.`val`) AS `SUM(val)` from `test`.`t1`
+SET GLOBAL parallel_max_threads=@saved_parallel_max_threads;
+SET SESSION parallel_query=OFF;
+SET SESSION parallel_cost_threshold=10000;
+SET SESSION parallel_default_dop=4;
+DROP TABLE t1;

@@ -39,6 +39,7 @@
 #include "sql/parallel_query/exchange_sort.h"  // Exchange_sort
 #include "sql/parallel_query/pq_aggregate.h"  // pq_check_agg_supported
 #include "sql/parallel_query/pq_handler.h"  // PQ_Leader_context::MAX_THREADS
+#include "sql/parallel_query/pq_resource_stat.h"  // parallel_max_threads
 #include "sql/parallel_query/sql_parallel.h"  // pq_set_execution_state
 #include "sql/range_optimizer/range_optimizer.h"  // QUICK_RANGE
 #include "sql/sql_class.h"        // THD
@@ -90,6 +91,7 @@ static const char *pq_unsuite_reason_names[] = {
     "UNSUPPORTED_AGGREGATE",     // PQUnsuiteReason::UNSUPPORTED_AGGREGATE
     "DOP_DISABLED",              // PQUnsuiteReason::DOP_DISABLED
     "DOP_EXCEEDS_EXECUTION_CAP",  // PQUnsuiteReason::DOP_EXCEEDS_EXECUTION_CAP
+    "DOP_EXCEEDS_THREAD_BUDGET",  // PQUnsuiteReason::DOP_EXCEEDS_THREAD_BUDGET
     "UNSUPPORTED_BY_PHASE1",     // PQUnsuiteReason::UNSUPPORTED_BY_PHASE1
 };
 
@@ -109,10 +111,21 @@ uint pq_fullscan_requested_dop(const THD *thd) {
   return thd->variables.parallel_default_dop;
 }
 
+uint pq_fullscan_effective_dop_cap() {
+  const ulong compiled_cap =
+      static_cast<ulong>(PQ_Leader_context::MAX_THREADS);
+  if (parallel_max_threads == 0 || parallel_max_threads > compiled_cap) {
+    return static_cast<uint>(compiled_cap);
+  }
+  return static_cast<uint>(parallel_max_threads);
+}
+
 PQUnsuiteReason pq_fullscan_dop_unsuite_reason(uint requested_dop) {
   if (requested_dop == 0) return PQUnsuiteReason::DOP_DISABLED;
   if (requested_dop > PQ_Leader_context::MAX_THREADS)
     return PQUnsuiteReason::DOP_EXCEEDS_EXECUTION_CAP;
+  if (requested_dop > pq_fullscan_effective_dop_cap())
+    return PQUnsuiteReason::DOP_EXCEEDS_THREAD_BUDGET;
   return PQUnsuiteReason::NONE;
 }
 
