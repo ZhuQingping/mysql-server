@@ -182,7 +182,7 @@ let MYSQLD_LOG= $MYSQLTEST_VARDIR/log/schema_readonly.log;
 let extra_args= --no-defaults --console --secure-file-priv=""
     --basedir=$BASEDIR --lc-messages-dir=$MYSQL_SHAREDIR --datadir=$DDIR
     --log-error=$MYSQLD_LOG;
---exec $MYSQLD $extra_args --debug="+d,schema_read_only" --initialize-insecure --dstore_tenant_config=$MYSQL_DSTORE_TENANT_CONFIG_FILE 
+--exec $MYSQLD $extra_args --debug="+d,schema_read_only" --initialize-insecure $MYSQL_DSTORE_TENANT_CONFIG_OPTION 
 --force-rmdir $DDIR
 
 --echo # Restart.

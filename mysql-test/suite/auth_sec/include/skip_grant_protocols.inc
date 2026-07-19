@@ -17,7 +17,7 @@ let $start_page_size=`SELECT variable_value FROM performance_schema.global_statu
 CREATE DATABASE test;
 EOF
 
-let NEW_CMD = $MYSQLD --no-defaults --initialize-insecure --datadir=$MYSQLD_DATADIR1 --init-file=$BOOTSTRAP_SQL</dev/null>>$MYSQLTEST_VARDIR/tmp/bootstrap.log 2>&1 --innodb-page-size=$start_page_size --dstore_tenant_config=$MYSQL_DSTORE_TENANT_CONFIG_FILE;
+let NEW_CMD = $MYSQLD --no-defaults --initialize-insecure --datadir=$MYSQLD_DATADIR1 --init-file=$BOOTSTRAP_SQL</dev/null>>$MYSQLTEST_VARDIR/tmp/bootstrap.log 2>&1 --innodb-page-size=$start_page_size $MYSQL_DSTORE_TENANT_CONFIG_OPTION;
 
 --echo
 --echo # Run the bootstrap command to create a new datadir

@@ -11,7 +11,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 1	SIMPLE	A	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
 1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (hash join)
 Warnings:
-Note	1003	/* select#1 */ select cast(`test`.`B`.`id_col` as char charset utf8mb4) AS `CAST(B.id_col AS CHAR)`,if(strcmp(cast(`test`.`A`.`id_col` as unsigned),cast(`test`.`B`.`id_col` as char charset binary)),cast(`test`.`A`.`id_col` as unsigned),cast(`test`.`B`.`id_col` as char charset binary)) AS `IF(STRCMP(CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY)), CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY))` from `test`.`A` join `test`.`B`
+Note	1003	/* select#1 */ select cast(`test`.`b`.`id_col` as char charset utf8mb4) AS `CAST(B.id_col AS CHAR)`,if(strcmp(cast(`test`.`a`.`id_col` as unsigned),cast(`test`.`b`.`id_col` as char charset binary)),cast(`test`.`a`.`id_col` as unsigned),cast(`test`.`b`.`id_col` as char charset binary)) AS `IF(STRCMP(CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY)), CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY))` from `test`.`a` join `test`.`b`
 select CAST(B.id_col AS CHAR), IF(STRCMP(CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY)), CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY)) from A join B;
 CAST(B.id_col AS CHAR)	IF(STRCMP(CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY)), CAST(A.id_col AS UNSIGNED), CAST(B.id_col AS BINARY))
 drop table A;
@@ -187,7 +187,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 1	SIMPLE	B	NULL	ALL	NULL	NULL	NULL	NULL	10	100.00	NULL
 1	SIMPLE	A	NULL	ref	ndx_bigint_col,ndx_datetime_col	ndx_datetime_col	9	test.B.datetime_col	5	100.00	Using where; Using join buffer (Batched Key Access)
 Warnings:
-Note	1003	/* select#1 */ select /*+ BKA(@`select#1`) PQ(@`select#1`) */ count(`test`.`B`.`datetime_col`) AS `datetime_col`,count(0) AS `count(B.bigint_col)` from `test`.`t2` `B` left join `test`.`t3` `A` on(((`test`.`A`.`bigint_col` = `test`.`B`.`bigint_col`) and (`test`.`A`.`datetime_col` = `test`.`B`.`datetime_col`))) where true
+Note	1003	/* select#1 */ select /*+ BKA(@`select#1`) PQ(@`select#1`) */ count(`test`.`b`.`datetime_col`) AS `datetime_col`,count(0) AS `count(B.bigint_col)` from `test`.`t2` `B` left join `test`.`t3` `A` on(((`test`.`a`.`bigint_col` = `test`.`b`.`bigint_col`) and (`test`.`a`.`datetime_col` = `test`.`b`.`datetime_col`))) where true
 SELECT /*+ BKA() PQ() */ count(B.datetime_col) AS datetime_col, count(B.bigint_col) FROM t3 A  RIGHT JOIN t2 B ON (A.datetime_col = B.datetime_col) AND (A.bigint_col = B.bigint_col);
 datetime_col	count(B.bigint_col)
 50	50
@@ -1145,26 +1145,26 @@ explain format=tree select  A.a, A.b from t1 A RIGHT JOIN t2 B ON A.b < NULL
 WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
 EXPLAIN
 -> Gather: 4 workers, parallel scan on B  (...)
-    -> Filter: ((A.b is null) or (A.b in ('02:00:00.000001','02:59:59.000000')))  (...)
+    -> Filter: ((a.b is null) or (a.b in ('02:00:00.000001','02:59:59.000000')))  (...)
         -> Parallel index scan on B using b  (...)
 
 explain format=tree select /*+NO_PQ*/ A.a, A.b from t1 A RIGHT JOIN t2 B ON A.b < NULL 
 WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
 EXPLAIN
--> Filter: ((A.b is null) or (A.b in ('02:00:00.000001','02:59:59.000000')))  (...)
+-> Filter: ((a.b is null) or (a.b in ('02:00:00.000001','02:59:59.000000')))  (...)
     -> Index scan on B using b  (...)
 
 explain format=tree select  IFNULL(A.b,"foo") from t1 A RIGHT JOIN t2 B ON A.b < NULL  
 WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
 EXPLAIN
 -> Gather: 4 workers, parallel scan on B  (...)
-    -> Filter: ((A.b is null) or (A.b in ('02:00:00.000001','02:59:59.000000')))  (...)
+    -> Filter: ((a.b is null) or (a.b in ('02:00:00.000001','02:59:59.000000')))  (...)
         -> Parallel index scan on B using b  (...)
 
 explain format=tree select /*+NO_PQ*/ IFNULL(A.b,"foo") from t1 A RIGHT JOIN t2 B ON A.b < NULL 
 WHERE A.b IS UNKNOWN OR A.b IN ('02:00:00.000001','02:59:59.000000');
 EXPLAIN
--> Filter: ((A.b is null) or (A.b in ('02:00:00.000001','02:59:59.000000')))  (...)
+-> Filter: ((a.b is null) or (a.b in ('02:00:00.000001','02:59:59.000000')))  (...)
     -> Index scan on B using b  (...)
 
 drop table t1,t2;
@@ -1433,7 +1433,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
 Warnings:
 Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
-Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#4` MATERIALIZATION) NO_MERGE(@`select#1`) */ `A`.`int_col` AS `int_col` from (/* select#2 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` semi join (`test`.`t1` `t2`) where (`<subquery4>`.`int_col` = `test`.`t1`.`int_col`)) `A`
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#4` MATERIALIZATION) NO_MERGE(@`select#1`) */ `a`.`int_col` AS `int_col` from (/* select#2 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` semi join (`test`.`t1` `t2`) where (`<subquery4>`.`int_col` = `test`.`t1`.`int_col`)) `A`
 EXPLAIN SELECT A.int_col
 FROM (
 SELECT int_col
@@ -1460,7 +1460,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 6	UNION RESULT	<union2,5>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
 Warnings:
 Warning	8026	Failed to execute the query using parallel query, the query was restarted without parallel query.
-Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#4` MATERIALIZATION) */ `A`.`int_col` AS `int_col` from (/* select#2 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` semi join (`test`.`t1` `t2`) where (`<subquery4>`.`int_col` = `test`.`t1`.`int_col`) union /* select#5 */ select `test`.`t3`.`int_col` AS `int_col` from `test`.`t1` `t3`) `A` join `test`.`t1` `t4` where (`A`.`int_col` = `test`.`t4`.`int_col`)
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#4` MATERIALIZATION) */ `a`.`int_col` AS `int_col` from (/* select#2 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` semi join (`test`.`t1` `t2`) where (`<subquery4>`.`int_col` = `test`.`t1`.`int_col`) union /* select#5 */ select `test`.`t3`.`int_col` AS `int_col` from `test`.`t1` `t3`) `A` join `test`.`t1` `t4` where (`a`.`int_col` = `test`.`t4`.`int_col`)
 SET parallel_graceful_fallback = on;
 EXPLAIN SELECT /*+ NO_MERGE() */ A.int_col
 FROM (
@@ -1480,7 +1480,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 4	MATERIALIZED	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
 3	DERIVED	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
 Warnings:
-Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#4` MATERIALIZATION) NO_MERGE(@`select#1`) */ `A`.`int_col` AS `int_col` from (/* select#2 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` semi join (`test`.`t1` `t2`) where (`<subquery4>`.`int_col` = `test`.`t1`.`int_col`)) `A`
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#4` MATERIALIZATION) NO_MERGE(@`select#1`) */ `a`.`int_col` AS `int_col` from (/* select#2 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` semi join (`test`.`t1` `t2`) where (`<subquery4>`.`int_col` = `test`.`t1`.`int_col`)) `A`
 EXPLAIN SELECT A.int_col
 FROM (
 SELECT int_col
@@ -1508,7 +1508,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 5	SIMPLE	t3	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
 6	UNION RESULT	<union2,5>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using temporary
 Warnings:
-Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#4` MATERIALIZATION) */ `A`.`int_col` AS `int_col` from (/* select#2 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` semi join (`test`.`t1` `t2`) where (`<subquery4>`.`int_col` = `test`.`t1`.`int_col`) union /* select#5 */ select `test`.`t3`.`int_col` AS `int_col` from `test`.`t1` `t3`) `A` join `test`.`t1` `t4` where (`A`.`int_col` = `test`.`t4`.`int_col`)
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#4` MATERIALIZATION) */ `a`.`int_col` AS `int_col` from (/* select#2 */ select `test`.`t1`.`int_col` AS `int_col` from `test`.`t1` semi join (`test`.`t1` `t2`) where (`<subquery4>`.`int_col` = `test`.`t1`.`int_col`) union /* select#5 */ select `test`.`t3`.`int_col` AS `int_col` from `test`.`t1` `t3`) `A` join `test`.`t1` `t4` where (`a`.`int_col` = `test`.`t4`.`int_col`)
 SET parallel_graceful_fallback = default;
 DROP TABLE t1;
 # BUG2023050804370

@@ -3238,6 +3238,10 @@ sub environment_setup {
   $ENV{'MYSQL_TMP_DIR'}       = $opt_tmpdir;
   $ENV{'MYSQLTEST_VARDIR'}    = $opt_vardir;
   $ENV{'MYSQL_DSTORE_TENANT_CONFIG_FILE'}    = $dstore_tenant_config_path;
+  $ENV{'MYSQL_DSTORE_TENANT_CONFIG_OPTION'} =
+    defined $dstore_tenant_config_path
+      ? "--dstore_tenant_config=$dstore_tenant_config_path"
+      : "";
   $ENV{'USE_RUNNING_SERVER'}  = using_extern();
 
   if (IS_WINDOWS) {

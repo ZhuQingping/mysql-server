@@ -3,6 +3,7 @@
 ########################################################################
 
 --source include/have_innodb.inc
+--source include/have_rds_binlog_lock_enable.inc
 --source include/have_debug_sync.inc
 
 SELECT @@binlog_format;

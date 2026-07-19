@@ -15,7 +15,7 @@ analyze TABLE t1;
 SET rds_empty_redundant_check_in_range_scan=false;
 --echo # Shows that offset pushdown  works with table scan, later in
 --echo # this file we will show it for index scan, range scan and lookup.
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t1 LIMIT 100 OFFSET 1;
 
 --echo # non-covering index - icp is not disabled
@@ -23,9 +23,9 @@ explain format=tree SELECT * FROM t1 LIMIT 100 OFFSET 1;
 --echo # OFFSET pushdow  is therefore active even opt rds_empty_redundant_check_in_range_scan is false.
 explain  SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
 --echo # Also visible in other EXPLAIN formats:
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=json SELECT a,b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
 
 --echo # The existing MySQL implementation of ICP is that it is off when the chosen index is covering.
@@ -35,37 +35,37 @@ explain  SELECT b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
 SET rds_empty_redundant_check_in_range_scan = true;
 explain  SELECT b FROM t1 WHERE b > 2 LIMIT 100 OFFSET 1;
 --echo # ORDER BY (asc): condition removed, ORDER BY desc, condition removed; offset pushdown  activated either way
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain  format=tree SELECT b FROM t1 WHERE b > 2 ORDER BY b DESC LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain  format=tree SELECT b FROM t1 WHERE b > 2 ORDER BY b ASC LIMIT 100 OFFSET 1;
 
 --echo # works whether b OP cond or cond OP b
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT a,b FROM t1 WHERE 2 < b;
 CREATE TABLE t3 (a INT , b INT , INDEX(a,b));
 INSERT INTO t3 VALUES (1, 2),(2, 3),(3, 3),(4, 3);
 analyze TABLE t3;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT a,b FROM t3 WHERE a = 2 AND b < 2;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT a,b FROM t3 WHERE 2 = a AND b < 2;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT a,b FROM t3 WHERE 2 = a AND 2 < b;
 
 --echo # t3 is re-used to show that a BETWEEN clause can also be emptied by rds_empty_redundant_check_in_range_scan
 --echo # thereby allowing offset pushdown
 SET rds_empty_redundant_check_in_range_scan = false;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
 CREATE TABLE comp_1a AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
 CREATE TABLE comp_1b AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
 SET rds_empty_redundant_check_in_range_scan = true;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
 CREATE TABLE comp_2a AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3;
 CREATE TABLE comp_2b AS SELECT * FROM t3 WHERE a BETWEEN 2 AND 3 LIMIT 100 OFFSET 1;
@@ -75,32 +75,32 @@ checksum TABLE comp_1b;
 checksum TABLE comp_2b;
 DROP TABLE comp_1a, comp_2a, comp_1b, comp_2b;
 --echo # BETWEEN and type conversion
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN "b" AND 5;
 SELECT * FROM t3 WHERE a BETWEEN "b" AND 5;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND "5";
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND 5;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN 2 AND "5";
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2.0" AND "5";
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t3 WHERE a BETWEEN "2" AND "5.0";
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 --echo # Empty IS NULL in WHERE clause
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree  SELECT * FROM  t3 WHERE a IS NULL AND b > 5;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree  SELECT * FROM  t3 WHERE a IS NULL AND b > 5 LIMIT 100 OFFSET 1;
 --echo # reset default
 SET rds_empty_redundant_check_in_range_scan = false;
 --echo # Offset pushdown is done for for "index lookup" too, and redundant
 --echo # conditions are removed even if empty_etc is false.
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM  t3 WHERE a = 12 LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM  t3 WHERE a = 12 AND b = 27 LIMIT 100 OFFSET 1;
 DROP TABLE t3;
 
@@ -152,16 +152,16 @@ SELECT b FROM t1 HAVING b = 3 LIMIT 100 OFFSET 1;
 --echo # Offset pushdown supports merged derived tables
 SET big_tables = 1;
 --echo # use InnoDB if we materialize
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT  * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
 SELECT  * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
 --echo # Offset pushdown doesn't support materialized derived tables
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT /*+ no_merge() */ * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
 SELECT /*+ no_merge() */ * FROM  (SELECT * FROM t1) d  LIMIT 100 OFFSET 1;
 --echo # even if an index is used
 SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 1;
 SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 0;
 SELECT /*+ no_merge() no_derived_condition_pushdown()*/ * FROM  (SELECT * FROM t1) d WHERE b = 3 LIMIT 1 OFFSET 1;
@@ -171,7 +171,7 @@ SET big_tables = default;
 
 --echo # Offset pushdown in a correlated subquery which is executed multiple times:
 --echo # check that each result is ok
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT (SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2) FROM t1 AS t0;
 SELECT (SELECT b+0*t0.b FROM t1 ORDER BY b LIMIT 1 OFFSET 2) FROM t1 AS t0;
 
@@ -199,13 +199,13 @@ analyze TABLE t2;
 --echo # outer OFFSET does not activate offset pushdown
 --echo # inner OFFSET activates offset pushdown
 (SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree (SELECT * FROM t2 WHERE b > 4 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 3 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
 --echo with overlap
 (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 0) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 0) LIMIT 100 OFFSET 0;
 (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 0;
 (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
 --echo # With UNION
 --echo # Only test with overlap
@@ -215,16 +215,16 @@ explain format=tree (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION ALL 
 --echo # Same behavior as UNION ALL:
 --echo # outer OFFSET does not activate offset pushdown
 --echo # inner OFFSET activates offset pushdown
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree (SELECT * FROM t2 WHERE b < 7 LIMIT 100 OFFSET 1) UNION (SELECT * FROM t2 WHERE b < 4 LIMIT 100 OFFSET 1) LIMIT 100 OFFSET 1;
 --echo HA_POS_ERROR has to disable offset pushdown  optimisation although the query otherwise satisfies the condition for said optimisation:
  SET optimizer_switch = 'offset_pushdown=off';
 SELECT * FROM t2 WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t2  WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
  SET optimizer_switch = 'offset_pushdown=on';
 SELECT * FROM t2 LIMIT 18446744073709551615 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t2  WHERE b > 2 LIMIT 18446744073709551615 OFFSET 1;
 --echo # Fewer calls from sql-layer to handler when the optimization is on:
 SET optimizer_switch = 'offset_pushdown=off';
@@ -249,7 +249,7 @@ explain  SELECT * FROM test_pk WHERE a > 2 ORDER BY a LIMIT 100 OFFSET 1;
 
 --echo # Query with only constant tables, makes sure changes to EXPLAIN code don't crash
 --echo # (no pushdown needed):
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM test_pk WHERE a = 2 LIMIT 100;
 
 DROP TABLE test_pk;
@@ -259,14 +259,14 @@ CREATE TABLE t6(a DOUBLE, b DOUBLE, c DOUBLE , INDEX(a,b,c));
 INSERT INTO t6 VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
 analyze TABLE t6;
 SET rds_empty_redundant_check_in_range_scan = false;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t6 WHERE a > 2;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
 SET rds_empty_redundant_check_in_range_scan = true;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t6 WHERE a > 2;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
 DROP TABLE t6;
 --echo # redundant check removal extended to DECIMAL
@@ -274,24 +274,24 @@ CREATE TABLE t6(a DECIMAL, b DECIMAL, c DECIMAL , INDEX(a,b,c));
 INSERT INTO t6 VALUES (1,2,6), (2,3,7), (3,3,8), (4,3,12);
 analyze TABLE t6;
 SET rds_empty_redundant_check_in_range_scan = false;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t6 WHERE a > 2;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
 SET rds_empty_redundant_check_in_range_scan = true;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t6 WHERE a > 2;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t6 WHERE a = 2 AND b < 5 AND b > 1;
 DROP TABLE t6;
 --echo # redundant check removal extended to String
 CREATE TABLE people(zipcode CHAR(10),lastname CHAR(10), firstname CHAR(10),address CHAR(10), INDEX (zipcode, lastname, firstname));
 analyze TABLE people;
 SET rds_empty_redundant_check_in_range_scan = false;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
 SET rds_empty_redundant_check_in_range_scan = true;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree  SELECT * FROM people WHERE zipcode > '95054';
 DROP TABLE people;
 --echo # Test skip scan
@@ -363,14 +363,14 @@ CREATE INDEX f1_index ON t1 ( f1 );
 analyze table t1;
 
 set rds_empty_redundant_check_in_range_scan = on;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
 
 --echo # Now, a PAD SPACE collation, condition is not kept
 
 ALTER TABLE t1 modify f1 CHAR(20) COLLATE utf8mb4_unicode_ci;
 analyze TABLE t1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree  SELECT CONCAT(f1, '|') FROM t1 WHERE f1 >= 'XYZ ';
 
 SET rds_empty_redundant_check_in_range_scan=default;
@@ -396,9 +396,9 @@ CREATE TABLE t9(a date);
  INSERT INTO t9 VALUES ("20210907");
  INSERT INTO t9 VALUES ("20210907");
  analyze TABLE t9;
- --replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t9 WHERE a >= "20211001";
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t9 WHERE a >= "2021-10-01";
 
 --echo # can remove DATETIME
@@ -412,7 +412,7 @@ CREATE TABLE t9(a datetime);
  INSERT INTO t9 VALUES ("2021-09-07 12:11");
  INSERT INTO t9 VALUES ("2021-09-07 12:11");
 analyze TABLE t9;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
 --echo # can remove TIMESTAMP
 DROP TABLE if EXISTS t9;
@@ -425,7 +425,7 @@ CREATE TABLE t9 (a TIMESTAMP);
  INSERT INTO t9 VALUES ("2021-09-07 12:11");
  INSERT INTO t9 VALUES ("2021-09-07 12:11");
 analyze TABLE t9;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t9 WHERE a >= "2022-09-07 12:25";
 --echo # can remove TIME
 DROP TABLE if EXISTS t9;
@@ -440,9 +440,9 @@ CREATE TABLE t9 (a time);
  INSERT INTO t9 VALUES ("1211");
  INSERT INTO t9 VALUES ("1211");
 analyze TABLE t9;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t9 WHERE a >= "1218";
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain format=tree SELECT * FROM t9 WHERE a >= "12:18";
 DROP TABLE IF EXISTS t9;
 --echo # ORDER BY ASC/DESC with INDEX ASC/DESC
@@ -458,13 +458,13 @@ CREATE TABLE t11 (
 );
 INSERT INTO t11 VALUES (1,2),(3,4),(5,6),(7,8),(9,10);
 
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
 SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
 SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 DESC LIMIT 100 OFFSET 1;
@@ -472,28 +472,28 @@ SELECT * FROM t10 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
 SELECT * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
 
 --echo # Verify that the hint overrules the switch:
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT /*+ NO_OFFSET_PUSHDOWN() */ * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
 SET optimizer_switch = 'offset_pushdown=off';
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT * FROM t11 WHERE c1>2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT /*+ OFFSET_PUSHDOWN() */ * FROM t11 WHERE c1 > 2 ORDER BY  c1 ASC LIMIT 100 OFFSET 1;
 SET optimizer_switch='offset_pushdown=on';
 
 --echo # Verify that in a LEFT JOIN, the range condition is removed or not, correctly.
 --echo # Conditions on left table can be removed:
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t11.c1 > 2;
 --echo # Condition on right table too, as it's in ON: if the range access has kept only
 --echo # rows of t12 with c1>3, this condition will not need to be checked again.
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t11.c1 > 2;
 --echo # These two don't prove much, as the left join is changed to an inner join
 --echo # (as NULL-complemented rows cannot match the WHERE).
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t11.c1 > 3 WHERE t12.c1 > 2;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 EXPLAIN format=tree SELECT * FROM t11 LEFT JOIN t11 AS t12 ON t12.c1 > 3 WHERE t12.c1 > 2;
 --echo # Here the WHERE IS NULL cannot be removed: the range access has kept only
 --echo # rows of t12 with c1 NULL, but there can be other NULL-complemented rows,
@@ -518,10 +518,10 @@ SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 
 --echo # in that case  "grouped" is true and quick->get_type()=QUICK_SELECT_I::QS_TYPE_GROUP_MIN_MAX
 --echo # in if() condition in JOIN::offset_pushdown()
 analyze TABLE t2;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain  SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
 SELECT /*+ NO_OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
---replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+*?\)/rows=***)/
+--replace_regex /cost=\d+.*?\s/cost=*** /  /rows=\d+\)/rows=***)/
 explain  SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
 SELECT /*+ OFFSET_PUSHDOWN() */ DISTINCT b FROM t2 ORDER BY b  LIMIT 100 OFFSET 1;
 

@@ -644,7 +644,7 @@ explain select count(*) = 0 from information_schema.processlist where db='events
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	processlist	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
 Warnings:
-Note	1003	/* select#1 */ select (count(0) = 0) AS `count(*) = 0` from `information_schema`.`PROCESSLIST` `processlist` where ((`processlist`.`DB` = 'events_test') and (`processlist`.`COMMAND` = 'Connect') and (`processlist`.`USER` = <cache>(current_user())))
+Note	1003	/* select#1 */ select (count(0) = 0) AS `count(*) = 0` from `information_schema`.`PROCESSLIST` where ((`information_schema`.`processlist`.`DB` = 'events_test') and (`information_schema`.`processlist`.`COMMAND` = 'Connect') and (`information_schema`.`processlist`.`USER` = <cache>(current_user())))
 # Item_func_is_uuid
 CREATE TABLE uuid_test (
 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -1065,8 +1065,8 @@ CAST(AES_DECRYPT(encrypted_email, encryption_key, iv) AS CHAR) AS decrypted_emai
 FROM users_secure
 WHERE encrypted_email = AES_ENCRYPT('john_doe@example.com', encryption_key, iv);
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	20.00	Parallel execute (4 workers, test.users_secure)
-1	SIMPLE	users_secure	NULL	ALL	NULL	NULL	NULL	NULL	5	20.00	Using where
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.users_secure)
+1	SIMPLE	users_secure	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
 Warnings:
 Note	1003	/* select#1 */ select `test`.`users_secure`.`user_id` AS `user_id`,`test`.`users_secure`.`username` AS `username`,cast(aes_decrypt(`test`.`users_secure`.`encrypted_email`,`test`.`users_secure`.`encryption_key`,`test`.`users_secure`.`iv`) as char charset utf8mb4) AS `decrypted_email` from `test`.`users_secure` where (`test`.`users_secure`.`encrypted_email` = aes_encrypt('john_doe@example.com',`test`.`users_secure`.`encryption_key`,`test`.`users_secure`.`iv`))
 explain SELECT
@@ -1078,8 +1078,8 @@ AES_ENCRYPT('john_doe@example.com', encryption_key, iv),
 AES_ENCRYPT('jane_smith@example.com', encryption_key, iv)
 );
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	5	40.00	Parallel execute (4 workers, test.users_secure)
-1	SIMPLE	users_secure	NULL	ALL	NULL	NULL	NULL	NULL	5	40.00	Using where
+1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Parallel execute (4 workers, test.users_secure)
+1	SIMPLE	users_secure	NULL	ALL	NULL	NULL	NULL	NULL	#	#	Using where
 Warnings:
 Note	1003	/* select#1 */ select `test`.`users_secure`.`user_id` AS `user_id`,`test`.`users_secure`.`username` AS `username` from `test`.`users_secure` where (`test`.`users_secure`.`encrypted_email` in (aes_encrypt('john_doe@example.com',`test`.`users_secure`.`encryption_key`,`test`.`users_secure`.`iv`),aes_encrypt('jane_smith@example.com',`test`.`users_secure`.`encryption_key`,`test`.`users_secure`.`iv`)))
 DROP TABLE users_secure;

@@ -5,6 +5,8 @@
 --source suite/parallel_query/include/tpch_prepare.inc
 --disable_query_log
 --disable_warnings
+set @saved_optimizer_switch = @@optimizer_switch;
+set optimizer_switch = 'subquery_materialization_cost_based=off';
 
 --echo #Run TPC-H Query 1
 # Table scan + Filter + Aggregation + Sort
@@ -262,7 +264,9 @@ where
 
 --echo #Run TPC-H Query 20
 # Dependent subquery + Nested Loop Join + Aggregation
-let query = select /*+ PQ(supplier) */
+set @saved_q20_optimizer_switch = @@optimizer_switch;
+set optimizer_switch = 'loosescan=off,firstmatch=off,duplicateweedout=off,subquery_materialization_cost_based=off';
+let query = select /*+ PQ(supplier) SEMIJOIN(MATERIALIZATION) */
   s_name,
   s_address
 from
@@ -306,6 +310,7 @@ limit 5;
 --replace_regex /cost=[0-9.]+ rows=[0-9.]+/cost=*** rows=***/ /actual time=[0-9.,]+ rows=[0-9.,]+ loops=[0-9,]+/actual time=*** rows=*** loops=***/
 --eval explain analyze $query
 --eval $query
+set optimizer_switch = @saved_q20_optimizer_switch;
 
 --echo # BUG2024110728662
 set @saved_parallel_rows_threshold = @@parallel_rows_threshold;
@@ -441,10 +446,10 @@ eval explain $query;
 set parallel_rows_threshold = @saved_parallel_rows_threshold;
 set parallel_cost_threshold = @saved_parallel_cost_threshold;
 set pq_support_features_switch = @saved_pq_support_features_switch;
-
+set optimizer_switch = @saved_optimizer_switch;
+--source suite/parallel_query/include/tpch_cleanup.inc
 --enable_query_log
 --enable_warnings
---source suite/parallel_query/include/tpch_cleanup.inc
 --echo #TPC-H test finished
 
 # scalar subquery, currently pq not support
@@ -655,7 +660,7 @@ insert into t2 values
 (0,'1998-10-03','111'),(0,'1998-10-03','222'),(0,'1998-10-03','333'),(0,'1998-10-03',NULL),
 (16,'1998-10-03','111'),(16,'1998-10-03','222'),(16,'1998-10-03','333'),(16,'1998-10-03',NULL),
 (32,'1998-10-03','111'),(32,'1998-10-03','222'),(32,'1998-10-03','333'),(32,'1998-10-03',NULL);
---replace_regex $elide_pq_costs_and_time_and_row_estimate
+--replace_regex /[(]cost=[0-9.e+-]+ rows=[0-9.e+-]+[)]/(...)/ /[(]actual time=[0-9,.e+-]+ rows/(actual rows/ /rows=[0-9,.e+-]+/rows/ /loops=[0-9,.e+-]+/loops/
 explain analyze select 1 from t1 where
   set_col IN (
     WITH CTE1 (c1, c2) AS(

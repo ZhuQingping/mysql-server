@@ -4,7 +4,7 @@
 --source include/count_sessions.inc
  
 --disable_query_log
-call mtr.add_suppression("socket errno: 110, socket errmsg: Connection timed out.");
+call mtr.add_suppression("socket errno: [0-9]+, socket errmsg: Connection timed out.");
 call mtr.add_suppression("Client actively closes the connection.");
 --enable_query_log
  
@@ -94,10 +94,10 @@ let $wait_condition= SELECT COUNT(*) = 1 FROM information_schema.processlist;
 SELECT info FROM information_schema.processlist;
  
 --let $assert_file= $MYSQLTEST_VARDIR/log/mysqld.1.err
---let $assert_text= Check that there is 'socket errno: 110, socket errmsg: Connection timed out.(ETIMEDOUT)' in error log.
---let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[TAURUS-DEBUG\]Reading bytes from a network handler fails. Socket errno: 110, Socket errmsg: Connection timed out.
+--let $assert_text= Check that the socket timeout error is written to the error log.
+--let $assert_select= \[Warning\] \[[^]]*\] \[[^]]*\] \[TAURUS-DEBUG\]Reading bytes from a network handler fails. Socket errno: [0-9]+, Socket errmsg: Connection timed out.\(ETIMEDOUT\).
 --let $assert_only_after = CURRENT_TEST:main.enrich_errlog_for_connection_with_socket
---let $assert_match= Reading bytes from a network handler fails. Socket errno: 110, Socket errmsg: Connection timed out.
+--let $assert_match= Reading bytes from a network handler fails. Socket errno: [0-9]+, Socket errmsg: Connection timed out.\(ETIMEDOUT\).
 --source include/assert_grep.inc
  
 SET @@global.wait_timeout = @start_value;

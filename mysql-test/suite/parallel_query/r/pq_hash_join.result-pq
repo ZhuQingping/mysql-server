@@ -937,20 +937,20 @@ SET optimizer_switch="loosescan=off,firstmatch=off";
 # not under WEEDOUT
 EXPLAIN FORMAT=tree WITH A AS (SELECT /*+PQ(C, B)*/ A.decimal_col, A.mediumint_col FROM t1 A JOIN t2 B ON A.decimal_col = B.decimal_col AND A.mediumint_col = B.mediumint_col WHERE (A.decimal_col, A.mediumint_col) = ANY (SELECT decimal_col, mediumint_col FROM t3 C WHERE (C.datetimelist_col = '1984-02-01 00:00:00' OR C.datetimelist_col = '1984-02-29 23:59:59') AND C.decimal_col > 0.00000)) SELECT /*+join_order(A,C,B)*/ A.decimal_col, RADIANS(A.mediumint_col) FROM A WHERE A.mediumint_col > 1 ORDER BY 1, 2;
 EXPLAIN
--> Sort: A.decimal_col, `RADIANS(A.mediumint_col)`
+-> Sort: a.decimal_col, `RADIANS(A.mediumint_col)`
     -> Stream results  (cost=*** rows=***)
         -> Gather: 4 workers, parallel scan on B  (cost=*** rows=***)
             -> Table scan on <temporary>  (cost=*** rows=***)
                 -> Temporary table  (cost=*** rows=***)
-                    -> Inner hash join, one hash table per worker (B.mediumint_col = A.mediumint_col), (B.decimal_col = A.decimal_col)  (cost=*** rows=***)
+                    -> Inner hash join, one hash table per worker (b.mediumint_col = a.mediumint_col), (b.decimal_col = a.decimal_col)  (cost=*** rows=***)
                         -> Parallel table scan on B  (cost=*** rows=***)
                         -> Hash
                             -> Remove duplicate A rows using temporary table (weedout)  (cost=*** rows=***)
-                                -> Inner hash join, one hash table per worker (C.mediumint_col = A.mediumint_col), (C.decimal_col = A.decimal_col)  (cost=*** rows=***)
-                                    -> Filter: ((C.datetimelist_col = TIMESTAMP'1984-02-01 00:00:00') or (C.datetimelist_col = TIMESTAMP'1984-02-29 23:59:59'))  (cost=*** rows=***)
+                                -> Inner hash join, one hash table per worker (c.mediumint_col = a.mediumint_col), (c.decimal_col = a.decimal_col)  (cost=*** rows=***)
+                                    -> Filter: ((c.datetimelist_col = TIMESTAMP'1984-02-01 00:00:00') or (c.datetimelist_col = TIMESTAMP'1984-02-29 23:59:59'))  (cost=*** rows=***)
                                         -> Index range scan on C using PRIMARY over (datetimelist_col = '1984-02-29 23:59:59.000000') OR (datetimelist_col = '1984-02-01 00:00:00.000000')  (cost=*** rows=***)
                                     -> Hash
-                                        -> Filter: ((A.mediumint_col > 1) and (A.decimal_col > 0.00000))  (cost=*** rows=***)
+                                        -> Filter: ((a.mediumint_col > 1) and (a.decimal_col > 0.00000))  (cost=*** rows=***)
                                             -> Index scan on A using ndx_mediumint_decimal_col  (cost=*** rows=***)
 
 Warnings:

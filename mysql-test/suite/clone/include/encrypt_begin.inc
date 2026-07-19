@@ -18,7 +18,7 @@ EOF
 --source include/shutdown_mysqld.inc
 
 --replace_result $MYSQLD MYSQLD $BOOTSTRAP_SQL BOOTSTRAP_SQL $ENCRYPT_DATADIR ENCRYPT_DATADIR $START_PAGE_SIZE PAGE_SIZE $ENCRYPT_ERROR_FILE ENCRYPT_ERROR_FILE
---let NEW_CMD = $MYSQLD --no-defaults --innodb_dedicated_server=OFF --initialize-insecure --init-file=$BOOTSTRAP_SQL --innodb_page_size=$START_PAGE_SIZE --datadir=$ENCRYPT_DATADIR --dstore_tenant_config=$MYSQL_DSTORE_TENANT_CONFIG_FILE > $ENCRYPT_ERROR_FILE  2>&1
+--let NEW_CMD = $MYSQLD --no-defaults --innodb_dedicated_server=OFF --initialize-insecure --init-file=$BOOTSTRAP_SQL --innodb_page_size=$START_PAGE_SIZE --datadir=$ENCRYPT_DATADIR $MYSQL_DSTORE_TENANT_CONFIG_OPTION > $ENCRYPT_ERROR_FILE  2>&1
 
 --exec $NEW_CMD
 
