@@ -3780,9 +3780,9 @@ static Exit_status get_all_gtids(char **argv) {
           gtids_in_binlog.ensure_sidno(cur_sidno);
           gtids_in_binlog._add_gtid(cur_sidno, cur_gno);
           warning(
-              "The last gtid (sidno:%d, cur_gno:%ld) is not saved, it is saved "
+              "The last gtid (sidno:%d, cur_gno:%lld) is not saved, it is saved "
               "here.",
-              cur_sidno, cur_gno);
+              cur_sidno, static_cast<long long>(cur_gno));
         }
         cur_sidno = gtid_ev->get_sidno(global_sid_map);
         cur_gno = gtid_ev->get_gno();

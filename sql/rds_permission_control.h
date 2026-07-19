@@ -12,7 +12,7 @@ Date: 2017.8.29
 #define RDS_ROOT_USER "root"
 
 struct LEX;
-struct Table_ref;
+class Table_ref;
 class THD;
 struct LEX_USER;
 

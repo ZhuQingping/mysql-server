@@ -1324,8 +1324,9 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
             CreateIteratorFromAccessPath(thd, path->ptrc().child, join,
                                          eligible_for_batch_mode);
         iterator = NewIterator<ptrc::PtrcIterator>(
-            thd, mem_root, param->key_tables, param->res_tables, move(child),
-            param->res_items, param->res_tmp_table, param->was_null,
+            thd, mem_root, param->key_tables, param->res_tables,
+            std::move(child), param->res_items, param->res_tmp_table,
+            param->was_null,
             !param->is_exists_subquery);
         break;
       }

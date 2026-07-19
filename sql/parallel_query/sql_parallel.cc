@@ -792,6 +792,15 @@ static void restore_leader_plan(
   join->pq_restore();
 
 #ifndef NDEBUG
+  bool has_derived_table = false;
+  for (Table_ref *table_ref = join->query_block->leaf_tables;
+       table_ref != nullptr; table_ref = table_ref->next_leaf) {
+    if (table_ref->is_view_or_derived()) {
+      has_derived_table = true;
+      break;
+    }
+  }
+
   // When falling back to the serial execution plan, it is necessary
   // to ensure that the data structures related to the serial execution
   // plan have not been modified.
@@ -805,8 +814,14 @@ static void restore_leader_plan(
   // From backup_leader_plan to restore_leader_plan, thd->pq_mem_root is
   // used, and thd->mem_root is not used. This is a prerequisite for the
   // aforementioned verification mechanism.
-  std::vector<uint32_t> digests = thd->mem_root->CalcMemDigest();
-  assert(digests == orig_digests);
+  // A PQ clone of a derived table shares the original Query_expression while
+  // building its temporary table. Its materialization state must be reset for
+  // serial fallback, so its MEM_ROOT cannot be byte-identical to the backup.
+  // Keep the strict check for plans that do not have this shared state.
+  if (!has_derived_table) {
+    std::vector<uint32_t> digests = thd->mem_root->CalcMemDigest();
+    assert(digests == orig_digests);
+  }
 #endif  // NDEBUG
 }
 

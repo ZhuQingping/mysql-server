@@ -3519,7 +3519,7 @@ class Item : public Parse_tree_node {
     end - as a following phase may change it.
   */
   item_marker marker;
-  using pq_derived_info_t = struct {
+  struct pq_derived_info_t {
     item_marker marker{MARKER_NONE};
     /**
       After the Query_expression::prepare function invokes

@@ -7,6 +7,7 @@
 #include "sql/join_optimizer/explain_access_path.h"
 #include "sql/sql_executor.h"  // QEP_TAB
 
+#include <cinttypes>
 #include <functional>
 #include <string>
 #include <vector>
@@ -320,8 +321,8 @@ std::string ParallelIteratorTimingString(
     }
     // print avg, max, min info
     snprintf(buf, sizeof(buf),
-             "(actual time=%.3f,%.3f,%.3f..%.3f,%.3f,%.3f rows=%lld,%lu,%lu "
-             "loops=%lld,%lu,%lu",
+             "(actual time=%.3f,%.3f,%.3f..%.3f,%.3f,%.3f rows=%lld,%" PRIu64
+             ",%" PRIu64 " loops=%lld,%" PRIu64 ",%" PRIu64,
              sum_start_time / work_threads, max_start_time, min_start_time,
              sum_end_time / work_threads, max_end_time, min_end_time,
              llrintf(sum_rows / sum_init_calls), max_rows, min_rows,

@@ -274,8 +274,6 @@ Item *Item::pq_clone(THD *thd MY_ATTRIBUTE((unused)),
   return nullptr;
 }
 
-static inline Item *no_need_copy() { return nullptr; }
-
 bool Item::pq_copy_from(THD *thd MY_ATTRIBUTE((unused)),
                         Query_block *select MY_ATTRIBUTE((unused)),
                         Item *item) {
@@ -1250,7 +1248,7 @@ bool Item_cond_and::pq_copy_from(THD *thd, Query_block *select, Item *item) {
         // TODO upper_levels
         Item_equal *item_equal;
         List_iterator_fast<Item_equal> it(orig_item->cond_equal.current_level);
-        for (size_t i = 0; (item_equal = it++); i++) {
+        while ((item_equal = it++)) {
           Item_equal *new_item_equal =
               dynamic_cast<Item_equal *>(item_equal->pq_clone(thd, select));
           if (new_item_equal == nullptr) return true;
@@ -1274,7 +1272,7 @@ bool Item_equal::pq_copy_from(THD *thd, Query_block *select, Item *item) {
       ([this, thd, select, item](Item_equal *orig_item) {
         Item_field *item_field;
         List_iterator_fast<Item_field> it(orig_item->fields);
-        for (size_t i = 0; (item_field = it++); i++) {
+        while ((item_field = it++)) {
           Item_field *new_field =
               dynamic_cast<Item_field *>(item_field->pq_clone(thd, select));
           if (new_field == nullptr) return true;

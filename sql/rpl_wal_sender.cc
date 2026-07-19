@@ -16,6 +16,7 @@
 */
 
 #include <assert.h>
+#include <cinttypes>
 
 #include "sql/rpl_wal_mgr.h"
 #include "sql/rpl_wal_sender.h"
@@ -452,7 +453,8 @@ bool Wal_sender::check_param_valid(uint64_t master_flushed_lsn) {
   if (m_master_wal_stream_id != m_standby_wal_stream_id) {
     snprintf(errmsg_buf, MYSQL_ERRMSG_SIZE,
              "The wal stream id of the master and standby are different, "
-             "master: %lu, standby: %lu, standby server id: %u",
+             "master: %" PRIu64 ", standby: %" PRIu64
+             ", standby server id: %u",
              m_master_wal_stream_id, m_standby_wal_stream_id, m_thd->server_id);
     set_unknown_error(errmsg_buf);
     return true;
@@ -469,7 +471,8 @@ bool Wal_sender::check_param_valid(uint64_t master_flushed_lsn) {
   if (master_flushed_lsn < m_start_lsn) {
     snprintf(errmsg_buf, MYSQL_ERRMSG_SIZE,
              "The flushed lsn of the master is smaller than standby, "
-             "master: %lu, standby: %lu, standby server id: %u.",
+             "master: %" PRIu64 ", standby: %" PRIu64
+             ", standby server id: %u.",
              master_flushed_lsn, m_start_lsn, m_thd->server_id);
     set_unknown_error(errmsg_buf);
     return true;
@@ -483,7 +486,7 @@ bool Wal_sender::check_param_valid(uint64_t master_flushed_lsn) {
     if (read_res != 0 || actual_read_size == 0) {
       snprintf(errmsg_buf, MYSQL_ERRMSG_SIZE,
                "Wal data has been recycled and cannot be sent, lsn: "
-               "%lu.",
+               "%" PRIu64 ".",
                m_start_lsn);
       set_unknown_error(errmsg_buf);
       return true;

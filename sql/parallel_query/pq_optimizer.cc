@@ -943,7 +943,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
     }
     Item *arg_item;
     List_iterator_fast<Item> it(*cond->argument_list());
-    for (size_t i = 0; (arg_item = it++); i++) {
+    while ((arg_item = it++)) {
       if (arg_item->type() == Item::SUM_FUNC_ITEM ||    // c1
           !check_pq_support_fieldtype(arg_item, join))  // c2
         return false;

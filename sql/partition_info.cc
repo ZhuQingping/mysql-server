@@ -3093,7 +3093,7 @@ void Sub_partition::fix_val_array_pointer() {
     else
       range_int_array = part_info->range_int_array + offset;
   }
-};
+}
 
 Sub_partition *Sub_partition::clone(THD *thd, uint part_id, bool reset) {
   Sub_partition *clone = new (thd->mem_root) Sub_partition(*this);

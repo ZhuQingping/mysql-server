@@ -1093,14 +1093,15 @@ bool com_wal_dump(THD *thd, char *packet,
   }
 
   DBUG_PRINT("info",
-             ("packet_length %lu, start lsn=%lu, flags=%d,"
-              "server_id=%d, wal_stream_id=%lu",
+             ("packet_length %lu, start lsn=%" PRIu64 ", flags=%d,"
+              "server_id=%d, wal_stream_id=%" PRIu64,
               packet_length, start_lsn, flags, thd->server_id, wal_stream_id));
 
   kill_zombie_dump_threads(thd);
 
   query_logger.general_log_print(thd, thd->get_command(),
-                                 "Wal stream id: %lu, start lsn: %lu.",
+                                 "Wal stream id: %" PRIu64
+                                 ", start lsn: %" PRIu64 ".",
                                  wal_stream_id, start_lsn);
 
   mysql_wal_send(thd, start_lsn, flags, wal_stream_id);

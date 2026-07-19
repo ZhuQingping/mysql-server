@@ -800,8 +800,8 @@ static char *audit_log_general_record(MYSQL_THD thd, char *buf, size_t buflen,
       "\"ip\":\"%s\","
       "\"db\":\"%s\"}}\n",
 
-      "\"%s\",\"%s\",\"%s\",\"%s\",\"%lu\",%d,\"%s\",\"%s\","
-      "\"%s\",\"%s\",\"%s\",\"%s\"\n"};
+      ("\"%s\",\"%s\",\"%s\",\"%s\",\"%lu\",%d,\"%s\",\"%s\","
+       "\"%s\",\"%s\",\"%s\",\"%s\"\n")};
 
   DBUG_ASSERT(!is_fast_log_format());  // NOLINT
 
@@ -1440,7 +1440,7 @@ static int audit_log_notify(MYSQL_THD thd MY_ATTRIBUTE((unused)),
   char buf[4096];
   char *log_rec = nullptr;
   char *allocated_buf = nullptr;
-  size_t len, buflen;
+  size_t len = 0, buflen;
   audit_log_thd_local *local = nullptr;
 
   // if thd is null pointer we return to avoid referencing null pointers

@@ -130,8 +130,8 @@ static const char *handler_error_messages[] = {
     "It only supports to mix RANGE/LIST partitioning with HASH/KEY "
     "partitioning for subpartitioning when rds_extended_partitions_enabled is "
     "disabled.",
-    "There are different values between source and dest partitions while "
-    "copy partitions."};
+    ("There are different values between source and dest partitions while "
+     "copy partitions.")};
 
 // clang-format on
 

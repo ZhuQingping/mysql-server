@@ -213,7 +213,7 @@ class Mysql_internal_schema_access : public ACL_internal_schema_access {
  public:
   Mysql_internal_schema_access() {}
 
-  ~Mysql_internal_schema_access() {}
+  ~Mysql_internal_schema_access() override = default;
 
   ACL_internal_access_result check(Access_bitmask want_access,
                                    Access_bitmask *save_priv,
@@ -229,7 +229,7 @@ class Sys_internal_schema_access : public ACL_internal_schema_access {
  public:
   Sys_internal_schema_access() {}
 
-  ~Sys_internal_schema_access() {}
+  ~Sys_internal_schema_access() override = default;
 
   ACL_internal_access_result check(Access_bitmask want_access,
                                    Access_bitmask *save_priv,

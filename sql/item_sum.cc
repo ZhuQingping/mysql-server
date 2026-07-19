@@ -1304,10 +1304,11 @@ void Aggregator_distinct::clear() {
 /**
   The leader thread merges the trees from all worker threads.
 */
-bool Aggregator_distinct::merge_count_distinct_tree(Item_sum *item_sum) {
-  assert(item_sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC);
+bool Aggregator_distinct::merge_count_distinct_tree(Item_sum *item_sum_arg) {
+  assert(item_sum_arg->sum_func() == Item_sum::COUNT_DISTINCT_FUNC);
   Batch_buffer *buf;
-  uchar *buf_ptr = dynamic_cast<Item_field *>(item_sum->get_arg(0))->field->ptr;
+  uchar *buf_ptr =
+      dynamic_cast<Item_field *>(item_sum_arg->get_arg(0))->field->ptr;
   memcpy(&buf, buf_ptr, sizeof(buf));
   void *key = my_malloc(PSI_NOT_INSTRUMENTED, tree_key_length, 0);
   auto free_key = create_scope_guard([&] {

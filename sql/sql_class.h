@@ -414,6 +414,8 @@ class Query_arena {
   Query_arena()
       : m_item_list(nullptr), mem_root(nullptr), state(STMT_INITIALIZED) {}
 
+  Query_arena(const Query_arena &) = default;
+  Query_arena &operator=(const Query_arena &) = default;
   virtual ~Query_arena() = default;
 
   Item *item_list() const { return m_item_list; }

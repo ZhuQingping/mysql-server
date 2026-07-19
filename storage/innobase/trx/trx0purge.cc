@@ -2297,7 +2297,7 @@ static ulint trx_purge_attach_undo_recs(const ulint n_purge_threads,
     }
   });
 
-  for (ulint i = 0; n_pages_handled < batch_size; ++i) {
+  while (n_pages_handled < batch_size) {
     /* Track the max {trx_id, undo_no} for truncating the
     UNDO logs once we have purged the records. */
 
@@ -2413,7 +2413,7 @@ static ulint trx_purge_attach_undo_recs_and_run(const ulint n_purge_threads,
   const uint all_parts =
       std::max(batch_size / rds_srv_purge_subbatch_size, 1UL);
   uint parts = 1;
-  for (ulint i = 0; n_pages_handled < batch_size; ++i) {
+  while (n_pages_handled < batch_size) {
     /* Track the max {trx_id, undo_no} for truncating the
     UNDO logs once we have purged the records. */
 

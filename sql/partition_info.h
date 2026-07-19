@@ -259,6 +259,9 @@ class Partition : Base_partition {
 
 class partition_info {
  public:
+  partition_info(const partition_info &) = default;
+  virtual ~partition_info() = default;
+
   /*
    * Here comes a set of definitions needed for partitioned table handlers.
    */

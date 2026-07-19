@@ -2789,8 +2789,7 @@ static int get_wal_master_version_and_clock(MYSQL *mysql, Master_info *mi) {
   if (!mysql_real_query(mysql, STRING_WITH_LEN("SELECT @@GLOBAL.SERVER_ID")) &&
       (master_res = mysql_store_result(mysql)) &&
       (master_row = mysql_fetch_row(master_res))) {
-    if ((::server_id ==
-         (mi->master_id = strtoul(master_row[0], nullptr, 10)))) {
+    if (::server_id == (mi->master_id = strtoul(master_row[0], nullptr, 10))) {
       errmsg =
           "The replica wal I/O thread stops because source and replica have "
           "equal MySQL server ids; these ids must be different for wallog "

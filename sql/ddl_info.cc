@@ -15,6 +15,7 @@
    Foundation, 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
 */
 #include "sql/ddl_info.h"
+#include <cinttypes>
 #include <mysql/plugin.h>
 #include "my_stacktrace.h"
 #include "mysql/components/services/log_builtins.h"
@@ -1091,8 +1092,9 @@ bool replay_dd_query_info(uint64_t end_lsn, const unsigned char *buffer,
   if (error == 0 && end_lsn <= max_lsn) {
     /* the end_lsn is already replayed, skip it. */
     DBUG_PRINT("debug",
-               ("less than the max_lsn %ld in mysql.ddl_info_replay_trace, the "
-                "end_lsn %ld is already replayed, skip it",
+               ("less than the max_lsn %" PRIu64
+                " in mysql.ddl_info_replay_trace, the "
+                "end_lsn %" PRIu64 " is already replayed, skip it",
                 max_lsn, end_lsn));
     return false;
   }
@@ -1138,8 +1140,9 @@ void standby_replay_dd_query_info(uint64_t end_lsn, const unsigned char *buffer,
       DBUG_EVALUATE_IF("standby_ddl_already_replayed", true, false)) {
     /* the end_lsn is already replayed, skip it. */
     DBUG_PRINT("debug",
-               ("less than the max_lsn %ld in mysql.ddl_info_replay_trace, the "
-                "end_lsn %ld is already replayed, skip it",
+               ("less than the max_lsn %" PRIu64
+                " in mysql.ddl_info_replay_trace, the "
+                "end_lsn %" PRIu64 " is already replayed, skip it",
                 max_lsn, end_lsn));
     thd->release_resources();
     delete thd;

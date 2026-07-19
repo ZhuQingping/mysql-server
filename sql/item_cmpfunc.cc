@@ -5964,7 +5964,7 @@ Item *Item_func_in::in_predicate_to_in_subs_transformer(THD *thd) {
   Query_block *sq_select = lex->new_query(current_select);
 
   auto cleanup_and_restore_guard =
-      create_scope_guard([thd, tmp_table, sq_select, &is_add_table_succeed] {
+      create_scope_guard([tmp_table, sq_select, &is_add_table_succeed] {
         if (is_add_table_succeed) {
           sq_select->master_query_expression()->exclude_level();
         } else {

@@ -951,6 +951,13 @@ ADD_COMPILE_FLAGS(
   -I${CMAKE_SOURCE_DIR}/extra/unordered_dense/unordered_dense-4.4.0/include
   )
 
+IF(MY_COMPILER_IS_CLANG)
+  ADD_COMPILE_FLAGS(
+    parallel_query/pq_clone_item.cc
+    COMPILE_FLAGS "-Wno-unused-lambda-capture"
+    )
+ENDIF()
+
 # Fixes "C1128: number of sections exceeded object file format limit" in MSVC
 IF(WIN32)
   ADD_COMPILE_FLAGS(

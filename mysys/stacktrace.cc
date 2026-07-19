@@ -87,10 +87,12 @@ static const char *heap_start;
 extern char *__bss_start;
 #endif /* __linux */
 
+#ifdef __linux__
 static constexpr uint64_t NULLPTR_BOUND = 4095;
 constexpr uint32_t MAX_LINE_SIZE = 256;
 constexpr uint32_t MAX_CHUNK_SIZE = 4096;
 constexpr uint32_t HEX_PER_WORD = 17;
+#endif
 
 static inline bool ptr_sane(const char *p [[maybe_unused]],
                             const char *heap_end [[maybe_unused]]) {

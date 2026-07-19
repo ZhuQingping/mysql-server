@@ -27,7 +27,7 @@
 
 class THD;
 class Query_block;
-class ORDER;
+struct ORDER;
 class Item_ref;
 class QEP_TAB;
 

@@ -1,5 +1,6 @@
 #include "ddl_info_file.h"
 #include <assert.h>
+#include <cinttypes>
 #include <errno.h>
 #include "binlog.h"
 
@@ -117,7 +118,7 @@ RecordOpErrCode DDLInfoRecord::deserialize(const uint8_t *buffer,
 
 void DDLInfoRecord::debugDump() const {
   printf("DDLInfoRecord (Header: %lu bytes):\n", sizeof(DDLInfoRecordHeader));
-  printf("  LSN: %lu\n", m_header.m_lsn);
+  printf("  LSN: %" PRIu64 "\n", m_header.m_lsn);
   printf("  size: %u\n", m_header.m_size);
   printf("  Header Checksum: 0x%02x\n", m_header.m_headerChecksum);
   printf("  Data CRC32: 0x%08x\n", m_header.m_dataCrc32);

@@ -28,6 +28,7 @@
 #include <time.h>
 #include <algorithm>
 #include <atomic>
+#include <cinttypes>
 
 #include "lex_string.h"
 #include "my_inttypes.h"
@@ -398,7 +399,7 @@ static void ffic_print_crash_banner(int sig, const siginfo_t *si) {
   THD *thd = current_thd;
   if (thd)
     my_safe_printf_stderr(
-        "  MySQL TID: %u    Query ID: %lu\n"
+        "  MySQL TID: %u    Query ID: %" PRIu64 "\n"
         "             (MySQL internal thread ID, shown in SHOW PROCESSLIST)\n",
         thd->thread_id(), (uint64_t)thd->query_id);
 
@@ -434,8 +435,9 @@ static void ffic_print_crash_banner(int sig, const siginfo_t *si) {
  * @param info_ptr Pointer to siginfo_t (nullptr on Windows / abort path).
  * @param context  Pointer to ucontext_t (nullptr on Windows / abort path).
  */
-void ffic_print_enhanced_crash_info(int sig, const siginfo_t *info_ptr,
-                                    const ucontext_t *context) {
+void ffic_print_enhanced_crash_info(
+    int sig, const siginfo_t *info_ptr,
+    const ucontext_t *context MY_ATTRIBUTE((unused))) {
 #ifndef _WIN32
   ffic_print_crash_banner(sig, info_ptr);
 #endif /* !_WIN32 */
