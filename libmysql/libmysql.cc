@@ -2088,7 +2088,7 @@ bool STDCALL mysql_stmt_attr_set(MYSQL_STMT *stmt,
         goto err_not_implemented;
       }
       if (value == nullptr) return true;
-      stmt->array_size = *static_cast<const ulong *>(value);
+      stmt->array_size = *static_cast<const unsigned int *>(value);
       break;
     }
     default:

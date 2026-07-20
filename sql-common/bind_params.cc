@@ -88,6 +88,9 @@ static bool my_realloc_str(NET *net, ulong length) {
 */
 #define MAX_TIME_REP_LENGTH 13
 
+static bool int_is_null_true = true; /* Used for MYSQL_TYPE_NULL */
+static bool int_is_null_false = false;
+
 constexpr int MAX_DATETIME_REP_LENGTH =
     1 /* length */ + 2 /* year */ + 1 /* month */ + 1 /* day */ + 1 /* hour */ +
     1 /* minute */ + 1 /* second */ + 4 /* microseconds */ +
@@ -430,7 +433,9 @@ bool mysql_int_serialize_param_data_bulk(MYSQL_STMT *stmt, uchar **ret_data,
       size_t size = 1;
       signed char indicator = STMT_INDICATOR_NONE;
 
-      if (stmt->params[i].is_null && stmt->params[i].is_null[j]) {
+      if (stmt->params[i].buffer_type == MYSQL_TYPE_NULL ||
+          (stmt->params[i].is_null != &int_is_null_false &&
+           stmt->params[i].is_null[j])) {
         /*
           BULK execution on MySQL c client is a simplified version of Mariadb,
           which doesn't support all indicator types. So no need to add indicator
@@ -620,9 +625,6 @@ bool mysql_int_serialize_param_data(
   }
   return false;
 }
-
-static bool int_is_null_true = true; /* Used for MYSQL_TYPE_NULL */
-static bool int_is_null_false = false;
 
 bool fix_param_bind(MYSQL_BIND *param, uint idx) {
   param->long_data_used = false;

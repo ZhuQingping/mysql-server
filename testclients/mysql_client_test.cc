@@ -24044,6 +24044,46 @@ static void stmt_bulk_test_basic_dml() {
   BT_DISABLE_BULK;
 }
 
+static void stmt_bulk_test_null_parameter_array() {
+  myheader("stmt_bulk_test_null_parameter_array");
+  BT_ENABLE_BULK;
+  BT_INIT_CLIENT(bmysql);
+  BT_CREATE_DEF_TABLES(bmysql);
+
+  BT_INIT_STMT(bmysql, stmt, bind, 2);
+  unsigned int array_size = 3;
+  const char *names[3] = {"Alice", "Bob", "Charlie"};
+  unsigned long name_lengths[3];
+  for (int i = 0; i < 3; ++i) name_lengths[i] = strlen(names[i]);
+
+  const char *insert_query = "INSERT INTO tbl VALUES (?, ?)";
+  rc = mysql_stmt_prepare(stmt, insert_query, strlen(insert_query));
+  DIE_UNLESS(rc == 0);
+  rc = mysql_stmt_attr_set(stmt, STMT_ATTR_ARRAY_SIZE, &array_size);
+  DIE_UNLESS(rc == 0);
+
+  bind[0].buffer_type = MYSQL_TYPE_NULL;
+  bind[1].buffer_type = MYSQL_TYPE_STRING;
+  bind[1].buffer = names;
+  bind[1].length = name_lengths;
+  rc = mysql_stmt_bind_param(stmt, bind);
+  DIE_UNLESS(rc == 0);
+  rc = mysql_stmt_execute(stmt);
+  BT_CHECK_STMT_RC;
+  DIE_UNLESS(mysql_affected_rows(bmysql) == 3);
+
+  rc = mysql_query(bmysql, "SELECT COUNT(*) FROM tbl WHERE a IS NULL");
+  DIE_UNLESS(rc == 0);
+  MYSQL_RES *result = mysql_store_result(bmysql);
+  DIE_UNLESS(result != nullptr);
+  MYSQL_ROW row = mysql_fetch_row(result);
+  DIE_UNLESS(row != nullptr && std::stoi(row[0]) == 3);
+  mysql_free_result(result);
+  BT_CLEAR_STMT(stmt);
+  BT_CLOSE_CLIENT(bmysql);
+  BT_DISABLE_BULK;
+}
+
 static void stmt_bulk_test_multi_update() {
   myheader("stmt_bulk_test_multi_update");
   BT_ENABLE_BULK;
@@ -26857,6 +26897,8 @@ static struct my_tests_st my_tests[] = {
     {"test_bug34951115", test_bug34951115},
     {"test_bug36891894", test_bug36891894},
     {"stmt_bulk_test_basic_dml", stmt_bulk_test_basic_dml},
+    {"stmt_bulk_test_null_parameter_array",
+     stmt_bulk_test_null_parameter_array},
     {"stmt_bulk_test_multi_update", stmt_bulk_test_multi_update},
     {"stmt_bulk_test_option", stmt_bulk_test_option},
     {"stmt_bulk_test_imitate_mariadb", stmt_bulk_test_imitate_mariadb},
