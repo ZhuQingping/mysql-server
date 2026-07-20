@@ -1696,7 +1696,9 @@ create index sex_key on t_general_test_pk(sex desc);
 
 # used to lose ORDER BY
 
-set @sql_text1='select sex,create_time,id,id- LAG(id) over (order by create_time) as temp_diff_id from t_general_test_pk t order by sex,create_time;';
+# create_time has the same value in every row.  Use id as an explicit
+# tie-breaker so the window frame and the displayed order are deterministic.
+set @sql_text1='select sex,create_time,id,id- LAG(id) over (order by create_time,id) as temp_diff_id from t_general_test_pk t order by sex,create_time,id;';
 PREPARE stmt1 FROM @sql_text1;
 EXECUTE stmt1;
 EXECUTE stmt1;
@@ -1704,7 +1706,7 @@ EXECUTE stmt1;
 show status like '%Cached_plan%';
 DROP PREPARE stmt1;
  
-set @sql_text1='select sex,create_time,id,avg(id) over (order by create_time ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as moving_avg_id from t_general_test_pk t order by sex,create_time;';
+set @sql_text1='select sex,create_time,id,avg(id) over (order by create_time,id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as moving_avg_id from t_general_test_pk t order by sex,create_time,id;';
 PREPARE stmt1 FROM @sql_text1;
 EXECUTE stmt1;
 EXECUTE stmt1;

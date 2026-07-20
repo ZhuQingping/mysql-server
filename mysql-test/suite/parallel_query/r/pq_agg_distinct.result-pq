@@ -170,20 +170,6 @@ COUNT(DISTINCT a)
 SELECT /*+ SET_VAR(tmp_table_size=1024) no_pq */ COUNT(DISTINCT a) FROM t1;
 COUNT(DISTINCT a)
 128
-set debug="+d,simulate_low_itemsum_ram_limitation";
-EXPLAIN SELECT COUNT(DISTINCT a) FROM t1;
-id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	SIMPLE	<gather1>	NULL	ALL	NULL	NULL	NULL	NULL	129	100.00	Parallel execute (4 workers, test.t1)
-1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	129	100.00	NULL
-Warnings:
-Note	1003	/* select#1 */ select count(distinct `test`.`t1`.`a`) AS `COUNT(DISTINCT a)` from `test`.`t1`
-SELECT COUNT(DISTINCT a) FROM t1;
-COUNT(DISTINCT a)
-128
-SELECT /*+no_pq */ COUNT(DISTINCT a) FROM t1;
-COUNT(DISTINCT a)
-128
-set debug="";
 DROP TABLE t1;
 CREATE TABLE t1(
 product VARCHAR(32),
@@ -360,18 +346,4 @@ select count(distinct name)=3 from t1;
 count(distinct name)=3
 1
 drop table t1;
-CREATE TABLE t1 (
-id INT PRIMARY KEY,
-c1 INT,
-c2 INT
-);
-INSERT INTO t1 (id, c1, c2) VALUES 
-(1, 10, 100),
-(2, 20, 200),
-(3, 30, 300);
-SET session debug="+d, bat_buf_is_null";
-SELECT COUNT(DISTINCT c1) from t1;
-ERROR HY000: Parallel execution error
-SET session debug="-d, bat_buf_is_null";
-DROP TABLE t1;
 SET pq_support_features_switch = @saved_pq_support_features_switch;

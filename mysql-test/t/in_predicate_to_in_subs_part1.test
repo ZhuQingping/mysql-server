@@ -32,6 +32,10 @@
 
 source include/have_debug.inc;
 set optimizer_trace_max_mem_size = 1024 * 1024;
+SET @optimizer_switch_saved= @@session.optimizer_switch;
+# This test validates IN-list conversion.  Partial-result-cache is an
+# independent cost heuristic and makes the EXPLAIN tree non-deterministic.
+set optimizer_switch = 'partial_result_cache=off';
 
 create table t1 (a int primary key not null, b int);
 create table t2 (a int, b int);
@@ -558,6 +562,7 @@ drop table t1;
 set rds_in_predicate_conversion_threshold=default;
 set optimizer_trace_max_mem_size=default;
 set sql_mode = default;
+SET @@session.optimizer_switch= @optimizer_switch_saved;
 
 --let $shutdown_server_timeout= 300
 --source include/shutdown_mysqld.inc

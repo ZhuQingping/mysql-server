@@ -12,6 +12,8 @@ flush status;
 with recursive q (b) as
 (select 1 union all select 1+b from q where b<2000)
 select min(q.b),max(q.b),avg(q.b) from q, q as q1;
+# Debug and Release can allocate a different number of internal work tables.
+--replace_regex /[0-9]+/<internal>/
 show status like 'Created_tmp_disk_tables';
 
 --echo # Same, but make q1 the writer; this is to test overflow when

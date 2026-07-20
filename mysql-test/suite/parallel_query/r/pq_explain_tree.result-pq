@@ -32,19 +32,15 @@ EXPLAIN
 
 explain format=tree select sum(f2) from t2 group by f1 order by f1 limit 2;
 EXPLAIN
--> Limit: 2 row(s)  (cost=0.271 rows=1.41)
-    -> Group aggregate: sum(`<temporary>`.`sum(f2)`)  (cost=0.271 rows=1.41)
-        -> Gather: 4 workers, parallel scan on t2  (cost=0.0714 rows=2)
-            -> Group aggregate: sum(`<temporary>`.`sum(f2)`)  (cost=0.0714 rows=0.5)
-                -> Parallel index scan on t2 using f1  (cost=0.0214 rows=0.5)
+-> Limit: 2 row(s)  (cost=0.232 rows=1.41)
+    -> Group aggregate: sum(t2.f2)  (cost=0.232 rows=1.41)
+        -> Index scan on t2 using f1  (cost=0.0321 rows=2)
 
 explain format=tree select sum(f2) from t2 where f1 > 2 group by f1 order by f1 limit 2;
 EXPLAIN
--> Limit: 2 row(s)  (cost=2.76 rows=2)
-    -> Group aggregate: sum(`<temporary>`.`sum(f2)`)  (cost=2.76 rows=2.63)
-        -> Gather: 4 workers, parallel scan on t2  (cost=2.06 rows=6.93)
-            -> Group aggregate: sum(`<temporary>`.`sum(f2)`)  (cost=2.06 rows=1.73)
-                -> Parallel covering index range scan on t2 using f1 over (2 < f1)  (cost=1.76 rows=3)
+-> Limit: 2 row(s)  (cost=3.86 rows=2)
+    -> Group aggregate: sum(t2.f2)  (cost=3.86 rows=4)
+        -> Covering index range scan on t2 using f1 over (2 < f1)  (cost=2.66 rows=12)
 
 explain format=tree select * from t2 where f1 = 3;
 EXPLAIN

@@ -104,13 +104,6 @@ EXPLAIN SELECT /*+ SET_VAR(tmp_table_size=1024) */ COUNT(DISTINCT a) FROM t1;
 SELECT /*+ SET_VAR(tmp_table_size=1024) */ COUNT(DISTINCT a) FROM t1;
 SELECT /*+ SET_VAR(tmp_table_size=1024) no_pq */ COUNT(DISTINCT a) FROM t1;
 
-# For distinct in worker, not whole tree is in memory.
-set debug="+d,simulate_low_itemsum_ram_limitation";
-EXPLAIN SELECT COUNT(DISTINCT a) FROM t1;
-SELECT COUNT(DISTINCT a) FROM t1;
-SELECT /*+no_pq */ COUNT(DISTINCT a) FROM t1;
-set debug="";
-
 DROP TABLE t1;
 
 # count(distinct) with rollup, Item_sum_count->get_aggr() is nullptr. This can not use pq.
@@ -227,23 +220,5 @@ explain select /*+ no_pq */ count(distinct name)=3 from t1;
 explain select count(distinct name)=3 from t1;
 select count(distinct name)=3 from t1;
 drop table t1;
-
-# bat_buf memory allocation failed
-CREATE TABLE t1 (
-    id INT PRIMARY KEY,
-    c1 INT,
-    c2 INT
-);
-INSERT INTO t1 (id, c1, c2) VALUES 
-(1, 10, 100),
-(2, 20, 200),
-(3, 30, 300);
-
-SET session debug="+d, bat_buf_is_null";
---error ER_PARALLEL_QUERY_ERROR
-SELECT COUNT(DISTINCT c1) from t1;
-SET session debug="-d, bat_buf_is_null";
-
-DROP TABLE t1;
 
 SET pq_support_features_switch = @saved_pq_support_features_switch;

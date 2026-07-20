@@ -1352,7 +1352,6 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
      *
      */
 
-#ifdef NDEBUG
     if (do_mark && m_ordered_index_usage == ORDERED_INDEX_GROUP_BY &&
         primary_tables == (const_tables + 1)) {
       QEP_TAB *_tab = &qep_tab[primary_tables - 1];
@@ -1404,7 +1403,6 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
         }
       }
     }
-#endif  // NDEBUG
 
   }  // end of if(qep_tab)
 

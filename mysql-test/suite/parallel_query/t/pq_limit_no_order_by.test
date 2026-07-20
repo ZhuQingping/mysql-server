@@ -160,6 +160,26 @@ GROUP BY t1_id
 ORDER BY total_d DESC
 LIMIT 3;
 
+# The ordered-index GROUP BY RBO must reject PQ when its scan estimate is
+# worse than the serial plan.  Keep this assertion independent from EXPLAIN
+# formatting so all build modes exercise the same optimizer decision.
+--disable_query_log
+--disable_result_log
+SET optimizer_trace="enabled=on";
+EXPLAIN SELECT t1_id, SUM(d) AS total_d
+FROM t2
+GROUP BY t1_id
+ORDER BY total_d DESC
+LIMIT 3;
+let $pq_scan_records = `SELECT trace LIKE '%few records in each group%' FROM INFORMATION_SCHEMA.OPTIMIZER_TRACE`;
+SET optimizer_trace="enabled=off";
+--enable_result_log
+--enable_query_log
+if ($pq_scan_records != 1)
+{
+  --die ordered-index GROUP BY RBO must reject PQ with SCAN_RECORDS
+}
+
 --echo #
 --echo # 6. LIMIT in UNION queries
 --echo #

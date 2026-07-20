@@ -24801,7 +24801,7 @@ void stmt_bulk_test_mix_bulk_non_bulk() {
 
     int id = 4;
     const char *name = "David";
-    int length = strlen(name);
+    unsigned long name_length = strlen(name);
 
     bind[0].buffer_type = MYSQL_TYPE_LONG;
     bind[0].buffer = &id;
@@ -24809,7 +24809,8 @@ void stmt_bulk_test_mix_bulk_non_bulk() {
 
     bind[1].buffer_type = MYSQL_TYPE_STRING;
     bind[1].buffer = const_cast<char *>(name);
-    bind[1].buffer_length = length;
+    bind[1].buffer_length = name_length;
+    bind[1].length = &name_length;
 
     rc = mysql_stmt_bind_param(stmt, bind);
     DIE_UNLESS(rc == 0);
@@ -26063,7 +26064,7 @@ void stmt_bulk_test_insert_trigger() {
 
     int id = 4;
     const char *name = "David";
-    int length = strlen(name);
+    unsigned long name_length = strlen(name);
 
     bind[0].buffer_type = MYSQL_TYPE_LONG;
     bind[0].buffer = &id;
@@ -26071,7 +26072,8 @@ void stmt_bulk_test_insert_trigger() {
 
     bind[1].buffer_type = MYSQL_TYPE_STRING;
     bind[1].buffer = const_cast<char *>(name);
-    bind[1].buffer_length = length;
+    bind[1].buffer_length = name_length;
+    bind[1].length = &name_length;
 
     rc = mysql_stmt_bind_param(stmt, bind);
     DIE_UNLESS(rc == 0);

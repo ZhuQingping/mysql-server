@@ -1194,6 +1194,21 @@ IF(WITH_ASAN)
     IF(WITH_ASAN_OK)
       OPTION(WITH_ASAN_SCOPE "Enable -fsanitize-address-use-after-scope" ON)
       SET(HAVE_ASAN 1)
+      # Apple Clang disables ODR indicator globals by default.  Dynamic server
+      # plugins are unloaded and loaded again during MTR, so keep indicators in
+      # ASAN builds to avoid reporting the same plugin global as a duplicate.
+      IF(APPLE)
+        MY_CHECK_C_COMPILER_FLAG("-fsanitize-address-use-odr-indicator"
+          HAVE_ASAN_ODR_INDICATOR_C)
+        MY_CHECK_CXX_COMPILER_FLAG("-fsanitize-address-use-odr-indicator"
+          HAVE_ASAN_ODR_INDICATOR_CXX)
+        IF(HAVE_ASAN_ODR_INDICATOR_C AND HAVE_ASAN_ODR_INDICATOR_CXX)
+          STRING_APPEND(CMAKE_C_FLAGS
+            " -fsanitize-address-use-odr-indicator")
+          STRING_APPEND(CMAKE_CXX_FLAGS
+            " -fsanitize-address-use-odr-indicator")
+        ENDIF()
+      ENDIF()
       # This works with clang, but not gcc it seems.
       MY_CHECK_CXX_COMPILER_FLAG(
         "-fsanitize=address -fsanitize-address-use-after-scope"

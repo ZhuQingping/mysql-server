@@ -19,6 +19,7 @@ let $table_name_wrong= `SELECT 0x410A42`;
 # 0x410042 => 'A\0B'
 let $char= `SELECT 0x410042`;
 
+--disable_query_log
 eval CREATE TABLE `$table_name_right` (c1 CHAR(100));
 
 --echo # It is a faked statement. ASCII 0 is in the original statement, it would
@@ -28,17 +29,19 @@ eval CREATE TABLE `$table_name_right` (c1 CHAR(100));
 --echo
 --disable_query_log
 eval INSERT INTO `$table_name_right` VALUES("$char");
---enable_query_log
 
 let $char= $table_name_right;
 eval INSERT INTO `$table_name_right` VALUES("$char");
 
 eval SELECT HEX(c1) FROM `$table_name_right`;
+--enable_query_log
 
 --echo
 let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1);
 FLUSH LOGS;
+--disable_query_log
 eval DROP TABLE `$table_name_right`;
+--enable_query_log
 
 --echo
 let $MYSQLD_DATADIR= `SELECT @@datadir`;
@@ -76,10 +79,14 @@ if (`SELECT CONVERT(@@VERSION_COMPILE_OS USING latin1) NOT IN ('Win32', 'Win64',
 --echo # handled correctly.
 RESET MASTER;
 --exec $MYSQL --binary-mode test < $MYSQLTEST_VARDIR/tmp/my.sql
+--disable_query_log
 eval SELECT HEX(c1) FROM `$table_name_right`;
+--enable_query_log
 
 --echo
+--disable_query_log
 eval DROP TABLE `$table_name_right`;
+--enable_query_log
 
 #
 #  BUG#12794048 - MAIN.MYSQL_BINARY_MODE FAILS ON WINDOWS RELEASE BUILD 

@@ -211,12 +211,15 @@ int Program::execute(const std::vector<std::string> &positional_options) {
   crawler->enumerate_objects();
 
   delete runner;
+  // The chain maker owns worker queues.  Stop and join those queues before
+  // destroying the crawler, because queued completion callbacks reference
+  // dump tasks owned by the crawler.
+  delete chain_maker;
   delete crawler;
   if (progress_watcher != nullptr) delete progress_watcher;
   delete id_generator;
   delete connection_provider;
   delete message_handler;
-  delete chain_maker;
 
   if (!get_error_code()) {
     std::cerr << "Dump completed in "

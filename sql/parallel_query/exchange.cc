@@ -111,7 +111,13 @@ bool Exchange::convert_mq_data_to_record(uchar *data, int msg_len,
                                          uchar *row_id) {
   /** there is error */
   if (m_thd->is_killed() || m_thd->pq_error || msg_len == 1) {
-    sql_print_error("[Parallel query]: error query. %s\n", m_thd->query().str);
+    // A statement timeout is an expected user-visible error.  It interrupts
+    // the leader while it is waiting for worker messages, but does not mean
+    // that parallel execution itself has failed.
+    if (m_thd->killed != THD::KILL_TIMEOUT) {
+      sql_print_error("[Parallel query]: error query. %s\n",
+                      m_thd->query().str);
+    }
     m_thd->pq_error = true;
     return false;
   }
