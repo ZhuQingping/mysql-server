@@ -51,6 +51,7 @@ GAP-ID
 1. [`manifest.yaml`](manifest.yaml)：稳定对照基线、受控 PQ 源码快照、文档状态和生成顺序。
 2. [`current/00_architecture_overview.md`](current/00_architecture_overview.md)：整体架构、主流程和跨模块不变量。
 3. [`current/01_current_support_matrix.md`](current/01_current_support_matrix.md)：当前支持、部分支持和串行回退契约。
+4. [`pq_context_refactor_design.md`](../../../pq_context_refactor_design.md)：THD、Query_block、JOIN PQ context 重构的设计、调研、实现与测试入口。
 
 ### 模块规格
 
@@ -69,12 +70,14 @@ GAP-ID
 | 资源 | [`modules/11_resource_accounting.md`](current/modules/11_resource_accounting.md) | 线程、内存、MQ、临时表、VFD、资源归还 |
 | 可观测和集成 | [`modules/12_observability_integrations.md`](current/modules/12_observability_integrations.md) | EXPLAIN、trace、status、plan cache、PTRC、日志 |
 | Context 所有权重构 | [`current/13_context_ownership_refactor.md`](current/13_context_ownership_refactor.md) | THD、Query_block、JOIN 的 PQ 状态边界、等价性和验收合同 |
+| Context 重构设计 | [`pq_context_refactor_design.md`](../../../pq_context_refactor_design.md) | 调研、价值、HLD、LLD、兼容性/性能与测试设计 |
 
 ### 质量与诊断
 
 - [`current/quality/requirements_test_traceability.md`](current/quality/requirements_test_traceability.md)
 - [`current/quality/fault_injection_release_gates.md`](current/quality/fault_injection_release_gates.md)
 - [`current/quality/verification_evidence.md`](current/quality/verification_evidence.md)
+- [`current/quality/context_refactor_review_2026-07-21.md`](current/quality/context_refactor_review_2026-07-21.md)
 - [`current/runbooks/pq_not_selected.md`](current/runbooks/pq_not_selected.md)
 - [`current/runbooks/wrong_result_or_crash.md`](current/runbooks/wrong_result_or_crash.md)
 - [`current/runbooks/hang_kill_resource_leak.md`](current/runbooks/hang_kill_resource_leak.md)
