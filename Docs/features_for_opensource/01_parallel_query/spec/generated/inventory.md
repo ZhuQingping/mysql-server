@@ -26,7 +26,7 @@
 
 | 范围 | workspace | tracked | SHA-256 tree digest |
 |---|---:|---:|---|
-| `sql/parallel_query/` | 35 files / 17985 lines | n/a | `609432f98785fe9be9d8db8e9c346de18bcc3f0b52c46716e7a7f6a4e83323f9`（含下列 InnoDB PQ 文件） |
+| `sql/parallel_query/` | 35 files / 17992 lines | n/a | `fac8b54f4febf9c81014dace2ae225af6f0d38de5f768a87d3039db39b20fe4f`（含下列 InnoDB PQ 文件） |
 | InnoDB PQ core | 3 files / 2264 lines | n/a | 同上 |
 | PQ `.test` | 99 | 99 | `8c59c7d8af6db3feffa377ca1aab9de9a822b6a80e2091e7b1cfd1db01b43bea`（与 result 合并） |
 | PQ `.result-pq` | 99 | 99 | 同上 |

@@ -1655,7 +1655,7 @@ err:
   if (new_thd) {
     // If make worker plan failed, mark pq_error, so that if will not wait at
     // the barrier when free join later.
-    new_thd->pq_context().error = true;
+    new_thd->pq_context().set_error();
     new_thd->store_globals();
   }
   pq_free_join(new_thd, join);
@@ -1752,8 +1752,8 @@ err:
   if (res) {
     assert(msg_handler && leader_thd);
     assert(mngr->m_status == PQ_worker_state::INIT ||
-           (thd->is_error() || thd->killed || thd->pq_context().error));
-    leader_thd->pq_context().error = true;
+           (thd->is_error() || thd->killed || thd->pq_context().has_error()));
+    leader_thd->pq_context().set_error();
     msg_handler->send_exception_msg(ERROR_MSG);
   }
   msg_handler->set_detached_status(MQ_HAVE_DETACHED);

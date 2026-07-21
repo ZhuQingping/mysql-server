@@ -48,7 +48,9 @@ Query_block clone 语义和 JOIN 计划改写状态曾分别直接散落在 `THD
 - 不新增 PQ 支持场景，不改变 CBO/RBO、DIV_TAB/CUT_TAB、Gather、worker 计划或
   InnoDB parallel scan 算法；
 - 不把三个 context 合并为一个总对象；
-- 不引入 pimpl、virtual dispatch、`shared_ptr`、新 mutex/atomic 或新的 PQ heap owner；
+- 不引入 pimpl、virtual dispatch、`shared_ptr`、新 mutex 或新的 PQ heap owner；仅将既有
+  worker-to-leader cancellation flag 实现为 `std::atomic<bool>`，不把它用作诊断信息或计划状态的
+  发布机制；
 - 不混入 DStore gate、MTR 框架/result、C API 或其他 stable baseline 修复；
 - 不在本轮一次性把所有 context 字段改为 private。
 
@@ -162,7 +164,11 @@ flowchart TD
 - **借用关系显式化。**leader、original/clone、QEP 和 handler 指针的所有权不因迁移改变；
   context 不能假定其指向对象比宿主更长寿。
 - **热路径零 wrapper 约束。**MQ 轮询中的 `THD::is_pq_error()` 保持头内联。
-- **先等价，后封装。**本轮允许 public 字段以降低大规模迁移风险；窄 API 必须独立演进。
+- **窄 API 只用于跨线程状态。**`m_error` 为私有原子字段；其余字段继续保持当前可审计的迁移
+  形态，避免在同一提交中扩大封装范围。
+- **布局断言不充当安全证明。**移除四个 `is_standard_layout` 断言：它们既未被 `offsetof`、ABI
+  或序列化代码使用，也不能证明线程安全或可复制性；`m_error` 私有化后继续维持该断言只会制造
+  无关的布局约束。
 
 ## 5. Low Level Design
 
@@ -186,13 +192,16 @@ flowchart TD
 | --- | --- | --- |
 | 内存 | `mem_root`、`initialize_mem_root()`、`destroy_mem_root()` | THD 构造创建；析构 `Clear()`、delete、置空；PQ clone/plan 分配继续使用该 root |
 | worker 拓扑 | `leader`、`worker_info`、`is_worker()`、`is_real_worker()`、`is_leader()` | worker 只借用 leader；不得由 context 释放 leader/worker manager |
-| 运行状态 | `has_pq`、`dop`、`threads_running`、`no_pq`、`error`、`executed`、`retry_without_pq` | statement cleanup 按基线时序 reset；`retry_without_pq` 保持 caller 侧无条件复位 |
+| 运行状态 | `has_pq`、`dop`、`threads_running`、`no_pq`、`executed`、`retry_without_pq` | statement cleanup 按基线时序 reset；`retry_without_pq` 保持 caller 侧无条件复位 |
+| 跨线程取消 | 私有 `m_error`、`has_error()`、`set_error()`、`clear_error_after_workers_join()` | worker/leader 仅用它传播“停止 PQ”的单调信号；load/store 使用 `memory_order_relaxed`；只可在 worker 全部 join 后清零 |
 | 结果与可观测性 | `gathers`、`current_found_rows`、`leader_create_fake_iter`、`explain_analyze` | status merge 与 EXPLAIN ANALYZE 语义保持 |
 | worker 复制 | `copy_from()`、`merge_status()` | 只复制基线已有 `has_pq`/DOP；found rows 合并规则不变 |
 
 `THD::is_pq_error()` 的语义固定为：leader 为空时只检查本地 error；worker 时按
 local error → leader killed → leader PQ error → leader THD error 的短路顺序检查。该函数
-不得改为 `pq_context.cc` 内的 wrapper。
+不得改为 `pq_context.cc` 内的 wrapper。`has_error()` 保持头内联；它使用 relaxed atomic load
+消除 worker 写、leader 读之间的 C++ data race，但不为 Diagnostics_area 或计划数据建立新的
+发布顺序。
 
 ### 5.3 Query_block context
 

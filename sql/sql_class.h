@@ -1212,9 +1212,9 @@ class THD : public MDL_context_owner,
   // Keep this predicate inline: message-queue send/receive loops poll it.
   bool is_pq_error() const {
     return m_pq_context.leader == nullptr
-               ? m_pq_context.error
-               : (m_pq_context.error || m_pq_context.leader->is_killed() ||
-                  m_pq_context.leader->pq_context().error ||
+               ? m_pq_context.has_error()
+               : (m_pq_context.has_error() || m_pq_context.leader->is_killed() ||
+                  m_pq_context.leader->pq_context().has_error() ||
                   m_pq_context.leader->is_error());
   }
   /** merge pq-releated status */

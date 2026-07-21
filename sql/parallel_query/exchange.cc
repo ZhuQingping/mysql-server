@@ -110,7 +110,7 @@ char *const_item_and_field_flag(uint value) {
 bool Exchange::convert_mq_data_to_record(uchar *data, int msg_len,
                                          uchar *row_id) {
   /** there is error */
-  if (m_thd->is_killed() || m_thd->pq_context().error || msg_len == 1) {
+  if (m_thd->is_killed() || m_thd->pq_context().has_error() || msg_len == 1) {
     // A statement timeout is an expected user-visible error.  It interrupts
     // the leader while it is waiting for worker messages, but does not mean
     // that parallel execution itself has failed.
@@ -118,7 +118,7 @@ bool Exchange::convert_mq_data_to_record(uchar *data, int msg_len,
       sql_print_error("[Parallel query]: error query. %s\n",
                       m_thd->query().str);
     }
-    m_thd->pq_context().error = true;
+    m_thd->pq_context().set_error();
     return false;
   }
 
@@ -144,7 +144,7 @@ bool Exchange::convert_mq_data_to_record(uchar *data, int msg_len,
           (double)(m_table->s->reclength + 6 + null_len +
                    2 * m_table->s->fields + (m_stab_output ? m_ref_length : 0) +
                    (size_field - m_table->s->fields) / 4)) {
-    m_thd->pq_context().error = true;
+    m_thd->pq_context().set_error();
     sql_print_error(
         "[Parallel query]: sending (or receiving) msg from MQ error");
     return false;
@@ -260,7 +260,7 @@ bool Exchange_nosort::read_next(void **datap, uint32 *m_len) {
   THD *thd = get_thd();
 
   /** round-robin method to acquire the data */
-  while (!thd->is_killed() && !thd->pq_context().error) {
+  while (!thd->is_killed() && !thd->pq_context().has_error()) {
     read_result = get_next(datap, m_len, readerdone, first_readdone);
     /** detached and its content is also read done */
     if (readerdone) {

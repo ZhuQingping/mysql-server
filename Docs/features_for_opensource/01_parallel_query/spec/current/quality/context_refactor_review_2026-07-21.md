@@ -7,6 +7,11 @@
 > 审核方式：三名独立 Agent 只读审查；未修改代码，未执行全量 MTR
 > 总结建议：`ACCEPT WITH RISKS`
 
+> 历史范围说明：本审核固定针对 `f9970c78a249` 的原始 context 重构。其后的
+> `PQ_thd_context` 原子错误信号加固不改变本审核的历史结论；实现合同和验证证据分别见
+> [`pq_context_refactor_design.md`](../../../../../pq_context_refactor_design.md) 与
+> [`verification_evidence.md`](verification_evidence.md)。
+
 ## 1. 结论
 
 当前 THD、Query_block、JOIN 的 Parallel Query（PQ）context 重构未发现已证实的
@@ -40,8 +45,9 @@
   `THD::is_pq_error()` 保持头内联。
 - `mysqld` 符号表没有 `PQ_thd_context::is_error` wrapper；MQ send/receive 循环
   的反汇编没有调用该 wrapper。
-- 本重构未引入 mutex、atomic、virtual dispatch、`shared_ptr` 或新的共享所有权；
-  PQ MEM_ROOT、QEP、map 和临时表参数的分配为既有逻辑迁移。
+- 原始 context 重构未引入 mutex、atomic、virtual dispatch、`shared_ptr` 或新的共享所有权；
+  PQ MEM_ROOT、QEP、map 和临时表参数的分配为既有逻辑迁移。后续的原子错误信号加固是
+  有意的窄例外：它只保护既存 worker-to-leader cancellation flag，并使用 relaxed load/store。
 - Debug DWARF 对象布局：`THD` 为 `+8B`，`JOIN` 为 `+8B`，`Query_block` 不变。
 
 ### 3.2 尚不能下结论

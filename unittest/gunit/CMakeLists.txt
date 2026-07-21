@@ -380,8 +380,19 @@ FOREACH(test ${TESTS})
     EXCLUDE_FROM_ALL
     LINK_LIBRARIES sqlgunitlib gunit_small
     SKIP_INSTALL
-    )
+  )
 ENDFOREACH()
+
+# PQ_thd_context error signaling is header-only and does not need the server
+# gunit support library. Keep this test independent from unrelated server
+# fixture build warnings.
+MYSQL_ADD_EXECUTABLE(pq_context-t pq_context-t.cc
+  COMPILE_DEFINITIONS ${DISABLE_PSI_DEFINITIONS}
+  ENABLE_EXPORTS
+  EXCLUDE_FROM_ALL
+  LINK_LIBRARIES gtest
+  SKIP_INSTALL
+  )
 
 # Disable by default, since it dumps a stack trace.
 # We don't want ppl to think there was a segfault or something.

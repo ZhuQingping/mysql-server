@@ -19,6 +19,7 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details. */
 
+#include <atomic>
 #include <vector>
 
 #include "include/map_helpers.h"
@@ -60,6 +61,17 @@ class PQ_thd_context {
   bool is_worker() const { return leader != nullptr; }
   bool is_real_worker() const { return leader != nullptr && worker_info != nullptr; }
   bool is_leader() const { return leader == nullptr; }
+  /**
+    Error is a worker-to-leader cancellation signal. Relaxed ordering is enough:
+    the flag does not publish diagnostics or plan state; those retain their
+    existing synchronization.
+  */
+  bool has_error() const { return m_error.load(std::memory_order_relaxed); }
+  void set_error() { m_error.store(true, std::memory_order_relaxed); }
+  /** Call only after all workers observing this statement have joined. */
+  void clear_error_after_workers_join() {
+    m_error.store(false, std::memory_order_relaxed);
+  }
   bool merge_status(THD &owner, THD &other);
   void copy_from(const THD &source);
 
@@ -76,7 +88,6 @@ class PQ_thd_context {
   uint threads_running{0};
   uint dop{0};
   bool no_pq{false};
-  bool error{false};
   uint64 current_found_rows{0};
   bool executed{false};
 #ifndef NDEBUG
@@ -84,6 +95,9 @@ class PQ_thd_context {
   bool skip_fetch_ctx{false};
 #endif  // NDEBUG
   bool explain_analyze{false};
+
+ private:
+  std::atomic<bool> m_error{false};
 };
 
 /** Optimizer state saved before the PQ plan rewrites its host JOIN. */

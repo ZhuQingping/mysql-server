@@ -4,8 +4,6 @@
    it under the terms of the GNU General Public License, version 2.0,
    as published by the Free Software Foundation. */
 
-#include <type_traits>
-
 #include "sql/item_sum.h"
 #include "sql/parallel_query/pq_clone.h"
 #include "sql/parallel_query/pq_context.h"
@@ -15,11 +13,6 @@
 #include "sql/mysqld.h"
 #include "sql/sql_class.h"
 #include "sql/sql_optimizer.h"
-
-static_assert(std::is_standard_layout_v<PQ_join_context>);
-static_assert(std::is_standard_layout_v<PQ_optimized_var>);
-static_assert(std::is_standard_layout_v<PQ_query_block_context>);
-static_assert(std::is_standard_layout_v<PQ_thd_context>);
 
 void PQ_thd_context::initialize_mem_root() {
   mem_root = new MEM_ROOT();
@@ -45,7 +38,7 @@ void PQ_thd_context::cleanup_statement() {
   if (mem_root != nullptr) mem_root->Clear();
   dop = 0;
   no_pq = false;
-  error = false;
+  clear_error_after_workers_join();
   has_pq = false;
   current_found_rows = 0;
   gathers.clear();

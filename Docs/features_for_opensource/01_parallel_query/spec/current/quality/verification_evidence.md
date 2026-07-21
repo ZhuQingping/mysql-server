@@ -30,8 +30,12 @@ SQL 执行语义。
 | 类别 | 配置/命令 | 结果 | 结论边界 |
 |---|---|---|---|
 | Release 编译 | `cmake --build build-ninja-release --target mysqld -j 8` | 通过 | 只验证本次变更可在 macOS arm64 AppleClang Release 配置编译和链接。 |
-| MQ 热路径静态审计 | `nm -nm build-ninja-release/runtime_output_directory/mysqld \| c++filt \| rg 'PQ_thd_context::is_error\|MQueue_handle::(send_bytes\|receive_bytes)'` | 仅保留 `MQueue_handle::{send_bytes,receive_bytes}` 符号；不存在 `PQ_thd_context::is_error` wrapper。 | 配合 `THD::is_pq_error()` 头内联和源级调用点审阅，证明未留下该跨编译单元 wrapper；不替代工作负载性能数据。 |
+| Debug 编译 | `cmake --build build-ninja-debug --target mysqld -j 8` | 通过 | 验证同一源码可在 macOS arm64 AppleClang Debug 配置编译和链接。 |
+| worker-to-leader 错误信号单元测试 | `cmake --build build-ninja-unit --target pq_context-t -j 8 && ./build-ninja-unit/runtime_output_directory/pq_context-t` | 1 个 GoogleTest 通过。worker 调用 `set_error()` 后 leader 可观察到 `has_error()`，worker join 后 `clear_error_after_workers_join()` 复位。 | 直接验证 context 的原子 API 和 statement 边界复位合同；不替代 TSAN 或完整并发压力验证。 |
+| 原始字段遗留审计 | `rg -n 'pq_context\\(\\)\\.error\|m_pq_context\\.error' sql storage/temptable --glob '*.{cc,h}'` | 无匹配。 | 所有 PQ context 错误标志访问均已收敛到 `has_error()` / `set_error()` / `clear_error_after_workers_join()`。 |
+| MQ 热路径静态审计 | `nm -nm build-ninja-release/runtime_output_directory/mysqld \| c++filt \| rg 'PQ_thd_context::(has_error\|set_error\|clear_error_after_workers_join\|is_error)\|MQueue_handle::(send_bytes\|receive_bytes)'` | 仅保留 `MQueue_handle::{send_bytes,receive_bytes}` 符号；不存在 PQ context error API wrapper。 | 配合 `THD::is_pq_error()` 头内联和源级调用点审阅，证明 MQ polling 路径未新增跨编译单元调用；不替代工作负载性能数据。 |
 | Debug PQ 生命周期回归 | `./mtr --force --max-test-fail=0 --retry=0 --parallel=8 --mtr-port-base=25000 --pq parallel_query.pq_clone_item parallel_query.refactor_fix_fields parallel_query.pq_fallback parallel_query.pq_record_buffer parallel_query.pq_read_view parallel_query.pq_kill parallel_query.pq_kill_query parallel_query.pq_worker_error parallel_query.pq_mq_error parallel_query.pq_sp_trigger` | 10 个指定用例全部通过。 | 覆盖 context 生命周期、clone/restore、fallback、read view、KILL 和 MQ/worker 错误路径；不等价于全量矩阵。 |
+| Debug PQ error-path 回归（本次原子化后） | `./mtr --force --max-test-fail=0 --retry=0 --parallel=4 --mtr-port-base=26000 --pq parallel_query.pq_worker_error parallel_query.pq_mq_error parallel_query.pq_kill parallel_query.pq_kill_query parallel_query.pq_fallback` | 5 个指定用例及 `shutdown_report` 全部通过。 | 覆盖此次变更直接涉及的 worker/MQ error、KILL 与 fallback 路径；不等价于全量矩阵。 |
 | 隔离检查 | `git merge-base --is-ancestor 1b9ffd755d4 HEAD`；`git diff --check 1b9ffd755d4..HEAD` | 通过。 | 变更相对稳定基线收口；路径白名单在最终提交前再次核验。 |
 
 ## 4. 仍需单独取证的范围

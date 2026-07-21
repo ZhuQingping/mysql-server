@@ -4736,14 +4736,14 @@ bool JOIN::make_worker_tmp_table() {
   return false;
 
 err:
-  if (!thd->pq_context().error) {
+  if (!thd->pq_context().has_error()) {
     /** error handling */
     MQueue_handle *handle = query_result->get_mq_handler();
     if (handle) {
       handle->send_exception_msg(ERROR_MSG);
       handle->set_detached_status(MQ_HAVE_DETACHED);
     }
-    thd->pq_context().error = true;
+    thd->pq_context().set_error();
   }
   return true;
 }

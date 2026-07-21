@@ -246,7 +246,7 @@ bool ParallelScanIterator::pq_launch_worker() {
 #ifndef NDEBUG
     if (i >= m_dop / 2) DEBUG_SYNC(thd, "pq_wait_kill");
 #endif  // NDEBUG
-    if (thd->is_error() || thd->pq_context().error || thd->killed) goto err;
+    if (thd->is_error() || thd->pq_context().has_error() || thd->killed) goto err;
     my_thread_handle id;
     id.thread = 0;
 
@@ -295,7 +295,7 @@ bool ParallelScanIterator::pq_launch_worker() {
 err:
   for (uint i = 0; i < m_dop; i++) {
     if (workers[i]->thread_id.thread && workers[i]->thd_worker) {
-      workers[i]->thd_worker->pq_context().error = true;
+      workers[i]->thd_worker->pq_context().set_error();
     }
   }
   return true;
@@ -388,7 +388,7 @@ int ParallelScanIterator::pq_error_code() {
   }
   /**  output parallel error code */
   if (!temp_thd->is_error() && !thd->is_error() &&
-      !temp_thd->pq_context().explain_analyze && thd->pq_context().error) {
+      !temp_thd->pq_context().explain_analyze && thd->pq_context().has_error()) {
     my_error(ER_PARALLEL_QUERY_ERROR, MYF(0), "Parallel execution error");
   }
   return 1;
@@ -473,7 +473,7 @@ bool ParallelScanIterator::Init() {
         return true;
     }
     if (para_exec_init(path)) {  // materialize shared tmp table
-      m_join->thd->pq_context().error = true;
+      m_join->thd->pq_context().set_error();
       return true;
     }
   }
@@ -487,7 +487,7 @@ bool ParallelScanIterator::Init() {
                    we have not generated read_view on divided (or cut) table*/
       pq_launch_worker() || /** launch worker threads */
       DBUG_EVALUATE_IF("pq_worker_error6", true, false)) {
-    m_join->thd->pq_context().error = true;
+    m_join->thd->pq_context().set_error();
     return true;
   }
   return false;

@@ -35,7 +35,9 @@ JOIN        -- owns by value --> PQ_join_context
 
 `PQ_thd_context` 位于 `sql/parallel_query/pq_context.h`，负责一条连接/worker
 所拥有的 PQ 状态：PQ `MEM_ROOT`、leader/worker 拓扑、gather 集合、worker manager、
-DOP、retry/error/executed 标记、found rows、clone phase 和 EXPLAIN ANALYZE 状态。
+DOP、retry/executed 标记、found rows、clone phase 和 EXPLAIN ANALYZE 状态。worker-to-leader
+错误取消信号由私有 `std::atomic<bool> m_error` 和 `has_error()` / `set_error()` /
+`clear_error_after_workers_join()` 承载。
 
 构造、析构和语句 cleanup 仍由 `THD` 触发：
 
@@ -112,9 +114,10 @@ otool -tvV build-ninja-release/runtime_output_directory/mysqld
 ```
 
 记录构建提交、编译器、架构和 `WITH_LTO` 值；接受条件是没有前述 wrapper 符号，且
-MQ 两个循环不会调用该 wrapper。context 是 owner 内嵌对象；本重构没有引入新的
-mutex、atomic、virtual dispatch、shared ownership 或由 context 引入的额外 heap
-indirection（不对既有 PQ 容器的分配行为作泛化声明）。
+MQ 两个循环不会调用该 wrapper。`has_error()` 为头内联 relaxed atomic load：它只消除
+worker 写、leader 读 cancellation flag 的 data race，不发布 Diagnostics_area 或计划数据。
+context 是 owner 内嵌对象；除该既有错误信号的原子化外，本重构不引入 mutex、virtual dispatch、
+shared ownership 或由 context 引入的额外 heap indirection（不对既有 PQ 容器的分配行为作泛化声明）。
 
 对象布局可能发生轻微变化，因此“没有新增同步/分配”不等于已经证明零性能回归。
 最终验收必须以同机器、同配置的 stable/refactor 对照记录 PQ 吞吐、P95/P99 和

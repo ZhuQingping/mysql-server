@@ -1972,7 +1972,7 @@ bool Query_expression::ExecuteIteratorQuery(THD *thd) {
           one, which is not a big problem but could be improved.
         */
         if (handler) {
-          thd->pq_context().error = true;
+          thd->pq_context().set_error();
           handler->send_exception_msg(ERROR_MSG);
           handler->set_detached_status(MQ_HAVE_DETACHED);
         } else {
@@ -1991,7 +1991,7 @@ bool Query_expression::ExecuteIteratorQuery(THD *thd) {
             SELECT statement continue.
           */
           if (thd->is_error()) {
-            thd->pq_context().error = true;  // will stop all threads
+            thd->pq_context().set_error();  // will stop all threads
           }
         }
       }

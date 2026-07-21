@@ -5,7 +5,7 @@
 > `current/quality/verification_evidence.md` 为准。
 > 输入提交：`1b9ffd755d4`；分支：`pq-local-refactor-clean`；
 > 绑定 PQ source/test 树：`clean`；采集日期：`2026-07-21`。
-> 源码树：`609432f98785fe9be9d8db8e9c346de18bcc3f0b52c46716e7a7f6a4e83323f9`；PQ 测试树：`8c59c7d8af6db3feffa377ca1aab9de9a822b6a80e2091e7b1cfd1db01b43bea`。
+> 源码树：`fac8b54f4febf9c81014dace2ae225af6f0d38de5f768a87d3039db39b20fe4f`；PQ 测试树：`8c59c7d8af6db3feffa377ca1aab9de9a822b6a80e2091e7b1cfd1db01b43bea`。
 > 源码 hash 范围：`sql/parallel_query/** plus storage/innobase/include/row0pread_pq.h, storage/innobase/row/row0pread_pq.cc, storage/innobase/handler/ha_innodb_pq.cc`；其他接入点仅为 path::symbol 静态证据。
 
 ## 输入文档
@@ -24,11 +24,11 @@
 - [`current/modules/10_transaction_dml_binlog.md`](../current/modules/10_transaction_dml_binlog.md) — `fcf0e4c68d02dcfb8517c1884f17b1ecde80f325b691b26ef8ea29261d44a0fa`
 - [`current/modules/11_resource_accounting.md`](../current/modules/11_resource_accounting.md) — `d185f8a5fee3e9b711a158b2f3f4ef5fa5dd973c93980b31a9f058c3e39ee3d2`
 - [`current/modules/12_observability_integrations.md`](../current/modules/12_observability_integrations.md) — `182c361d69f0bcc5ada7b9d35e354745d7999bccdb37c5e00d856a88bd2764c0`
-- [`current/13_context_ownership_refactor.md`](../current/13_context_ownership_refactor.md) — `dfb2c14ee3d67f312cfe9e940a3c41cdefdae856d6aac361dc8778a596093dd2`
+- [`current/13_context_ownership_refactor.md`](../current/13_context_ownership_refactor.md) — `c2322f4cbda0f8c40870ff3d7eff1fcccca0ec19c631f632260c7954b697487d`
 - [`current/quality/requirements_test_traceability.md`](../current/quality/requirements_test_traceability.md) — `ede71c19da054e98b2190f845bf96b45bd56761d47836d1f7084c5f045362c54`
 - [`current/quality/fault_injection_release_gates.md`](../current/quality/fault_injection_release_gates.md) — `0305207e76eb169c67c4813540274cf779562b718dea1b8e76e182f0cbc16370`
-- [`current/quality/verification_evidence.md`](../current/quality/verification_evidence.md) — `38d9a6e932350eac80ae7fe287e15304e8a248b77479fbbe99cd7ecf82cf38bc`
-- [`current/quality/context_refactor_review_2026-07-21.md`](../current/quality/context_refactor_review_2026-07-21.md) — `0e33579994be180753246bc1ce967c26d5a07ec00152230498464ab970829b96`
+- [`current/quality/verification_evidence.md`](../current/quality/verification_evidence.md) — `8533ea8df3f1799f707be83d3eb389f2245e667e73f3a49ae43eb97125ff6943`
+- [`current/quality/context_refactor_review_2026-07-21.md`](../current/quality/context_refactor_review_2026-07-21.md) — `fff4dfb51ba6ba79d5b2d9094aa6f8fdb7ce0d4f9b9b150eeaf981b4bfc8b5de`
 - [`current/runbooks/pq_not_selected.md`](../current/runbooks/pq_not_selected.md) — `9eadc14090e8c63debba39ad3591f04e3f03c91da4b509a5de7fce7bdacb3115`
 - [`current/runbooks/wrong_result_or_crash.md`](../current/runbooks/wrong_result_or_crash.md) — `a95744ed7bc6b006f949d813c3ccb0664a85214db766ba48e7d9dcb4d2e9e18d`
 - [`current/runbooks/hang_kill_resource_leak.md`](../current/runbooks/hang_kill_resource_leak.md) — `26ac1c109d763aab06797470fbe84402a67fc9a9d8425c55dcf3feeeb0463bda`
@@ -4191,7 +4191,9 @@ JOIN        -- owns by value --> PQ_join_context
 
 `PQ_thd_context` 位于 `sql/parallel_query/pq_context.h`，负责一条连接/worker
 所拥有的 PQ 状态：PQ `MEM_ROOT`、leader/worker 拓扑、gather 集合、worker manager、
-DOP、retry/error/executed 标记、found rows、clone phase 和 EXPLAIN ANALYZE 状态。
+DOP、retry/executed 标记、found rows、clone phase 和 EXPLAIN ANALYZE 状态。worker-to-leader
+错误取消信号由私有 `std::atomic<bool> m_error` 和 `has_error()` / `set_error()` /
+`clear_error_after_workers_join()` 承载。
 
 构造、析构和语句 cleanup 仍由 `THD` 触发：
 
@@ -4268,9 +4270,10 @@ otool -tvV build-ninja-release/runtime_output_directory/mysqld
 ```
 
 记录构建提交、编译器、架构和 `WITH_LTO` 值；接受条件是没有前述 wrapper 符号，且
-MQ 两个循环不会调用该 wrapper。context 是 owner 内嵌对象；本重构没有引入新的
-mutex、atomic、virtual dispatch、shared ownership 或由 context 引入的额外 heap
-indirection（不对既有 PQ 容器的分配行为作泛化声明）。
+MQ 两个循环不会调用该 wrapper。`has_error()` 为头内联 relaxed atomic load：它只消除
+worker 写、leader 读 cancellation flag 的 data race，不发布 Diagnostics_area 或计划数据。
+context 是 owner 内嵌对象；除该既有错误信号的原子化外，本重构不引入 mutex、virtual dispatch、
+shared ownership 或由 context 引入的额外 heap indirection（不对既有 PQ 容器的分配行为作泛化声明）。
 
 对象布局可能发生轻微变化，因此“没有新增同步/分配”不等于已经证明零性能回归。
 最终验收必须以同机器、同配置的 stable/refactor 对照记录 PQ 吞吐、P95/P99 和
@@ -4757,8 +4760,12 @@ SQL 执行语义。
 | 类别 | 配置/命令 | 结果 | 结论边界 |
 |---|---|---|---|
 | Release 编译 | `cmake --build build-ninja-release --target mysqld -j 8` | 通过 | 只验证本次变更可在 macOS arm64 AppleClang Release 配置编译和链接。 |
-| MQ 热路径静态审计 | `nm -nm build-ninja-release/runtime_output_directory/mysqld \| c++filt \| rg 'PQ_thd_context::is_error\|MQueue_handle::(send_bytes\|receive_bytes)'` | 仅保留 `MQueue_handle::{send_bytes,receive_bytes}` 符号；不存在 `PQ_thd_context::is_error` wrapper。 | 配合 `THD::is_pq_error()` 头内联和源级调用点审阅，证明未留下该跨编译单元 wrapper；不替代工作负载性能数据。 |
+| Debug 编译 | `cmake --build build-ninja-debug --target mysqld -j 8` | 通过 | 验证同一源码可在 macOS arm64 AppleClang Debug 配置编译和链接。 |
+| worker-to-leader 错误信号单元测试 | `cmake --build build-ninja-unit --target pq_context-t -j 8 && ./build-ninja-unit/runtime_output_directory/pq_context-t` | 1 个 GoogleTest 通过。worker 调用 `set_error()` 后 leader 可观察到 `has_error()`，worker join 后 `clear_error_after_workers_join()` 复位。 | 直接验证 context 的原子 API 和 statement 边界复位合同；不替代 TSAN 或完整并发压力验证。 |
+| 原始字段遗留审计 | `rg -n 'pq_context\\(\\)\\.error\|m_pq_context\\.error' sql storage/temptable --glob '*.{cc,h}'` | 无匹配。 | 所有 PQ context 错误标志访问均已收敛到 `has_error()` / `set_error()` / `clear_error_after_workers_join()`。 |
+| MQ 热路径静态审计 | `nm -nm build-ninja-release/runtime_output_directory/mysqld \| c++filt \| rg 'PQ_thd_context::(has_error\|set_error\|clear_error_after_workers_join\|is_error)\|MQueue_handle::(send_bytes\|receive_bytes)'` | 仅保留 `MQueue_handle::{send_bytes,receive_bytes}` 符号；不存在 PQ context error API wrapper。 | 配合 `THD::is_pq_error()` 头内联和源级调用点审阅，证明 MQ polling 路径未新增跨编译单元调用；不替代工作负载性能数据。 |
 | Debug PQ 生命周期回归 | `./mtr --force --max-test-fail=0 --retry=0 --parallel=8 --mtr-port-base=25000 --pq parallel_query.pq_clone_item parallel_query.refactor_fix_fields parallel_query.pq_fallback parallel_query.pq_record_buffer parallel_query.pq_read_view parallel_query.pq_kill parallel_query.pq_kill_query parallel_query.pq_worker_error parallel_query.pq_mq_error parallel_query.pq_sp_trigger` | 10 个指定用例全部通过。 | 覆盖 context 生命周期、clone/restore、fallback、read view、KILL 和 MQ/worker 错误路径；不等价于全量矩阵。 |
+| Debug PQ error-path 回归（本次原子化后） | `./mtr --force --max-test-fail=0 --retry=0 --parallel=4 --mtr-port-base=26000 --pq parallel_query.pq_worker_error parallel_query.pq_mq_error parallel_query.pq_kill parallel_query.pq_kill_query parallel_query.pq_fallback` | 5 个指定用例及 `shutdown_report` 全部通过。 | 覆盖此次变更直接涉及的 worker/MQ error、KILL 与 fallback 路径；不等价于全量矩阵。 |
 | 隔离检查 | `git merge-base --is-ancestor 1b9ffd755d4 HEAD`；`git diff --check 1b9ffd755d4..HEAD` | 通过。 | 变更相对稳定基线收口；路径白名单在最终提交前再次核验。 |
 
 ## 4. 仍需单独取证的范围
@@ -4795,6 +4802,11 @@ SQL 执行语义。
 > 审核方式：三名独立 Agent 只读审查；未修改代码，未执行全量 MTR
 > 总结建议：`ACCEPT WITH RISKS`
 
+> 历史范围说明：本审核固定针对 `f9970c78a249` 的原始 context 重构。其后的
+> `PQ_thd_context` 原子错误信号加固不改变本审核的历史结论；实现合同和验证证据分别见
+> [`pq_context_refactor_design.md`](../../../../pq_context_refactor_design.md) 与
+> [`verification_evidence.md`](../current/quality/verification_evidence.md)。
+
 ## 1. 结论
 
 当前 THD、Query_block、JOIN 的 Parallel Query（PQ）context 重构未发现已证实的
@@ -4828,8 +4840,9 @@ SQL 执行语义。
   `THD::is_pq_error()` 保持头内联。
 - `mysqld` 符号表没有 `PQ_thd_context::is_error` wrapper；MQ send/receive 循环
   的反汇编没有调用该 wrapper。
-- 本重构未引入 mutex、atomic、virtual dispatch、`shared_ptr` 或新的共享所有权；
-  PQ MEM_ROOT、QEP、map 和临时表参数的分配为既有逻辑迁移。
+- 原始 context 重构未引入 mutex、atomic、virtual dispatch、`shared_ptr` 或新的共享所有权；
+  PQ MEM_ROOT、QEP、map 和临时表参数的分配为既有逻辑迁移。后续的原子错误信号加固是
+  有意的窄例外：它只保护既存 worker-to-leader cancellation flag，并使用 relaxed load/store。
 - Debug DWARF 对象布局：`THD` 为 `+8B`，`JOIN` 为 `+8B`，`Query_block` 不变。
 
 ### 3.2 尚不能下结论
