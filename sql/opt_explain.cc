@@ -1115,7 +1115,8 @@ bool Explain_table_base::explain_extra_common(int range_scan_type, uint keyno) {
     if (mrr_flags & HA_MRR_SORTED && !(mrr_flags & HA_MRR_SUPPORT_SORTED))
       mrr_flags |= HA_MRR_USE_DEFAULT_IMPL;
 
-    if (!(current_thd->has_pq && (tab->pq_cut_tab || tab->pq_div_tab)) &&
+    if (!(current_thd->pq_context().has_pq &&
+          (tab->pq_cut_tab || tab->pq_div_tab)) &&
         !(mrr_flags & HA_MRR_USE_DEFAULT_IMPL) && push_extra(ET_USING_MRR))
       return true;
   }
@@ -1381,7 +1382,7 @@ bool Explain_join::shallow_explain() {
     and gather is in qep_tab[0]. So for parallel query, explain the first
     qep_tab of leader here.
   */
-  if (fmt->is_hierarchical() && join->query_block->parallel_exec &&
+  if (fmt->is_hierarchical() && join->query_block->pq_context().parallel_exec &&
       join->primary_tables == 0 && explain_qep_tab(join->primary_tables))
     return true;
 
@@ -1490,7 +1491,7 @@ bool Explain_join::explain_pq_gather(QEP_TAB *tab_arg) {
   const bool distinct_flag = flags->get(ESC_DISTINCT, ESP_EXISTS);
 
   join->thd->lock_query_plan();
-  Explain_join *ej = new (join->thd->pq_mem_root)
+  Explain_join *ej = new (join->thd->pq_context().mem_root)
       Explain_join(explain_thd, join->thd, query_block, need_tmp_table_flag,
                    need_order_flag, distinct_flag);
 

@@ -93,7 +93,7 @@ template <typename T, typename C>
 inline bool check_type_and_warn(THD *thd, Query_block *select, C *current) {
   if (typeid(*current) != typeid(T) ||
       DBUG_EVALUATE_IF("simulate_item_type_mismatch", true, false)) {
-    if (select->pq_try_clone_item) return true;
+    if (select->pq_context().pq_try_clone_item) return true;
     sql_print_warning(
         "Caller's type %s is not equals to this class type %s, "
         "will not use parallel query, SQL= %s",
@@ -266,7 +266,7 @@ Item *func_item_clone_template(THD *thd, Query_block *select, T *self,
 
 Item *Item::pq_clone(THD *thd MY_ATTRIBUTE((unused)),
                      Query_block *select MY_ATTRIBUTE((unused))) {
-  if (select->pq_try_clone_item) return nullptr;
+  if (select->pq_context().pq_try_clone_item) return nullptr;
   sql_print_warning(
       "Item type %s's deep copy method is not implemented, "
       "will not use parallel query, SQL= %s",
@@ -352,7 +352,7 @@ bool Item_cache::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 Item *Item_cache_datetime::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_cache_datetime>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_cache_datetime(data_type());
+        new_item = new (thd->pq_context().mem_root) Item_cache_datetime(data_type());
         return false;
       }));
 }
@@ -360,7 +360,7 @@ Item *Item_cache_datetime::pq_clone(THD *thd, Query_block *select) {
 Item *Item_cache_decimal::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_cache_decimal>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_cache_decimal();
+        new_item = new (thd->pq_context().mem_root) Item_cache_decimal();
         return false;
       }));
 }
@@ -376,7 +376,7 @@ Item *Item_cache_int::pq_clone(THD *thd, Query_block *select) {
 Item *Item_cache_bit::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_cache_bit>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_cache_bit(MYSQL_TYPE_BIT);
+        new_item = new (thd->pq_context().mem_root) Item_cache_bit(MYSQL_TYPE_BIT);
         return false;
       }));
 }
@@ -384,7 +384,7 @@ Item *Item_cache_bit::pq_clone(THD *thd, Query_block *select) {
 Item *Item_cache_real::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_cache_real>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_cache_real();
+        new_item = new (thd->pq_context().mem_root) Item_cache_real();
         return false;
       }));
 }
@@ -392,7 +392,7 @@ Item *Item_cache_real::pq_clone(THD *thd, Query_block *select) {
 Item *Item_cache_row::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_cache_row>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_cache_row();
+        new_item = new (thd->pq_context().mem_root) Item_cache_row();
         return false;
       }));
 }
@@ -401,7 +401,7 @@ Item *Item_cache_str::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_cache_str>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
         const Item *item = static_cast<const Item *>(this);
-        new_item = new (thd->pq_mem_root) Item_cache_str(item);
+        new_item = new (thd->pq_context().mem_root) Item_cache_str(item);
         return false;
       }));
 }
@@ -422,7 +422,7 @@ Item *Item_hex_string::pq_clone(THD *thd, Query_block *select) {
 Item *Item_bin_string::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_bin_string>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_bin_string(str_value.ptr(), str_value.length());
         return false;
       }));
@@ -434,7 +434,7 @@ Item *Item_bin_string::pq_clone(THD *thd, Query_block *select) {
 Item *Item_null::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_null>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_null(POS());
+        new_item = new (thd->pq_context().mem_root) Item_null(POS());
         return false;
       }));
 }
@@ -451,7 +451,7 @@ Item *Item_int_with_ref::pq_clone(THD *thd, Query_block *select) {
         // item We should make sure its child (pq_ref in that case) is therefore
         // fixed, could we consider doing something like that ?
         if (!pq_ref->fixed && pq_ref->refix_fields(thd, &pq_ref)) return true;
-        new_item = new (thd->pq_mem_root) Item_int_with_ref(
+        new_item = new (thd->pq_context().mem_root) Item_int_with_ref(
             pq_ref->data_type(), value, pq_ref, unsigned_flag);
         return false;
       }));
@@ -463,7 +463,7 @@ Item *Item_datetime_with_ref::pq_clone(THD *thd, Query_block *select) {
         Item *pq_ref = ref->pq_clone(thd, select);
         if (!pq_ref) return true;
 
-        new_item = new (thd->pq_mem_root) Item_datetime_with_ref(
+        new_item = new (thd->pq_context().mem_root) Item_datetime_with_ref(
             pq_ref->data_type(), decimals, value, pq_ref);
         return false;
       }));
@@ -476,7 +476,7 @@ Item *Item_time_with_ref::pq_clone(THD *thd, Query_block *select) {
         if (!pq_ref) return true;
 
         new_item =
-            new (thd->pq_mem_root) Item_time_with_ref(decimals, value, pq_ref);
+            new (thd->pq_context().mem_root) Item_time_with_ref(decimals, value, pq_ref);
         return false;
       }));
 }
@@ -487,7 +487,7 @@ Item *Item_time_with_ref::pq_clone(THD *thd, Query_block *select) {
 Item *Item_string::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_string>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_string(static_cast<Name_string>(item_name), str_value.ptr(),
                         str_value.length(), collation.collation,
                         collation.derivation, collation.repertoire);
@@ -501,7 +501,7 @@ Item *Item_string::pq_clone(THD *thd, Query_block *select) {
 Item *Item_static_string_func::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_static_string_func>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_static_string_func(
+        new_item = new (thd->pq_context().mem_root) Item_static_string_func(
             func_name, str_value.ptr(), str_value.length(), collation.collation,
             collation.derivation);
         return false;
@@ -514,7 +514,7 @@ Item *PTI_literal_underscore_charset_bin_num::pq_clone(THD *thd,
       thd, select, this, ([this, thd, select](Item *&new_item) {
         assert(origin_item == nullptr);
         new_item =
-            new (thd->pq_mem_root) PTI_literal_underscore_charset_bin_num(
+            new (thd->pq_context().mem_root) PTI_literal_underscore_charset_bin_num(
                 str_value.ptr(), str_value.length(), collation.collation,
                 collation.derivation);
         return false;
@@ -557,7 +557,7 @@ Item *Item_field::pq_clone(THD *thd, Query_block *select) {
           return true;
         }
 
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_field(POS(), db_name, table_name,
                        m_orig_field_name ? m_orig_field_name : field_name);
         return false;
@@ -585,7 +585,7 @@ Item *Item_default_value::pq_clone(THD *thd, Query_block *select) {
           new_arg = arg->pq_clone(thd, select);
           if (nullptr == new_arg) return true;
         }
-        new_item = new (thd->pq_mem_root) Item_default_value(POS(), new_arg);
+        new_item = new (thd->pq_context().mem_root) Item_default_value(POS(), new_arg);
         return false;
       }));
 }
@@ -595,7 +595,7 @@ Item *Item_func_at_time_zone::pq_clone(THD *thd, Query_block *select) {
       thd, select, this, ([this, thd, select](Item *&new_item) {
         Item *arg = args[0]->pq_clone(thd, select);
         if (arg == nullptr) return true;
-        new_item = new (thd->pq_mem_root) Item_func_at_time_zone(
+        new_item = new (thd->pq_context().mem_root) Item_func_at_time_zone(
             POS(), arg, m_specifier_string, m_is_interval);
         return false;
       }));
@@ -609,7 +609,7 @@ Item *Item_ref::pq_clone(THD *thd, Query_block *select) {
   // Query_block::saved_where_cond (pq_try_clone_item==true), 'select' is the
   // original query block. While in the other case, 'select' is the new,
   // under-construction query block.
-  auto source_select = depended_from ? (select->pq_try_clone_item
+  auto source_select = depended_from ? (select->pq_context().pq_try_clone_item
                                             ? depended_from
                                             : depended_from->pq_last_clone())
                                      : select;
@@ -645,11 +645,11 @@ Item *Item_ref::pq_clone(THD *thd, Query_block *select) {
                                                source_select->get_fields_list(),
                                                *m_ref_item, pos_in_ref);
   // So the expectation is that we found something:
-  assert(select_item || select->pq_try_clone_item);
+  assert(select_item || select->pq_context().pq_try_clone_item);
   // release-version will report PQ error rather than core-dump
   if (!select_item || !(*select_item)) return nullptr;
   Item_ref *new_item =
-      new (thd->pq_mem_root) Item_ref(&select->context, select_item, db_name,
+      new (thd->pq_context().mem_root) Item_ref(&select->context, select_item, db_name,
                                       table_name, field_name, m_alias_of_expr);
   if (!new_item || new_item->pq_copy_from(thd, select, this)) return nullptr;
 
@@ -675,7 +675,7 @@ Item *Item_name_const::pq_clone(THD *thd, Query_block *select) {
           if (val_arg == nullptr) return true;
         }
         new_item =
-            new (thd->pq_mem_root) Item_name_const(POS(), name_arg, val_arg);
+            new (thd->pq_context().mem_root) Item_name_const(POS(), name_arg, val_arg);
         return false;
       }));
 }
@@ -720,7 +720,7 @@ Item *PTI_literal_underscore_charset_hex_num::pq_clone(THD *thd,
         LEX_STRING str = {const_cast<char *>(str_value.ptr()),
                           str_value.length()};
         new_item =
-            new (thd->pq_mem_root) PTI_literal_underscore_charset_hex_num(
+            new (thd->pq_context().mem_root) PTI_literal_underscore_charset_hex_num(
                 POS(), collation.collation, str);
         return false;
       }));
@@ -728,7 +728,7 @@ Item *PTI_literal_underscore_charset_hex_num::pq_clone(THD *thd,
 
 Item *Item_func_bit_neg::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_bit_neg(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_bit_neg(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_bit_neg>(thd, select, this,
                                                              item_creator);
@@ -736,7 +736,7 @@ Item *Item_func_bit_neg::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_bit_and::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_bit_and(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_bit_and>(thd, select, this,
@@ -745,7 +745,7 @@ Item *Item_func_bit_and::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_bit_or::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_bit_or(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_bit_or>(thd, select, this,
@@ -754,7 +754,7 @@ Item *Item_func_bit_or::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_bit_xor::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_bit_xor(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_bit_xor>(thd, select, this,
@@ -763,7 +763,7 @@ Item *Item_func_bit_xor::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_shift_left::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_shift_left(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_shift_left>(
@@ -772,7 +772,7 @@ Item *Item_func_shift_left::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_shift_right::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_shift_right(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_shift_right>(
@@ -784,12 +784,12 @@ Item *Item_func_shift_right::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_case::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_case>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
         }
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_func_case(POS(), &item_list, nullptr, nullptr);
         return false;
       }));
@@ -822,7 +822,7 @@ bool Item_func_case::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_if::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_if(copy_args[0], copy_args[1], copy_args[2]);
   };
   return pq_def::func_item_clone_template<Item_func_if>(thd, select, this,
@@ -831,7 +831,7 @@ Item *Item_func_if::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_month::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_month(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_month(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_month>(thd, select, this,
                                                            item_creator);
@@ -841,7 +841,7 @@ Item *Item_func_month::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_coalesce::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_coalesce>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> list(thd->pq_mem_root);
+        mem_root_deque<Item *> list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count, list)) {
           return true;
         }
@@ -849,14 +849,14 @@ Item *Item_func_coalesce::pq_clone(THD *thd, Query_block *select) {
         pt_item_list.value = list;
 
         new_item =
-            new (thd->pq_mem_root) Item_func_coalesce(POS(), &pt_item_list);
+            new (thd->pq_context().mem_root) Item_func_coalesce(POS(), &pt_item_list);
         return false;
       }));
 }
 
 Item *Item_func_any_value::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_any_value(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_any_value(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_any_value>(
       thd, select, this, item_creator);
@@ -864,7 +864,7 @@ Item *Item_func_any_value::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_ifnull::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_ifnull(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_ifnull>(thd, select, this,
@@ -876,7 +876,7 @@ Item *Item_func_ifnull::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_max::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_max>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -892,7 +892,7 @@ Item *Item_func_max::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_min::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_min>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -910,7 +910,7 @@ Item *Item_func_min::pq_clone(THD *thd, Query_block *select) {
 /* Item_func_num1 start */
 Item *Item_func_abs::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_abs(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_abs(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_abs>(thd, select, this,
                                                          item_creator);
@@ -918,7 +918,7 @@ Item *Item_func_abs::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_ceiling::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_ceiling(copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_ceiling(copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_ceiling>(thd, select, this,
                                                              item_creator);
@@ -926,7 +926,7 @@ Item *Item_func_ceiling::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_neg::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_neg(copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_neg(copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_neg>(thd, select, this,
                                                          item_creator);
@@ -934,7 +934,7 @@ Item *Item_func_neg::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_round::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_round(copy_args[0], copy_args[1], truncate);
   };
   return pq_def::func_item_clone_template<Item_func_round>(thd, select, this,
@@ -946,7 +946,7 @@ Item *Item_func_round::pq_clone(THD *thd, Query_block *select) {
 /* Item_num_op start */
 Item *Item_func_plus::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_plus(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_plus(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_plus>(thd, select, this,
                                                           item_creator);
@@ -954,7 +954,7 @@ Item *Item_func_plus::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_minus::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_minus(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_minus(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_minus>(thd, select, this,
                                                            item_creator);
@@ -962,7 +962,7 @@ Item *Item_func_minus::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_div::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_div(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_div>(thd, select, this,
@@ -971,7 +971,7 @@ Item *Item_func_div::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_mod::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_mod(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_mod(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_mod>(thd, select, this,
                                                          item_creator);
@@ -979,7 +979,7 @@ Item *Item_func_mod::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_mul::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_mul(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_mul(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_mul>(thd, select, this,
                                                          item_creator);
@@ -1003,7 +1003,7 @@ bool Item_func_regexp::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 Item *Item_func_regexp_instr::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_regexp_instr>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -1012,7 +1012,7 @@ Item *Item_func_regexp_instr::pq_clone(THD *thd, Query_block *select) {
         PT_item_list pt_item_list;
         pt_item_list.value = item_list;
         new_item =
-            new (thd->pq_mem_root) Item_func_regexp_instr(POS(), &pt_item_list);
+            new (thd->pq_context().mem_root) Item_func_regexp_instr(POS(), &pt_item_list);
         return false;
       }));
 }
@@ -1020,7 +1020,7 @@ Item *Item_func_regexp_instr::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_regexp_like::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_regexp_like>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -1040,7 +1040,7 @@ Item *Item_func_regexp_like::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_weekday::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_weekday>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -1053,7 +1053,7 @@ Item *Item_func_weekday::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_dayname::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_dayname(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_dayname(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_dayname>(thd, select, this,
                                                              item_creator);
@@ -1065,7 +1065,7 @@ Item *Item_func_dayname::pq_clone(THD *thd, Query_block *select) {
 /* Item_bool_func2 start */
 Item *Item_func_eq::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_eq(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_eq(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_eq>(thd, select, this,
                                                         item_creator);
@@ -1073,7 +1073,7 @@ Item *Item_func_eq::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_equal::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_equal(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_equal(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_equal>(thd, select, this,
                                                            item_creator);
@@ -1081,7 +1081,7 @@ Item *Item_func_equal::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_ge::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_ge(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_ge(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_ge>(thd, select, this,
                                                         item_creator);
@@ -1089,7 +1089,7 @@ Item *Item_func_ge::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_gt::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_gt(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_gt(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_gt>(thd, select, this,
                                                         item_creator);
@@ -1097,7 +1097,7 @@ Item *Item_func_gt::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_le::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_le(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_le(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_le>(thd, select, this,
                                                         item_creator);
@@ -1105,7 +1105,7 @@ Item *Item_func_le::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_lt::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_lt(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_lt(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_lt>(thd, select, this,
                                                         item_creator);
@@ -1113,7 +1113,7 @@ Item *Item_func_lt::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_ne::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_ne(copy_args[0], copy_args[1]);
+    return new (thd->pq_context().mem_root) Item_func_ne(copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_ne>(thd, select, this,
                                                         item_creator);
@@ -1122,7 +1122,7 @@ Item *Item_func_ne::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_pi::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_pi>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_func_pi(POS());
+        new_item = new (thd->pq_context().mem_root) Item_func_pi(POS());
         return false;
       }));
 }
@@ -1143,9 +1143,9 @@ Item *Item_func_like::pq_clone(THD *thd, Query_block *select) {
             if (escape_item == nullptr) return true;
           }
           new_item =
-              new (thd->pq_mem_root) Item_func_like(arg0, arg1, escape_item);
+              new (thd->pq_context().mem_root) Item_func_like(arg0, arg1, escape_item);
         } else {
-          new_item = new (thd->pq_mem_root) Item_func_like(arg0, arg1);
+          new_item = new (thd->pq_context().mem_root) Item_func_like(arg0, arg1);
         }
         return false;
       }));
@@ -1169,7 +1169,7 @@ bool Item_func_like::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_nullif::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_nullif(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_nullif>(thd, select, this,
@@ -1187,7 +1187,7 @@ bool Item_func_nullif::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_strcmp::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_strcmp(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_strcmp>(thd, select, this,
@@ -1196,7 +1196,7 @@ Item *Item_func_strcmp::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_xor::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_xor(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_xor>(thd, select, this,
@@ -1235,7 +1235,7 @@ bool Item_cond::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 Item *Item_cond_and::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_cond_and>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_cond_and();
+        new_item = new (thd->pq_context().mem_root) Item_cond_and();
         return false;
       }));
 }
@@ -1261,7 +1261,7 @@ bool Item_cond_and::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 Item *Item_equal::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_equal>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_equal();
+        new_item = new (thd->pq_context().mem_root) Item_equal();
         return false;
       }));
 }
@@ -1294,7 +1294,7 @@ bool Item_equal::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_true::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_true(POS());
+    return new (thd->pq_context().mem_root) Item_func_true(POS());
   };
   return pq_def::func_item_clone_template<Item_func_true>(thd, select, this,
                                                           item_creator);
@@ -1302,7 +1302,7 @@ Item *Item_func_true::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_false::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_false(POS());
+    return new (thd->pq_context().mem_root) Item_func_false(POS());
   };
   return pq_def::func_item_clone_template<Item_func_false>(thd, select, this,
                                                            item_creator);
@@ -1310,7 +1310,7 @@ Item *Item_func_false::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_isnotnull::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_isnotnull(copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_isnotnull(copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_isnotnull>(
       thd, select, this, item_creator);
@@ -1321,7 +1321,7 @@ Item *Item_func_isnull::pq_clone(THD *thd, Query_block *select) {
       thd, select, this, ([this, thd, select](Item *&new_item) {
         Item *arg = args[0]->pq_clone(thd, select);
         if (arg == nullptr) return true;
-        new_item = new (thd->pq_mem_root) Item_func_isnull(POS(), arg);
+        new_item = new (thd->pq_context().mem_root) Item_func_isnull(POS(), arg);
         return false;
       }));
 }
@@ -1338,7 +1338,7 @@ bool Item_func_isnull::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_not::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_not(copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_not(copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_not>(thd, select, this,
                                                          item_creator);
@@ -1347,7 +1347,7 @@ Item *Item_func_not::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_truth::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_truth>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -1360,7 +1360,7 @@ Item *Item_func_truth::pq_clone(THD *thd, Query_block *select) {
 Item *Item_extract::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_extract>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -1381,7 +1381,7 @@ bool Item_extract::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_ascii::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_ascii(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_ascii(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_ascii>(thd, select, this,
                                                            item_creator);
@@ -1389,7 +1389,7 @@ Item *Item_func_ascii::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_bit_count::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_bit_count(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_bit_count(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_bit_count>(
       thd, select, this, item_creator);
@@ -1401,7 +1401,7 @@ Item *Item_func_char_length::pq_clone(THD *thd, Query_block *select) {
         assert(arg_count == 1);
         Item *arg = args[0]->pq_clone(thd, select);
         if (arg == nullptr) return true;
-        new_item = new (thd->pq_mem_root) Item_func_char_length(POS(), arg);
+        new_item = new (thd->pq_context().mem_root) Item_func_char_length(POS(), arg);
         return false;
       }));
 }
@@ -1418,7 +1418,7 @@ bool Item_func_char_length::pq_copy_from(THD *thd, Query_block *select,
 
 Item *Item_func_coercibility::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_coercibility(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_coercibility(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_coercibility>(
       thd, select, this, item_creator);
@@ -1426,7 +1426,7 @@ Item *Item_func_coercibility::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_crc32::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_crc32(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_crc32(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_crc32>(thd, select, this,
                                                            item_creator);
@@ -1434,7 +1434,7 @@ Item *Item_func_crc32::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_dayofmonth::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_dayofmonth(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_dayofmonth(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_dayofmonth>(
       thd, select, this, item_creator);
@@ -1442,7 +1442,7 @@ Item *Item_func_dayofmonth::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_dayofyear::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_dayofyear(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_dayofyear(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_dayofyear>(
       thd, select, this, item_creator);
@@ -1451,7 +1451,7 @@ Item *Item_func_dayofyear::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_field::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_field>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -1475,7 +1475,7 @@ bool Item_func_field::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_find_in_set::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_find_in_set(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_find_in_set>(
@@ -1495,7 +1495,7 @@ bool Item_func_find_in_set::pq_copy_from(THD *thd, Query_block *select,
 
 Item *Item_func_hour::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_hour(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_hour(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_hour>(thd, select, this,
                                                           item_creator);
@@ -1503,7 +1503,7 @@ Item *Item_func_hour::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_inet_aton::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_inet_aton(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_inet_aton(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_inet_aton>(
       thd, select, this, item_creator);
@@ -1511,7 +1511,7 @@ Item *Item_func_inet_aton::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_div_int::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_div_int(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_div_int>(thd, select, this,
@@ -1525,7 +1525,7 @@ Item *Item_func_interval::pq_clone(THD *thd, Query_block *select) {
         Item *item = args[0]->pq_clone(thd, select);
         if (!item) return true;
         Item_row *new_row = down_cast<Item_row *>(item);
-        new_item = new (thd->pq_mem_root) Item_func_interval(POS(), new_row);
+        new_item = new (thd->pq_context().mem_root) Item_func_interval(POS(), new_row);
         return false;
       }));
 }
@@ -1545,12 +1545,12 @@ Item *Item_func_last_insert_id::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_last_insert_id>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
         if (arg_count == 0) {
-          new_item = new (thd->pq_mem_root) Item_func_last_insert_id(POS());
+          new_item = new (thd->pq_context().mem_root) Item_func_last_insert_id(POS());
         } else if (arg_count == 1) {
           Item *item_arg = args[0]->pq_clone(thd, select);
           if (item_arg == nullptr) return true;
           new_item =
-              new (thd->pq_mem_root) Item_func_last_insert_id(POS(), item_arg);
+              new (thd->pq_context().mem_root) Item_func_last_insert_id(POS(), item_arg);
         }
         return false;
       }));
@@ -1558,7 +1558,7 @@ Item *Item_func_last_insert_id::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_length::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_length(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_length(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_length>(thd, select, this,
                                                             item_creator);
@@ -1566,7 +1566,7 @@ Item *Item_func_length::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_bit_length::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_bit_length(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_bit_length(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_bit_length>(
       thd, select, this, item_creator);
@@ -1574,7 +1574,7 @@ Item *Item_func_bit_length::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_minute::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_minute(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_minute(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_minute>(thd, select, this,
                                                             item_creator);
@@ -1592,10 +1592,10 @@ Item *Item_func_locate::pq_clone(THD *thd, Query_block *select) {
         }
 
         if (arg_count == 2) {
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_locate(POS(), new_args[0], new_args[1]);
         } else if (arg_count == 3) {
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_locate(POS(), new_args[0], new_args[1], new_args[2]);
         }
         return false;
@@ -1612,7 +1612,7 @@ bool Item_func_locate::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_instr::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_instr(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_instr>(thd, select, this,
@@ -1621,7 +1621,7 @@ Item *Item_func_instr::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_microsecond::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_microsecond(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_microsecond(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_microsecond>(
       thd, select, this, item_creator);
@@ -1640,7 +1640,7 @@ bool Item_func_opt_neg::pq_copy_from(THD *thd, Query_block *select,
 
 Item *Item_func_between::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_between(
+    return new (thd->pq_context().mem_root) Item_func_between(
         POS(), copy_args[0], copy_args[1], copy_args[2], negated);
   };
   return pq_def::func_item_clone_template<Item_func_between>(thd, select, this,
@@ -1702,7 +1702,7 @@ bool Item_func_in::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_ord::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_ord(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_ord(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_ord>(thd, select, this,
                                                          item_creator);
@@ -1710,7 +1710,7 @@ Item *Item_func_ord::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_period_add::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_period_add(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_period_add>(
@@ -1719,7 +1719,7 @@ Item *Item_func_period_add::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_period_diff::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_period_diff(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_period_diff>(
@@ -1728,7 +1728,7 @@ Item *Item_func_period_diff::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_quarter::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_quarter(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_quarter(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_quarter>(thd, select, this,
                                                              item_creator);
@@ -1736,7 +1736,7 @@ Item *Item_func_quarter::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_second::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_second(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_second(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_second>(thd, select, this,
                                                             item_creator);
@@ -1744,7 +1744,7 @@ Item *Item_func_second::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_time_to_sec::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_time_to_sec(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_time_to_sec(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_time_to_sec>(
       thd, select, this, item_creator);
@@ -1752,7 +1752,7 @@ Item *Item_func_time_to_sec::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_timestamp_diff::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_timestamp_diff(POS(), copy_args[0], copy_args[1], int_type);
   };
   return pq_def::func_item_clone_template<Item_func_timestamp_diff>(
@@ -1761,7 +1761,7 @@ Item *Item_func_timestamp_diff::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_to_days::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_to_days(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_to_days(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_to_days>(thd, select, this,
                                                              item_creator);
@@ -1769,7 +1769,7 @@ Item *Item_func_to_days::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_to_seconds::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_to_seconds(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_to_seconds(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_to_seconds>(
       thd, select, this, item_creator);
@@ -1777,7 +1777,7 @@ Item *Item_func_to_seconds::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_uncompressed_length::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_uncompressed_length(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_uncompressed_length>(
@@ -1786,7 +1786,7 @@ Item *Item_func_uncompressed_length::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_week::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_week(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_week>(thd, select, this,
@@ -1795,7 +1795,7 @@ Item *Item_func_week::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_year::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_year(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_year(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_year>(thd, select, this,
                                                           item_creator);
@@ -1803,7 +1803,7 @@ Item *Item_func_year::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_yearweek::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_yearweek(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_yearweek>(thd, select, this,
@@ -1812,7 +1812,7 @@ Item *Item_func_yearweek::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_typecast_signed::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_typecast_signed(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_typecast_signed(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_typecast_signed>(
       thd, select, this, item_creator);
@@ -1820,7 +1820,7 @@ Item *Item_typecast_signed::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_typecast_unsigned::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_typecast_unsigned(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_typecast_unsigned(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_typecast_unsigned>(
       thd, select, this, item_creator);
@@ -1832,7 +1832,7 @@ Item *Item_typecast_unsigned::pq_clone(THD *thd, Query_block *select) {
 /* Item_dec_func start*/  // TODO add more dec functions
 Item *Item_func_sin::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_sin(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_sin(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_sin>(thd, select, this,
                                                          item_creator);
@@ -1840,7 +1840,7 @@ Item *Item_func_sin::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_sqrt::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_sqrt(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_sqrt(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_sqrt>(thd, select, this,
                                                           item_creator);
@@ -1848,7 +1848,7 @@ Item *Item_func_sqrt::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_cos::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_cos(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_cos(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_cos>(thd, select, this,
                                                          item_creator);
@@ -1856,7 +1856,7 @@ Item *Item_func_cos::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_tan::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_tan(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_tan(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_tan>(thd, select, this,
                                                          item_creator);
@@ -1864,7 +1864,7 @@ Item *Item_func_tan::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_cot::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_cot(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_cot(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_cot>(thd, select, this,
                                                          item_creator);
@@ -1872,7 +1872,7 @@ Item *Item_func_cot::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_pow::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_pow(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_pow>(thd, select, this,
@@ -1881,7 +1881,7 @@ Item *Item_func_pow::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_ln::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_ln(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_ln(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_ln>(thd, select, this,
                                                         item_creator);
@@ -1889,7 +1889,7 @@ Item *Item_func_ln::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_log2::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_log2(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_log2(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_log2>(thd, select, this,
                                                           item_creator);
@@ -1897,7 +1897,7 @@ Item *Item_func_log2::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_log10::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_log10(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_log10(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_log10>(thd, select, this,
                                                            item_creator);
@@ -1905,7 +1905,7 @@ Item *Item_func_log10::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_asin::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_asin(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_asin(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_asin>(thd, select, this,
                                                           item_creator);
@@ -1913,7 +1913,7 @@ Item *Item_func_asin::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_acos::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_acos(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_acos(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_acos>(thd, select, this,
                                                           item_creator);
@@ -1921,7 +1921,7 @@ Item *Item_func_acos::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_exp::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_exp(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_exp(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_exp>(thd, select, this,
                                                          item_creator);
@@ -1938,9 +1938,9 @@ Item *Item_func_atan::pq_clone(THD *thd, Query_block *select) {
         }
 
         if (arg_count == 1)
-          new_item = new (thd->pq_mem_root) Item_func_atan(POS(), item_args[0]);
+          new_item = new (thd->pq_context().mem_root) Item_func_atan(POS(), item_args[0]);
         else if (arg_count == 2)
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_atan(POS(), item_args[0], item_args[1]);
         return false;
       }));
@@ -1957,9 +1957,9 @@ Item *Item_func_log::pq_clone(THD *thd, Query_block *select) {
         }
 
         if (arg_count == 1)
-          new_item = new (thd->pq_mem_root) Item_func_log(POS(), item_args[0]);
+          new_item = new (thd->pq_context().mem_root) Item_func_log(POS(), item_args[0]);
         else if (arg_count == 2)
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_log(POS(), item_args[0], item_args[1]);
         return false;
       }));
@@ -1977,10 +1977,10 @@ Item *Item_func_aes_decrypt::pq_clone(THD *thd, Query_block *select) {
         }
 
         if (arg_count == 2) {
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_aes_decrypt(POS(), new_args[0], new_args[1]);
         } else if (arg_count == 3) {
-          new_item = new (thd->pq_mem_root) Item_func_aes_decrypt(
+          new_item = new (thd->pq_context().mem_root) Item_func_aes_decrypt(
               POS(), new_args[0], new_args[1], new_args[2]);
         }
         return false;
@@ -1998,10 +1998,10 @@ Item *Item_func_aes_encrypt::pq_clone(THD *thd, Query_block *select) {
         }
 
         if (arg_count == 2) {
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_aes_encrypt(POS(), new_args[0], new_args[1]);
         } else if (arg_count == 3) {
-          new_item = new (thd->pq_mem_root) Item_func_aes_encrypt(
+          new_item = new (thd->pq_context().mem_root) Item_func_aes_encrypt(
               POS(), new_args[0], new_args[1], new_args[2]);
         }
         return false;
@@ -2011,21 +2011,21 @@ Item *Item_func_aes_encrypt::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_char::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_char>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
         }
         PT_item_list pt_item_list;
         pt_item_list.value = item_list;
-        new_item = new (thd->pq_mem_root) Item_func_char(POS(), &pt_item_list);
+        new_item = new (thd->pq_context().mem_root) Item_func_char(POS(), &pt_item_list);
         return false;
       }));
 }
 
 Item *Item_func_charset::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_charset(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_charset(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_charset>(thd, select, this,
                                                              item_creator);
@@ -2033,7 +2033,7 @@ Item *Item_func_charset::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_collation::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_collation(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_collation(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_collation>(
       thd, select, this, item_creator);
@@ -2041,7 +2041,7 @@ Item *Item_func_collation::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_compress::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_compress(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_compress(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_compress>(thd, select, this,
                                                               item_creator);
@@ -2050,7 +2050,7 @@ Item *Item_func_compress::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_concat::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_concat>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -2058,7 +2058,7 @@ Item *Item_func_concat::pq_clone(THD *thd, Query_block *select) {
         PT_item_list pt_item_list;
         pt_item_list.value = item_list;
         new_item =
-            new (thd->pq_mem_root) Item_func_concat(POS(), &pt_item_list);
+            new (thd->pq_context().mem_root) Item_func_concat(POS(), &pt_item_list);
         return false;
       }));
 }
@@ -2066,7 +2066,7 @@ Item *Item_func_concat::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_concat_ws::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_concat_ws>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -2074,14 +2074,14 @@ Item *Item_func_concat_ws::pq_clone(THD *thd, Query_block *select) {
         PT_item_list pt_item_list;
         pt_item_list.value = item_list;
         new_item =
-            new (thd->pq_mem_root) Item_func_concat_ws(POS(), &pt_item_list);
+            new (thd->pq_context().mem_root) Item_func_concat_ws(POS(), &pt_item_list);
         return false;
       }));
 }
 
 Item *Item_func_conv::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_conv(POS(), copy_args[0], copy_args[1], copy_args[2]);
   };
   return pq_def::func_item_clone_template<Item_func_conv>(thd, select, this,
@@ -2108,7 +2108,7 @@ Item *Item_func_conv_charset::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_date_format::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_date_format>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -2132,7 +2132,7 @@ bool Item_func_date_format::pq_copy_from(THD *thd, Query_block *select,
 Item *Item_func_elt::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_elt>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -2148,20 +2148,20 @@ Item *Item_func_elt::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_export_set::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_export_set>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
         }
 
         if (arg_count == 3) {
-          new_item = new (thd->pq_mem_root) Item_func_export_set(
+          new_item = new (thd->pq_context().mem_root) Item_func_export_set(
               POS(), item_list[0], item_list[1], item_list[2]);
         } else if (arg_count == 4) {
-          new_item = new (thd->pq_mem_root) Item_func_export_set(
+          new_item = new (thd->pq_context().mem_root) Item_func_export_set(
               POS(), item_list[0], item_list[1], item_list[2], item_list[3]);
         } else if (arg_count == 5) {
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_export_set(POS(), item_list[0], item_list[1],
                                    item_list[2], item_list[3], item_list[4]);
         }
@@ -2171,7 +2171,7 @@ Item *Item_func_export_set::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_from_base64::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_from_base64(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_from_base64(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_from_base64>(
       thd, select, this, item_creator);
@@ -2179,7 +2179,7 @@ Item *Item_func_from_base64::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_inet_ntoa::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_inet_ntoa(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_inet_ntoa(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_inet_ntoa>(
       thd, select, this, item_creator);
@@ -2187,7 +2187,7 @@ Item *Item_func_inet_ntoa::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_insert::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_insert(
+    return new (thd->pq_context().mem_root) Item_func_insert(
         POS(), copy_args[0], copy_args[1], copy_args[2], copy_args[3]);
   };
   return pq_def::func_item_clone_template<Item_func_insert>(thd, select, this,
@@ -2196,7 +2196,7 @@ Item *Item_func_insert::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_left::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_left(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_left>(thd, select, this,
@@ -2205,7 +2205,7 @@ Item *Item_func_left::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_lpad::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_lpad(POS(), copy_args[0], copy_args[1], copy_args[2]);
   };
   return pq_def::func_item_clone_template<Item_func_lpad>(thd, select, this,
@@ -2218,7 +2218,7 @@ Item *Item_func_make_set::pq_clone(THD *thd, Query_block *select) {
         Item *arg_a = item->pq_clone(thd, select);
         if (arg_a == nullptr) return true;
 
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -2226,7 +2226,7 @@ Item *Item_func_make_set::pq_clone(THD *thd, Query_block *select) {
         PT_item_list pt_item_list;
         pt_item_list.value = item_list;
 
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_func_make_set(POS(), arg_a, &pt_item_list);
         return false;
       }));
@@ -2234,7 +2234,7 @@ Item *Item_func_make_set::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_monthname::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_monthname(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_monthname(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_monthname>(
       thd, select, this, item_creator);
@@ -2242,7 +2242,7 @@ Item *Item_func_monthname::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_pfs_format_bytes::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_pfs_format_bytes(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_pfs_format_bytes>(
@@ -2262,7 +2262,7 @@ bool Item_func_monthname::pq_copy_from(THD *thd, Query_block *select,
 
 Item *Item_func_pfs_format_pico_time::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_pfs_format_pico_time(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_pfs_format_pico_time>(
@@ -2271,7 +2271,7 @@ Item *Item_func_pfs_format_pico_time::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_quote::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_quote(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_quote(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_quote>(thd, select, this,
                                                            item_creator);
@@ -2279,7 +2279,7 @@ Item *Item_func_quote::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_repeat::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_repeat(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_repeat>(thd, select, this,
@@ -2288,7 +2288,7 @@ Item *Item_func_repeat::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_replace::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_replace(POS(), copy_args[0], copy_args[1], copy_args[2]);
   };
   return pq_def::func_item_clone_template<Item_func_replace>(thd, select, this,
@@ -2297,7 +2297,7 @@ Item *Item_func_replace::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_reverse::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_reverse(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_reverse(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_reverse>(thd, select, this,
                                                              item_creator);
@@ -2306,7 +2306,7 @@ Item *Item_func_reverse::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_right::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_right>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -2319,7 +2319,7 @@ Item *Item_func_right::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_rpad::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_rpad(POS(), copy_args[0], copy_args[1], copy_args[2]);
   };
   return pq_def::func_item_clone_template<Item_func_rpad>(thd, select, this,
@@ -2328,7 +2328,7 @@ Item *Item_func_rpad::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_set_collation::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_set_collation(POS(), copy_args[0], collation_string);
   };
   return pq_def::func_item_clone_template<Item_func_set_collation>(
@@ -2355,7 +2355,7 @@ bool Item_func_set_collation::pq_copy_from(THD *thd, Query_block *select,
 
 Item *Item_func_soundex::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_soundex(copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_soundex(copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_soundex>(thd, select, this,
                                                              item_creator);
@@ -2374,7 +2374,7 @@ bool Item_func_soundex::pq_copy_from(THD *thd, Query_block *select,
 
 Item *Item_func_space::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_space(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_space(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_space>(thd, select, this,
                                                            item_creator);
@@ -2391,10 +2391,10 @@ Item *Item_func_substr::pq_clone(THD *thd, Query_block *select) {
         }
 
         if (arg_count == 2) {
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_substr(POS(), new_args[0], new_args[1]);
         } else if (arg_count == 3) {
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_substr(POS(), new_args[0], new_args[1], new_args[2]);
         }
         return false;
@@ -2403,7 +2403,7 @@ Item *Item_func_substr::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_substr_index::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_substr_index(POS(), copy_args[0], copy_args[1], copy_args[2]);
   };
   return pq_def::func_item_clone_template<Item_func_substr_index>(
@@ -2412,7 +2412,7 @@ Item *Item_func_substr_index::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_database::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_database(POS());
+    return new (thd->pq_context().mem_root) Item_func_database(POS());
   };
   return pq_def::func_item_clone_template<Item_func_database>(thd, select, this,
                                                               item_creator);
@@ -2421,7 +2421,7 @@ Item *Item_func_database::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_trim::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_trim>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -2448,7 +2448,7 @@ bool Item_func_trim::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_ltrim::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_ltrim(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_ltrim(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_ltrim>(thd, select, this,
                                                            item_creator);
@@ -2456,7 +2456,7 @@ Item *Item_func_ltrim::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_rtrim::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_rtrim(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_rtrim(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_rtrim>(thd, select, this,
                                                            item_creator);
@@ -2464,7 +2464,7 @@ Item *Item_func_rtrim::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_unhex::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_unhex(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_unhex(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_unhex>(thd, select, this,
                                                            item_creator);
@@ -2472,7 +2472,7 @@ Item *Item_func_unhex::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_uuid::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_uuid(POS());
+    return new (thd->pq_context().mem_root) Item_func_uuid(POS());
   };
   return pq_def::func_item_clone_template<Item_func_uuid>(thd, select, this,
                                                           item_creator);
@@ -2491,9 +2491,9 @@ Item *Item_func_uuid_to_bin::pq_clone(THD *thd, Query_block *select) {
 
         if (arg_count == 1) {
           new_item =
-              new (thd->pq_mem_root) Item_func_uuid_to_bin(POS(), new_args[0]);
+              new (thd->pq_context().mem_root) Item_func_uuid_to_bin(POS(), new_args[0]);
         } else if (arg_count == 2) {
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_uuid_to_bin(POS(), new_args[0], new_args[1]);
         }
         return false;
@@ -2513,9 +2513,9 @@ Item *Item_func_bin_to_uuid::pq_clone(THD *thd, Query_block *select) {
 
         if (arg_count == 1) {
           new_item =
-              new (thd->pq_mem_root) Item_func_bin_to_uuid(POS(), new_args[0]);
+              new (thd->pq_context().mem_root) Item_func_bin_to_uuid(POS(), new_args[0]);
         } else if (arg_count == 2) {
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_bin_to_uuid(POS(), new_args[0], new_args[1]);
         }
         return false;
@@ -2533,10 +2533,10 @@ Item *Item_func_format::pq_clone(THD *thd, Query_block *select) {
         }
 
         if (arg_count == 2)
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_format(POS(), new_args[0], new_args[1]);
         else if (arg_count == 3)
-          new_item = new (thd->pq_mem_root)
+          new_item = new (thd->pq_context().mem_root)
               Item_func_format(POS(), new_args[0], new_args[1], new_args[2]);
         return false;
       }));
@@ -2559,14 +2559,14 @@ Item *Item_func_get_format::pq_clone(THD *thd, Query_block *select) {
         if (arg == nullptr) return true;
 
         new_item =
-            new (thd->pq_mem_root) Item_func_get_format(POS(), type, arg);
+            new (thd->pq_context().mem_root) Item_func_get_format(POS(), type, arg);
         return false;
       }));
 }
 
 Item *Item_func_hex::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_hex(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_hex(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_hex>(thd, select, this,
                                                          item_creator);
@@ -2574,7 +2574,7 @@ Item *Item_func_hex::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_inet6_aton::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_inet6_aton(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_inet6_aton(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_inet6_aton>(
       thd, select, this, item_creator);
@@ -2582,7 +2582,7 @@ Item *Item_func_inet6_aton::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_inet6_ntoa::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_inet6_ntoa(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_inet6_ntoa(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_inet6_ntoa>(
       thd, select, this, item_creator);
@@ -2590,7 +2590,7 @@ Item *Item_func_inet6_ntoa::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_to_base64::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_to_base64(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_to_base64(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_to_base64>(
       thd, select, this, item_creator);
@@ -2608,7 +2608,7 @@ bool Item_str_conv::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_func_upper::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_upper(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_upper(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_upper>(thd, select, this,
                                                            item_creator);
@@ -2616,7 +2616,7 @@ Item *Item_func_upper::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_lower::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_lower(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_lower(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_lower>(thd, select, this,
                                                            item_creator);
@@ -2641,7 +2641,7 @@ Item *Item_date_add_interval::pq_clone(THD *thd, Query_block *select) {
         Item *arg_a = args[0]->pq_clone(thd, select);
         Item *arg_b = args[1]->pq_clone(thd, select);
         if (arg_a == nullptr || arg_b == nullptr) return true;
-        new_item = new (thd->pq_mem_root) Item_date_add_interval(
+        new_item = new (thd->pq_context().mem_root) Item_date_add_interval(
             arg_a, arg_b, get_interval_type(), is_subtract());
         if (new_item) {
           new_item->set_data_type(data_type());
@@ -2664,7 +2664,7 @@ bool Item_date_add_interval::pq_copy_from(THD *thd, Query_block *select,
 
 Item *Item_func_add_time::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_add_time(POS(), copy_args[0], copy_args[1], m_datetime,
                            sign() == -1 ? true : false);
   };
@@ -2674,7 +2674,7 @@ Item *Item_func_add_time::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_str_to_date::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_str_to_date(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_str_to_date>(
@@ -2709,7 +2709,7 @@ bool Item_charset_conversion::pq_copy_from(THD *thd, Query_block *select,
 
 Item *Item_typecast_char::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_typecast_char(POS(), copy_args[0], m_cast_length, m_cast_cs);
   };
   return pq_def::func_item_clone_template<Item_typecast_char>(thd, select, this,
@@ -2721,7 +2721,7 @@ Item *Item_date_literal::pq_clone(THD *thd, Query_block *select) {
       thd, select, this, ([this, thd, select](Item *&new_item) {
         MYSQL_TIME ltime;
         cached_time.get_time(&ltime);
-        new_item = new (thd->pq_mem_root) Item_date_literal(&ltime);
+        new_item = new (thd->pq_context().mem_root) Item_date_literal(&ltime);
         return false;
       }));
 }
@@ -2730,7 +2730,7 @@ Item *Item_date_literal::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_curdate_utc::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_curdate_utc(POS());
+    return new (thd->pq_context().mem_root) Item_func_curdate_utc(POS());
   };
   return pq_def::func_item_clone_template<Item_func_curdate_utc>(
       thd, select, this, item_creator);
@@ -2738,7 +2738,7 @@ Item *Item_func_curdate_utc::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_curdate_local::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_curdate_local(POS());
+    return new (thd->pq_context().mem_root) Item_func_curdate_local(POS());
   };
   return pq_def::func_item_clone_template<Item_func_curdate_local>(
       thd, select, this, item_creator);
@@ -2746,7 +2746,7 @@ Item *Item_func_curdate_local::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_from_days::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_from_days(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_from_days(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_from_days>(
       thd, select, this, item_creator);
@@ -2754,7 +2754,7 @@ Item *Item_func_from_days::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_makedate::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_makedate(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_makedate>(thd, select, this,
@@ -2763,7 +2763,7 @@ Item *Item_func_makedate::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_typecast_date::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_typecast_date(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_typecast_date(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_typecast_date>(thd, select, this,
                                                               item_creator);
@@ -2782,9 +2782,9 @@ bool Item_typecast_date::pq_copy_from(THD *thd, Query_block *select,
 Item *Item_datetime_literal::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_datetime_literal>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        MYSQL_TIME *ltime = new (thd->pq_mem_root) MYSQL_TIME();
+        MYSQL_TIME *ltime = new (thd->pq_context().mem_root) MYSQL_TIME();
         this->get_date(ltime, 0);
-        new_item = new (thd->pq_mem_root) Item_datetime_literal(
+        new_item = new (thd->pq_context().mem_root) Item_datetime_literal(
             ltime, this->cached_time.decimals(), thd->variables.time_zone);
         return false;
       }));
@@ -2792,7 +2792,7 @@ Item *Item_datetime_literal::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_convert_tz::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_convert_tz(POS(), copy_args[0], copy_args[1], copy_args[2]);
   };
   return pq_def::func_item_clone_template<Item_func_convert_tz>(
@@ -2801,7 +2801,7 @@ Item *Item_func_convert_tz::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_from_unixtime::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_from_unixtime(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_from_unixtime(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_from_unixtime>(
       thd, select, this, item_creator);
@@ -2810,7 +2810,7 @@ Item *Item_func_from_unixtime::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_sysdate_local::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_sysdate_local>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_func_sysdate_local(decimals);
+        new_item = new (thd->pq_context().mem_root) Item_func_sysdate_local(decimals);
         return false;
       }));
 }
@@ -2822,7 +2822,7 @@ Item *Item_typecast_datetime::pq_clone(THD *thd, Query_block *select) {
         if (!arg_item) return true;
 
         new_item =
-            new (thd->pq_mem_root) Item_typecast_datetime(POS(), arg_item);
+            new (thd->pq_context().mem_root) Item_typecast_datetime(POS(), arg_item);
         return false;
       }));
 }
@@ -2843,7 +2843,7 @@ bool Item_typecast_datetime::pq_copy_from(THD *thd, Query_block *select,
 Item *Item_func_curtime_local::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_curtime_local>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        mem_root_deque<Item *> item_list(thd->pq_mem_root);
+        mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
         if (pq_def::clone_all_arguments(thd, select, args, arg_count,
                                         item_list)) {
           return true;
@@ -2856,7 +2856,7 @@ Item *Item_func_curtime_local::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_curtime_utc::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_curtime_utc(POS(), decimals);
+    return new (thd->pq_context().mem_root) Item_func_curtime_utc(POS(), decimals);
   };
   return pq_def::func_item_clone_template<Item_func_curtime_utc>(
       thd, select, this, item_creator);
@@ -2864,7 +2864,7 @@ Item *Item_func_curtime_utc::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_maketime::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_maketime(POS(), copy_args[0], copy_args[1], copy_args[2]);
   };
   return pq_def::func_item_clone_template<Item_func_maketime>(thd, select, this,
@@ -2873,7 +2873,7 @@ Item *Item_func_maketime::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_sec_to_time::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_sec_to_time(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_sec_to_time(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_sec_to_time>(
       thd, select, this, item_creator);
@@ -2881,7 +2881,7 @@ Item *Item_func_sec_to_time::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_timediff::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_timediff(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_timediff>(thd, select, this,
@@ -2890,7 +2890,7 @@ Item *Item_func_timediff::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_typecast_time::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_typecast_time(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_typecast_time(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_typecast_time>(thd, select, this,
                                                               item_creator);
@@ -2898,7 +2898,7 @@ Item *Item_typecast_time::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_now_local::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_now_local(POS(), decimals);
+    return new (thd->pq_context().mem_root) Item_func_now_local(POS(), decimals);
   };
   return pq_def::func_item_clone_template<Item_func_now_local>(
       thd, select, this, item_creator);
@@ -2906,7 +2906,7 @@ Item *Item_func_now_local::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_now_utc::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_now_utc(POS(), decimals);
+    return new (thd->pq_context().mem_root) Item_func_now_utc(POS(), decimals);
   };
   return pq_def::func_item_clone_template<Item_func_now_utc>(thd, select, this,
                                                              item_creator);
@@ -2927,11 +2927,11 @@ bool Item_typecast_time::pq_copy_from(THD *thd, Query_block *select,
 Item *Item_time_literal::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_time_literal>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        MYSQL_TIME *ltime = new (thd->pq_mem_root) MYSQL_TIME();
+        MYSQL_TIME *ltime = new (thd->pq_context().mem_root) MYSQL_TIME();
         if (ltime == nullptr) return true;
         cached_time.get_time(ltime);
         new_item =
-            new (thd->pq_mem_root) Item_time_literal(ltime, saved_dec_arg);
+            new (thd->pq_context().mem_root) Item_time_literal(ltime, saved_dec_arg);
         return false;
       }));
 }
@@ -2942,7 +2942,7 @@ Item *Item_typecast_decimal::pq_clone(THD *thd, Query_block *select) {
         Item *item_arg = args[0]->pq_clone(thd, select);
         if (item_arg == nullptr) return true;
 
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_typecast_decimal(POS(), item_arg, saved_presion, decimals);
         return false;
       }));
@@ -2954,7 +2954,7 @@ Item *Item_typecast_real::pq_clone(THD *thd, Query_block *select) {
         Item *item_arg = args[0]->pq_clone(thd, select);
         if (!item_arg) return true;
 
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_typecast_real(POS(), item_arg, double_type);
         return false;
       }));
@@ -2963,7 +2963,7 @@ Item *Item_typecast_real::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_get_system_var::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_get_system_var>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_func_get_system_var(var_tracker, var_scope);
         return false;
       }));
@@ -3057,7 +3057,7 @@ bool Item_sum_hybrid::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_sum_max::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_sum_max(copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_sum_max(copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_sum_max>(thd, select, this,
                                                         item_creator);
@@ -3067,7 +3067,7 @@ Item_sum *Item_sum_max::pq_rebuild_sum_func(THD *thd, Query_block *select,
                                             Item *item) {
   return pq_def::rebuild_sum_func_template<Item_sum_max>(
       thd, select, this, ([this, thd, select, item](Item_sum_max *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_sum_max(POS(), item, nullptr);
+        new_item = new (thd->pq_context().mem_root) Item_sum_max(POS(), item, nullptr);
         new_item->hidden = item->hidden;
         return false;
       }));
@@ -3075,7 +3075,7 @@ Item_sum *Item_sum_max::pq_rebuild_sum_func(THD *thd, Query_block *select,
 
 Item *Item_sum_min::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_sum_min(copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_sum_min(copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_sum_min>(thd, select, this,
                                                         item_creator);
@@ -3085,7 +3085,7 @@ Item_sum *Item_sum_min::pq_rebuild_sum_func(THD *thd, Query_block *select,
                                             Item *item) {
   return pq_def::rebuild_sum_func_template<Item_sum_min>(
       thd, select, this, ([this, thd, select, item](Item_sum_min *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_sum_min(POS(), item, nullptr);
+        new_item = new (thd->pq_context().mem_root) Item_sum_min(POS(), item, nullptr);
         new_item->hidden = item->hidden;
         return false;
       }));
@@ -3111,9 +3111,9 @@ Item *Item_sum_count::pq_clone(THD *thd, Query_block *select) {
     assert(arg_count == 1);
     Item *arg = args[0]->pq_clone(thd, select);
     if (arg == nullptr) return nullptr;
-    new_item = new (thd->pq_mem_root) Item_sum_count(POS(), arg, nullptr);
+    new_item = new (thd->pq_context().mem_root) Item_sum_count(POS(), arg, nullptr);
   } else {
-    PT_item_list *list = new (thd->pq_mem_root) PT_item_list();
+    PT_item_list *list = new (thd->pq_context().mem_root) PT_item_list();
     for (uint i = 0; i < arg_count; i++) {
       Item *arg = args[i]->pq_clone(thd, select);
       if (arg == nullptr) {
@@ -3121,7 +3121,7 @@ Item *Item_sum_count::pq_clone(THD *thd, Query_block *select) {
       }
       list->push_back(arg);
     }
-    new_item = new (thd->pq_mem_root) Item_sum_count(POS(), list, nullptr);
+    new_item = new (thd->pq_context().mem_root) Item_sum_count(POS(), list, nullptr);
   }
   if (pq_def::copy_self_attributes(thd, select, new_item, this)) return nullptr;
   return new_item;
@@ -3135,10 +3135,10 @@ Item_sum *Item_sum_count::pq_rebuild_sum_func(THD *thd, Query_block *select,
 
   Item_sum_count *new_item_sum = nullptr;
   if (has_with_distinct())
-    new_item_sum = new (thd->pq_mem_root) Item_sum_count(POS(), item, nullptr);
+    new_item_sum = new (thd->pq_context().mem_root) Item_sum_count(POS(), item, nullptr);
   else
     new_item_sum =
-        new (thd->pq_mem_root) Item_sum_count(POS(), item, nullptr, true);
+        new (thd->pq_context().mem_root) Item_sum_count(POS(), item, nullptr, true);
   if (new_item_sum == nullptr ||
       new_item_sum->Item_sum_num::pq_copy_from(thd, select, this))
     return nullptr;
@@ -3153,7 +3153,7 @@ Item *PTI_count_sym::pq_clone(THD *thd, Query_block *select) {
   Item *arg = args[0]->pq_clone(thd, select);
   if (arg == nullptr) return nullptr;
   Item_sum_count *new_count =
-      new (thd->pq_mem_root) Item_sum_count(POS(), arg, nullptr);
+      new (thd->pq_context().mem_root) Item_sum_count(POS(), arg, nullptr);
   if (new_count == nullptr || new_count->pq_copy_from(thd, select, this))
     return nullptr;
   return new_count;
@@ -3161,7 +3161,7 @@ Item *PTI_count_sym::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_sum_sum::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_sum_sum(POS(), copy_args[0], has_with_distinct(), nullptr);
   };
   return pq_def::func_item_clone_template<Item_sum_sum>(thd, select, this,
@@ -3183,7 +3183,7 @@ Item_sum *Item_sum_sum::pq_rebuild_sum_func(THD *thd, Query_block *select,
                                             Item *item) {
   return pq_def::rebuild_sum_func_template<Item_sum_sum>(
       thd, select, this, ([this, thd, select, item](Item_sum_sum *&new_item) {
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_sum_sum(POS(), item, has_with_distinct(), nullptr);
         new_item->hidden = item->hidden;
         return false;
@@ -3196,7 +3196,7 @@ Item *Item_sum_avg::pq_clone(THD *thd, Query_block *select) {
         assert(arg_count == 1);
         Item *arg = args[0]->pq_clone(thd, select);
         if (arg == nullptr) return true;
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_sum_avg(POS(), arg, has_with_distinct(), nullptr);
         if (new_item &&
             // for avg(distinct) we transfor raw items, do not need enlarge
@@ -3212,7 +3212,7 @@ Item *Item_sum_avg::pq_clone(THD *thd, Query_block *select) {
               pq_build_sum_funcs() is not called as make_leader_tmp_table() is
               not called either, which is expected.
             */
-            select->parallel_exec) {
+            select->pq_context().parallel_exec) {
           dynamic_cast<Item_sum_avg *>(new_item)->pq_avg_type = PQ_WORKER;
         }
         return false;
@@ -3223,7 +3223,7 @@ Item_sum *Item_sum_avg::pq_rebuild_sum_func(THD *thd, Query_block *select,
                                             Item *item) {
   return pq_def::rebuild_sum_func_template<Item_sum_avg>(
       thd, select, this, ([this, thd, select, item](Item_sum_avg *&new_item) {
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_sum_avg(POS(), item, has_with_distinct(), nullptr);
         if (new_item &&
             // for avg(distinct) we transfor raw items, do not need enlarge
@@ -3247,13 +3247,13 @@ Item *Item_row::pq_clone(THD *thd, Query_block *select) {
         Item *arg_head = items[0]->pq_clone(thd, select);
         if (arg_head == nullptr) return true;
 
-        mem_root_deque<Item *> tail(thd->pq_mem_root);
+        mem_root_deque<Item *> tail(thd->pq_context().mem_root);
         for (uint i = 1; i < arg_count; i++) {
           Item *arg_tail = items[i]->pq_clone(thd, select);
           if (arg_tail == nullptr) return true;
           tail.push_back(arg_tail);
         }
-        new_item = new (thd->pq_mem_root) Item_row(arg_head, tail);
+        new_item = new (thd->pq_context().mem_root) Item_row(arg_head, tail);
         return false;
       }));
 }
@@ -3281,7 +3281,7 @@ bool Item_row::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 Item *Item_float::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_float>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_float(item_name, value, decimals, max_length);
         return false;
       }));
@@ -3290,7 +3290,7 @@ Item *Item_float::pq_clone(THD *thd, Query_block *select) {
 Item *Item_int::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_int>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_int(this);
+        new_item = new (thd->pq_context().mem_root) Item_int(this);
         return false;
       }));
 }
@@ -3307,7 +3307,7 @@ Item *Item_uint::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_uint>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
         new_item =
-            new (thd->pq_mem_root) Item_uint(item_name, value, max_length);
+            new (thd->pq_context().mem_root) Item_uint(item_name, value, max_length);
         return false;
       }));
 }
@@ -3315,7 +3315,7 @@ Item *Item_uint::pq_clone(THD *thd, Query_block *select) {
 Item *Item_decimal::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_decimal>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_decimal(item_name, &decimal_value, decimals, max_length);
         return false;
       }));
@@ -3324,7 +3324,7 @@ Item *Item_decimal::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_version::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_version>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_func_version(POS());
+        new_item = new (thd->pq_context().mem_root) Item_func_version(POS());
         return false;
       }));
 }
@@ -3332,7 +3332,7 @@ Item *Item_func_version::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_icu_version::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_icu_version>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_func_icu_version(POS());
+        new_item = new (thd->pq_context().mem_root) Item_func_icu_version(POS());
         return false;
       }));
 }
@@ -3341,14 +3341,14 @@ Item *PTI_function_call_nonkeyword_now::pq_clone(THD *thd,
                                                  Query_block *select) {
   return pq_def::pq_clone_template<PTI_function_call_nonkeyword_now>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             PTI_function_call_nonkeyword_now(POS(), decimals);
         return false;
       }));
 }
 
 Item *PTI_text_literal_text_string::pq_clone(THD *thd, Query_block *select) {
-  Item *new_item = new (thd->pq_mem_root)
+  Item *new_item = new (thd->pq_context().mem_root)
       PTI_text_literal_text_string(POS(), is_7bit, literal);
   if (!new_item || new_item->pq_copy_from(thd, select, this)) return nullptr;
 
@@ -3358,7 +3358,7 @@ Item *PTI_text_literal_text_string::pq_clone(THD *thd, Query_block *select) {
 }
 
 Item *PTI_text_literal_nchar_string::pq_clone(THD *thd, Query_block *select) {
-  Item *new_item = new (thd->pq_mem_root)
+  Item *new_item = new (thd->pq_context().mem_root)
       PTI_text_literal_nchar_string(POS(), is_7bit, literal);
 
   if (!new_item || new_item->pq_copy_from(thd, select, this)) return nullptr;
@@ -3370,7 +3370,7 @@ Item *PTI_text_literal_nchar_string::pq_clone(THD *thd, Query_block *select) {
 
 Item *PTI_text_literal_underscore_charset::pq_clone(THD *thd,
                                                     Query_block *select) {
-  Item *new_item = new (thd->pq_mem_root)
+  Item *new_item = new (thd->pq_context().mem_root)
       PTI_text_literal_underscore_charset(POS(), is_7bit, cs, literal);
 
   if (!new_item || new_item->pq_copy_from(thd, select, this)) return nullptr;
@@ -3383,7 +3383,7 @@ Item *PTI_text_literal_underscore_charset::pq_clone(THD *thd,
 Item *Item_func_get_user_var::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_get_user_var>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_func_get_user_var(POS(), name);
+        new_item = new (thd->pq_context().mem_root) Item_func_get_user_var(POS(), name);
         return false;
       }));
 }
@@ -3394,7 +3394,7 @@ Item *PTI_variable_aux_set_var::pq_clone(THD *thd, Query_block *select) {
         Item *expr = args[0] ? args[0]->pq_clone(thd, select) : nullptr;
         if (args[0] && !expr) return true;
 
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             PTI_variable_aux_set_var(POS(), saved_var, expr);
         return false;
       }));
@@ -3403,7 +3403,7 @@ Item *PTI_variable_aux_set_var::pq_clone(THD *thd, Query_block *select) {
 Item *PTI_user_variable::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<PTI_user_variable>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) PTI_user_variable(POS(), saved_var);
+        new_item = new (thd->pq_context().mem_root) PTI_user_variable(POS(), saved_var);
         return false;
       }));
 }
@@ -3411,7 +3411,7 @@ Item *PTI_user_variable::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_connection_id::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_func_connection_id>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_func_connection_id(POS());
+        new_item = new (thd->pq_context().mem_root) Item_func_connection_id(POS());
         return false;
       }));
 }
@@ -3435,9 +3435,9 @@ Item *Item_func_unix_timestamp::pq_clone(THD *thd, Query_block *select) {
 
   Item_func_unix_timestamp *new_item = nullptr;
   if (arg_count) {
-    new_item = new (thd->pq_mem_root) Item_func_unix_timestamp(POS(), arg_item);
+    new_item = new (thd->pq_context().mem_root) Item_func_unix_timestamp(POS(), arg_item);
   } else {
-    new_item = new (thd->pq_mem_root) Item_func_unix_timestamp(POS());
+    new_item = new (thd->pq_context().mem_root) Item_func_unix_timestamp(POS());
   }
 
   if (!new_item || new_item->pq_copy_from(thd, select, this)) return nullptr;
@@ -3447,7 +3447,7 @@ Item *Item_func_unix_timestamp::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_benchmark::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_benchmark(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_benchmark>(
@@ -3456,7 +3456,7 @@ Item *Item_func_benchmark::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_found_rows::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_found_rows(POS());
+    return new (thd->pq_context().mem_root) Item_func_found_rows(POS());
   };
   return pq_def::func_item_clone_template<Item_func_found_rows>(
       thd, select, this, item_creator);
@@ -3465,7 +3465,7 @@ Item *Item_func_found_rows::pq_clone(THD *thd, Query_block *select) {
 Item *Item_func_validate_password_strength::pq_clone(THD *thd,
                                                      Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_validate_password_strength(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_validate_password_strength>(
@@ -3475,12 +3475,12 @@ Item *Item_func_validate_password_strength::pq_clone(THD *thd,
 Item *Item_func_rand::pq_clone(THD *thd, Query_block *select) {
   Item *cloned_item = nullptr;
   if (arg_count == 0) {
-    cloned_item = new (thd->pq_mem_root) Item_func_rand(POS());
+    cloned_item = new (thd->pq_context().mem_root) Item_func_rand(POS());
   } else if (arg_count == 1) {
     Item *copy_args = args[0]->pq_clone(thd, select);
     if (copy_args == nullptr) return nullptr;
 
-    cloned_item = new (thd->pq_mem_root) Item_func_rand(POS(), copy_args);
+    cloned_item = new (thd->pq_context().mem_root) Item_func_rand(POS(), copy_args);
   }
 
   if (!cloned_item || cloned_item->pq_copy_from(thd, select, this))
@@ -3491,7 +3491,7 @@ Item *Item_func_rand::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_is_uuid::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_is_uuid(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_is_uuid(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_is_uuid>(thd, select, this,
                                                              item_creator);
@@ -3499,7 +3499,7 @@ Item *Item_func_is_uuid::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_uuid_short::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd]([[maybe_unused]] Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_uuid_short(POS());
+    return new (thd->pq_context().mem_root) Item_func_uuid_short(POS());
   };
   return pq_def::func_item_clone_template<Item_func_uuid_short>(
       thd, select, this, item_creator);
@@ -3507,14 +3507,14 @@ Item *Item_func_uuid_short::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_floor::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_floor(copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_floor(copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_floor>(thd, select, this,
                                                            item_creator);
 }
 
 Item *Item_func_regexp_substr::pq_clone(THD *thd, Query_block *select) {
-  mem_root_deque<Item *> item_list(thd->pq_mem_root);
+  mem_root_deque<Item *> item_list(thd->pq_context().mem_root);
   for (uint i = 0; i < arg_count; i++) {
     Item *arg = args[i]->pq_clone(thd, select);
     if (arg == nullptr) return nullptr;
@@ -3524,7 +3524,7 @@ Item *Item_func_regexp_substr::pq_clone(THD *thd, Query_block *select) {
   pt_item_list.value = item_list;
 
   Item_func_regexp_substr *new_item =
-      new (thd->pq_mem_root) Item_func_regexp_substr(POS(), &pt_item_list);
+      new (thd->pq_context().mem_root) Item_func_regexp_substr(POS(), &pt_item_list);
 
   if (!new_item || new_item->pq_copy_from(thd, select, this)) return nullptr;
 
@@ -3533,7 +3533,7 @@ Item *Item_func_regexp_substr::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_statement_digest::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_statement_digest(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_statement_digest>(
@@ -3555,7 +3555,7 @@ bool Item_func_statement_digest::pq_copy_from(THD *thd, Query_block *select,
 
 Item *Item_func_random_bytes::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_random_bytes(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_random_bytes(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_random_bytes>(
       thd, select, this, item_creator);
@@ -3563,7 +3563,7 @@ Item *Item_func_random_bytes::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_last_day::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_last_day(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_last_day(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_last_day>(thd, select, this,
                                                               item_creator);
@@ -3571,7 +3571,7 @@ Item *Item_func_last_day::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_typecast_year::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_typecast_year(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_typecast_year(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_typecast_year>(thd, select, this,
                                                               item_creator);
@@ -3582,7 +3582,7 @@ Item *PTI_in_sum_expr::pq_clone(THD *thd, Query_block *select) {
   if (expr && !new_expr) return nullptr;
 
   PTI_in_sum_expr *new_item =
-      new (thd->pq_mem_root) PTI_in_sum_expr(POS(), new_expr);
+      new (thd->pq_context().mem_root) PTI_in_sum_expr(POS(), new_expr);
   if (!new_item || new_item->pq_copy_from(thd, select, this)) return nullptr;
 
   return new_item;
@@ -3594,7 +3594,7 @@ Item *Item_func_trig_cond::pq_clone(THD *thd, Query_block *select) {
         Item *arg = args[0]->pq_clone(thd, select);
         if (arg == nullptr) return true;
         assert(trig_var == nullptr);
-        new_item = new (thd->pq_mem_root)
+        new_item = new (thd->pq_context().mem_root)
             Item_func_trig_cond(arg, nullptr, select->join, m_idx, trig_type);
         return false;
       }));
@@ -3602,7 +3602,7 @@ Item *Item_func_trig_cond::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_radians::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_radians(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_radians(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_radians>(thd, select, this,
                                                              item_creator);
@@ -3610,7 +3610,7 @@ Item *Item_func_radians::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_degrees::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_degrees(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_degrees(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_degrees>(thd, select, this,
                                                              item_creator);
@@ -3618,24 +3618,24 @@ Item *Item_func_degrees::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_sign::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_sign(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_sign(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_sign>(thd, select, this,
                                                           item_creator);
 }
 
 Item *Item_aggregate_ref::pq_clone(THD *thd, Query_block *select) {
-  auto source_select = depended_from ? (select->pq_try_clone_item
+  auto source_select = depended_from ? (select->pq_context().pq_try_clone_item
                                             ? depended_from
                                             : depended_from->pq_last_clone())
                                      : nullptr;
 
-  Item **cloned_ref = (Item **)thd->pq_mem_root->Alloc(sizeof(Item **));
+  Item **cloned_ref = (Item **)thd->pq_context().mem_root->Alloc(sizeof(Item **));
   if (!cloned_ref) return nullptr;
   *cloned_ref = (*m_ref_item)->pq_clone(thd, select);
   if (!(*cloned_ref)) return nullptr;
 
-  Item_aggregate_ref *ref = new (thd->pq_mem_root)
+  Item_aggregate_ref *ref = new (thd->pq_context().mem_root)
       Item_aggregate_ref(&select->context, cloned_ref, db_name, table_name,
                          field_name, source_select);
   if (!ref || ref->pq_copy_from(thd, select, this)) return nullptr;
@@ -3644,7 +3644,7 @@ Item *Item_aggregate_ref::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_view_ref::pq_clone(THD *thd, Query_block *select) {
   Name_resolution_context *new_context = &select->context;
-  Item **new_ref = (Item **)thd->pq_mem_root->Alloc(sizeof(Item **));
+  Item **new_ref = (Item **)thd->pq_context().mem_root->Alloc(sizeof(Item **));
   if (!new_ref) return nullptr;
 
   if ((*m_ref_item)->type() == Item::REF_ITEM &&
@@ -3652,12 +3652,12 @@ Item *Item_view_ref::pq_clone(THD *thd, Query_block *select) {
     Item *real_item = (*m_ref_item)->real_item();
     Item **cloned_ref = nullptr;
     {
-      *new_ref = new (thd->pq_mem_root)
+      *new_ref = new (thd->pq_context().mem_root)
           Item_ref(&select->context, db_name, table_name, field_name);
       if (!(*new_ref) || (*new_ref)->pq_copy_from(thd, select, (*m_ref_item))) {
         return nullptr;
       }
-      cloned_ref = (Item **)thd->pq_mem_root->Alloc(sizeof(Item **));
+      cloned_ref = (Item **)thd->pq_context().mem_root->Alloc(sizeof(Item **));
       if (!cloned_ref) return nullptr;
 
       *cloned_ref = real_item->pq_clone(thd, select);
@@ -3683,7 +3683,7 @@ Item *Item_view_ref::pq_clone(THD *thd, Query_block *select) {
   // cannot find inner table of outer join
   if (first_inner_table && !inner_table_list) return nullptr;
 
-  Item_view_ref *view_ref = new (thd->pq_mem_root)
+  Item_view_ref *view_ref = new (thd->pq_context().mem_root)
       Item_view_ref(new_context, new_ref, db_name, table_name,
                     m_orig_table_name, field_name, nullptr, inner_table_list);
   if (!view_ref || view_ref->pq_copy_from(thd, select, this)) {
@@ -3706,7 +3706,7 @@ Item *Item_outer_ref::pq_clone(THD *, Query_block *) {
 
 Item *Item_func_gtid_subset::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root)
+    return new (thd->pq_context().mem_root)
         Item_func_gtid_subset(POS(), copy_args[0], copy_args[1]);
   };
   return pq_def::func_item_clone_template<Item_func_gtid_subset>(
@@ -3715,7 +3715,7 @@ Item *Item_func_gtid_subset::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_is_ipv4::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_is_ipv4(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_is_ipv4(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_is_ipv4>(thd, select, this,
                                                              item_creator);
@@ -3723,7 +3723,7 @@ Item *Item_func_is_ipv4::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_is_ipv6::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_is_ipv6(POS(), copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_is_ipv6(POS(), copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_is_ipv6>(thd, select, this,
                                                              item_creator);
@@ -3731,7 +3731,7 @@ Item *Item_func_is_ipv6::pq_clone(THD *thd, Query_block *select) {
 
 Item *Item_func_reject_if::pq_clone(THD *thd, Query_block *select) {
   auto item_creator = [this, thd](Item **copy_args) -> Item * {
-    return new (thd->pq_mem_root) Item_func_reject_if(copy_args[0]);
+    return new (thd->pq_context().mem_root) Item_func_reject_if(copy_args[0]);
   };
   return pq_def::func_item_clone_template<Item_func_reject_if>(
       thd, select, this, item_creator);
@@ -3740,7 +3740,7 @@ Item *Item_func_reject_if::pq_clone(THD *thd, Query_block *select) {
 Item *Item_cond_or::pq_clone(THD *thd, Query_block *select) {
   return pq_def::pq_clone_template<Item_cond_or>(
       thd, select, this, ([this, thd, select](Item *&new_item) {
-        new_item = new (thd->pq_mem_root) Item_cond_or();
+        new_item = new (thd->pq_context().mem_root) Item_cond_or();
         return false;
       }));
 }
@@ -3749,7 +3749,7 @@ Item *Item_cond_or::pq_clone(THD *thd, Query_block *select) {
 
 SubqueryWithResult *SubqueryWithResult::pq_clone(THD *thd, Item_subselect *si) {
   auto subquery =
-      new (thd->pq_mem_root) SubqueryWithResult(si->unit, nullptr, si);
+      new (thd->pq_context().mem_root) SubqueryWithResult(si->unit, nullptr, si);
   if (!subquery) return nullptr;
 
   subquery->res_type = res_type;
@@ -3794,7 +3794,7 @@ bool Item_subselect::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_singlerow_subselect::pq_clone(THD *thd, Query_block *select) {
   // shallow clone it when try to clone where/having condition
-  if (select->pq_try_clone_item) return this;
+  if (select->pq_context().pq_try_clone_item) return this;
 
   if (m_pq_last_clone.first == thd) {
     /*
@@ -3832,7 +3832,7 @@ Item *Item_singlerow_subselect::pq_clone(THD *thd, Query_block *select) {
       change it. Thus, we can directly share the cached value without cloning.
     */
     assert(!new_item->row && !new_item->value);
-    new_item->row = thd->pq_mem_root->ArrayAlloc<Item_cache *>(max_columns);
+    new_item->row = thd->pq_context().mem_root->ArrayAlloc<Item_cache *>(max_columns);
     if (!new_item->row) return nullptr;
     for (uint i = 0; i < unit_cols(); i++) {
       new_item->row[i] = row[i];
@@ -3956,7 +3956,7 @@ bool Item_func_div::pq_copy_from(THD *thd, Query_block *select, Item *item) {
 
 Item *Item_exists_subselect::pq_clone(THD *thd, Query_block *select) {
   // shallow clone it when try to clone where/having condition
-  if (select->pq_try_clone_item) return this;
+  if (select->pq_context().pq_try_clone_item) return this;
 
   if (m_pq_last_clone.first == thd) return m_pq_last_clone.second;
 

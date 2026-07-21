@@ -178,7 +178,7 @@ Item::Item(THD *thd, const Item *item)
       m_is_window_function(item->m_is_window_function),
       m_accum_properties(item->m_accum_properties) {
 #ifndef NDEBUG
-  assert(thd->has_pq || item->contextualized);
+  assert(thd->pq_context().has_pq || item->contextualized);
   contextualized = true;
 #endif  // NDEBUG
 
@@ -6132,7 +6132,7 @@ Item *Item_field::equal_fields_propagator(uchar *arg) {
       the zerofill property and is wanted in a string context.
     */
     convert_zerofill_number_to_string(&item, down_cast<Field_num *>(field));
-    current_thd->no_pq = true;
+    current_thd->pq_context().no_pq = true;
     return item;
   }
   if (!has_compatible_context(item)) {
@@ -8737,7 +8737,7 @@ bool Item_view_ref::eq(const Item *item, bool) const {
       // whether they are equal.
       return (ref_item()->real_item() == item_ref_ref->real_item() ||
               ref_item()->real_item()->eq_with_binary_cmp_arg(
-                  item_ref_ref->real_item(), !current_thd->has_pq));
+                  item_ref_ref->real_item(), !current_thd->pq_context().has_pq));
     }
   }
   return false;

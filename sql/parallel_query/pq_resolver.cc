@@ -33,90 +33,8 @@
 #include "sql/sql_lex.h"
 #include "sql/sql_optimizer.h"
 
-// Check if there are fields with the same name in the temporary table.
-static bool check_tmp_table_field_name(TABLE *table) {
-  uint field_count = table->visible_field_count();
-  Field **fields = table->visible_field_ptr();
-
-  for (uint i = 1; i < field_count; i++) {
-    const char *field_name_i = fields[i]->field_name;
-    for (uint j = 0; j < i; j++) {
-      if (!strcmp(field_name_i, fields[j]->field_name)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 bool Query_block::pq_check_table_list() {
-  /*
-    As long as one table doesn't pass the check, the query should not do PQ.
-    For the choice of the divided/cut table, there are further checks in
-    TABLE::suite_for_pq_division().
-  */
-  if (!join->qep_tab) return false;
-  for (uint i = 0; i < join->tables; i++) {
-    Table_ref *tbl_list = join->qep_tab[i].table_ref;
-    if (!tbl_list || !tbl_list->table) continue;
-
-    // skip system schemas
-    if (tbl_list->db && tbl_list->db_length &&
-        (is_sys_db(tbl_list->db) || is_infoschema_db(tbl_list->db) ||
-         is_mysql_db(tbl_list->db) || is_perfschema_db(tbl_list->db))) {
-      pq_unsuite_info = PQUnsuiteInfo::SYS_OR_TMP_TABLE;
-      return true;
-    }
-
-    // Skip derived table or view. But fail if it's outer-correlated, as then
-    // the PQ leader could not materialize it.
-    if (tbl_list->is_view_or_derived()) {
-      if (tbl_list->derived_query_expression()->uncacheable &
-          UNCACHEABLE_DEPENDENT) {
-        pq_unsuite_info = PQUnsuiteInfo::VIEW_OR_DERIVED_TABLE;
-        return true;
-      }
-      continue;
-    }
-
-    if (tbl_list->is_table_function()) {
-      pq_unsuite_info = PQUnsuiteInfo::TABLE_FUNCTION_OR_LOCK;
-      return true;  // No support currently
-    }
-
-    // skip explicit table lock
-    if (tbl_list->lock_descriptor().type > TL_READ_DEFAULT ||
-        parent_lex->locking_clause) {
-      pq_unsuite_info = PQUnsuiteInfo::TABLE_FUNCTION_OR_LOCK;
-      return true;
-    }
-
-    auto tbl_share = tbl_list->table->s;
-    if (tbl_share->tmp_table == TRANSACTIONAL_TMP_TABLE ||
-        tbl_share->tmp_table == SYSTEM_TMP_TABLE) {
-      pq_unsuite_info = PQUnsuiteInfo::SYS_OR_TMP_TABLE;
-      return true;
-    }
-
-    if (tbl_list->query_block != this) {
-      /*
-        This is defensive programming. tlb_list->query_block should always be
-        equal to 'this', but with subquery-to-derived it sometimes is not
-        (this is a bug in Community MySQL). This in turn causes problems in
-        pq_can_resolve_Item_field_in(). So we block this case.
-      */
-      pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
-      return true;
-    }
-
-    if ((tbl_share->tmp_table == INTERNAL_TMP_TABLE) &&
-        check_tmp_table_field_name(tbl_list->table)) {
-      pq_unsuite_info = PQUnsuiteInfo::TMP_TABLE_FIELD_NAME_SAME;
-      return true;
-    }
-  }
-
-  return false;
+  return pq_context().check_table_list(*this);
 }
 
 bool Query_block::record_map_order(
@@ -141,139 +59,25 @@ bool Query_block::record_map_order(
   return false;
 }
 
-void Query_block::pq_backup() {
-  auto query_blocks = list_query_blocks_to_clone(this);
-  for (auto orig : query_blocks) {
-    for (Table_ref *tbl_list = orig->leaf_tables; tbl_list != nullptr;
-         tbl_list = tbl_list->next_leaf) {
-      // In the pq_dup_select function, set tbl_list->table->const_table
-      // to false, and backup it first.
-      tbl_list->table->pq_saved_const_table = tbl_list->table->const_table;
-    }
-  }
-}
+void Query_block::pq_backup() { pq_context().backup(*this); }
 
-void Query_block::pq_restore() {
-  auto restore_saved_list_ptrs = [](Group_list_ptrs *saved_list_ptrs) {
-    if (!saved_list_ptrs) return;
-    for (auto order : *saved_list_ptrs) {
-      (*order->item)->walk(&Item::pq_restore, enum_walk::PREFIX, nullptr);
-    }
-  };
-
-  auto query_blocks = list_query_blocks_to_clone(this);
-  for (auto orig : query_blocks) {
-    orig->m_pq_last_clone = nullptr;
-    // restore tbl_list->table->const_table
-    for (Table_ref *tbl_list = orig->leaf_tables; tbl_list != nullptr;
-         tbl_list = tbl_list->next_leaf) {
-      tbl_list->table->const_table = tbl_list->table->pq_saved_const_table;
-    }
-
-    // Traverse all Item and call Item::pq_restore to perform the restore.
-    orig->walk(&Item::pq_restore, enum_walk::PREFIX, nullptr);
-    // Note that the walk above included orig->where_cond(), having_cond(),
-    // group_list, order_list. Now handle their "copies":
-    if (orig->saved_where_cond) {
-      orig->saved_where_cond->walk(&Item::pq_restore, enum_walk::PREFIX,
-                                   nullptr);
-    }
-    if (orig->saved_having_cond) {
-      orig->saved_having_cond->walk(&Item::pq_restore, enum_walk::PREFIX,
-                                    nullptr);
-    }
-    restore_saved_list_ptrs(orig->saved_group_list_ptrs);
-    restore_saved_list_ptrs(orig->saved_order_list_ptrs);
-  }
-}
+void Query_block::pq_restore() { pq_context().restore(*this); }
 
 /*
  * determine whether suitable for parallel query
  */
 bool Query_block::suite_for_parallel_query(THD *thd) {
-  if (!thd->suite_for_parallel_query(&pq_unsuite_info)) {
-    return false;
-  }
-
-  // Query with SQL_BUFFER_RESULT is not supported by PQ
-  if (active_options() & OPTION_BUFFER_RESULT) {
-    pq_unsuite_info = PQUnsuiteInfo::ROLLUP_WINDS_BUFFER;
-    return false;
-  }
-
-  if (olap == ROLLUP_TYPE ||  // with rollup
-      (row_value_list &&
-       row_value_list->size() > 1) ||  // table value constructor
-      saved_windows_elements)          // windows function
-  {
-    pq_unsuite_info = PQUnsuiteInfo::ROLLUP_WINDS_BUFFER;
-    return false;
-  }
-
-  if (master_query_expression()->subquery_suite_for_parallel_query() ==
-      PQSubqueryExecution::kImpossible) {
-    pq_unsuite_info = PQUnsuiteInfo::UNSUPPORTED_SUBQUERY_TYPE;
-    return false;
-  }
-
-  if (wrapped_in_intersect_except()) {
-    pq_unsuite_info = PQUnsuiteInfo::UNSUPPORTED_INTERSECT_AND_EXCEPT;
-    thd->no_pq = true;
-    return false;
-  }
-  return true;
+  return pq_context().suite_for_parallel_query(*this, *thd);
 }
 
 bool THD::suite_for_parallel_query(PQUnsuiteInfo *pq_info) const {
-  // For simple select without pq hint, when force_parallel_execute is off,
-  // no_pq is false and pq_dop is 0, we check pq_dop first to reduce one if
-  // condition judgment.
-  if (pq_dop == 0) {
-    *pq_info = PQUnsuiteInfo::ZERO_DOP;
-    return false;
-  }
-
-  if (no_pq) {
-    *pq_info = PQUnsuiteInfo::NO_PQ;
-    return false;
-  }
-
-  if (!(lex->sql_command == SQLCOM_SELECT ||
-        lex->sql_command == SQLCOM_INSERT_SELECT ||
-        lex->sql_command == SQLCOM_REPLACE_SELECT)) {
-    *pq_info = PQUnsuiteInfo::UNSUPPORT_COMMAND;
-    return false;
-  }
-
-  if (lex->in_execute_ps ||              // prepared statement
-      in_sp_trigger ||                   // store procedure or trigger
-      m_attachable_trx ||                // attachable transaction
-      tx_isolation == ISO_SERIALIZABLE)  // serializable with locking reads
-  {
-    *pq_info = PQUnsuiteInfo::PREPARE_TRIGER_PROCEDURE;
-    return false;
-  }
-
-  /* Parallel query only support InnoDB table */
-  if (get_instance_storage_engine_type() != DB_TYPE_INNODB) {
-    *pq_info = PQUnsuiteInfo::ONLY_SUPPORT_INNODB;
-    return false;
-  }
-
-  /* Parallel query do not support hypergraph optimizer, since hypergraph
-     optimizer doesn't create QEP_TABs, and PQ clones QEP_TABs. */
-  if (lex->using_hypergraph_optimizer()) {
-    *pq_info = PQUnsuiteInfo::HYPERGRAPH_OPTIMIZER;
-    return false;
-  }
-
-  return true;
+  return pq_context().suite_for_parallel_query(*this, pq_info);
 }
 
 /// determine whether two already resolved items are equal
 bool items_equal_after_resolve(Item *find, Item *item, bool &need_alias_item) {
   bool matched = false;
-  if (current_thd->has_pq)
+  if (current_thd->pq_context().has_pq)
     matched = item ? find->eq_with_binary_cmp_arg(item, false) : false;
   else
     matched = item ? find->eq(item, false) : false;
@@ -292,7 +96,7 @@ bool items_equal_after_resolve(Item *find, Item *item, bool &need_alias_item) {
 
   bool is_derived{false};
   const Item_field *item_field{nullptr};
-  if (current_thd->has_pq && item->real_item()->type() == Item::FIELD_ITEM) {
+  if (current_thd->pq_context().has_pq && item->real_item()->type() == Item::FIELD_ITEM) {
     item_field = down_cast<const Item_field *>(item->real_item());
     is_derived = item_field->field && item_field->field->table &&
                  item_field->field->table->pos_in_table_list &&
@@ -439,66 +243,7 @@ Item **resolve_item_in_base_ref_items(THD *thd, Ref_item_array ref_item_array,
 }
 
 void Query_block::check_suite_for_pq_after_prepare(THD *thd) {
-  if (m_suite_for_pq) {
-    MEM_ROOT *mem_root = thd->pq_mem_root;
-    thd->pq_mem_root = thd->mem_root;
-    ulong saved_privilege = thd->want_privilege;
-
-    if (group_list.elements) {
-      if (save_order_properties(thd, &group_list, &saved_group_list_ptrs)) {
-        m_suite_for_pq = false;
-        goto end;
-      }
-
-      check_map_group_to_base = new (thd->pq_mem_root)
-          mem_root_unordered_map<uint, uint>(thd->pq_mem_root);
-      if (!check_map_group_to_base ||
-          record_map_order(group_list, *check_map_group_to_base)) {
-        m_suite_for_pq = false;
-        goto end;
-      }
-    }
-
-    if (order_list.elements) {
-      if (save_order_properties(thd, &order_list, &saved_order_list_ptrs)) {
-        m_suite_for_pq = false;
-        goto end;
-      }
-
-      check_map_order_to_base = new (thd->pq_mem_root)
-          mem_root_unordered_map<uint, uint>(thd->pq_mem_root);
-      if (!check_map_order_to_base ||
-          record_map_order(order_list, *check_map_order_to_base)) {
-        m_suite_for_pq = false;
-        goto end;
-      }
-    }
-
-    // clone where and having condition before optimization. These cloned
-    // items use THD::mem_root to allocate memory.
-    thd->want_privilege = 0;
-    // try to clone item in where condition. Note that setup_cond() in
-    // prepare phase may be skipped later in PQ.
-    pq_try_clone_item = true;
-
-    if (where_cond() &&
-        !(saved_where_cond = where_cond()->pq_clone(thd, this))) {
-      m_suite_for_pq = false;
-      goto end;
-    }
-
-    if (having_cond() &&
-        !(saved_having_cond = having_cond()->pq_clone(thd, this))) {
-      m_suite_for_pq = false;
-      goto end;
-    }
-
-  end:
-    if (!m_suite_for_pq) pq_unsuite_info = PQUnsuiteInfo::INTER_ERROR;
-    pq_try_clone_item = false;
-    thd->want_privilege = saved_privilege;
-    thd->pq_mem_root = mem_root;
-  }
+  pq_context().check_after_prepare(*this, *thd);
 }
 
 bool find_order_in_list_for_pq(THD *thd, Ref_item_array &ref_item_array,

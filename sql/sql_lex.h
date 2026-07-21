@@ -72,6 +72,7 @@
 #include "sql/mdl.h"
 #include "sql/mem_root_array.h"  // Mem_root_array
 #include "sql/outline/outline_interface.h"
+#include "sql/parallel_query/pq_context.h"
 #include "sql/parallel_query/pq_optimizer.h"  // PQUnsuiteInfo
 #include "sql/parse_tree_node_base.h"         // enum_parsing_context
 #include "sql/parser_yystype.h"
@@ -2260,52 +2261,24 @@ class Query_block : public Query_term {
  public:
   friend class Query_expression;
   friend class Condition_context;
-  /** indicate whether this query block performs parallel execution */
-  bool parallel_exec{false};
-  /** suite for parallel query */
-  bool m_suite_for_pq{true};
-  PQUnsuiteInfo pq_unsuite_info{PQUnsuiteInfo::INFO_NONE};
-  /** saved where condition */
-  Item *saved_where_cond{nullptr};
-  /** saved having conditon */
-  Item *saved_having_cond{nullptr};
-  /** _try_ to clone item (if it fails, don't treat it as fatal) */
-  bool pq_try_clone_item{false};
-  /// indicate whether disable select_distinct for pq woker.
-  /// it is used for supporting found_rows().
-  bool disable_distinct_in_pq_worker{false};
+  PQ_query_block_context &pq_context() { return m_pq_context; }
+  const PQ_query_block_context &pq_context() const { return m_pq_context; }
 
  private:
-  Query_block *m_pq_last_clone{nullptr};
-  Query_block *m_pq_is_clone_of{nullptr};
+  PQ_query_block_context m_pq_context;
 
  public:
-  Query_block *pq_last_clone() const {
-    assert(!m_pq_last_clone || m_pq_last_clone->m_pq_is_clone_of == this);
-    return m_pq_last_clone;
-  }
-  Query_block *pq_is_clone_of() const {
-    assert(!m_pq_is_clone_of || m_pq_is_clone_of->m_pq_last_clone == this);
-    return m_pq_is_clone_of;
-  }
+  Query_block *pq_last_clone() const { return pq_context().last_clone(*this); }
+  Query_block *pq_is_clone_of() const { return pq_context().clone_of(*this); }
   /// Establishes a bi-directional link (with pointers) between an original
   /// query block and a clone of it, so that one can be reached from the
   /// other. 'this' is the original
   /// @param clone  the copy
-  void pq_link_clone(Query_block *clone) {
-    assert(m_pq_last_clone == nullptr && clone->m_pq_is_clone_of == nullptr);
-    m_pq_last_clone = clone;
-    clone->m_pq_is_clone_of = this;
-  }
+  void pq_link_clone(Query_block *clone) { pq_context().link_clone(*this, *clone); }
   /// Breaks the links established by pq_link_clone(), when the caller thinks
   /// they won't be needed anymore. It makes sense to do this to limit the
   /// risk of later using out-of-date pointers. 'this' is the clone.
-  void pq_unlink_clone() {
-    assert(m_pq_is_clone_of != nullptr &&
-           m_pq_is_clone_of->m_pq_last_clone == this);
-    m_pq_is_clone_of->m_pq_last_clone = nullptr;
-    m_pq_is_clone_of = nullptr;
-  }
+  void pq_unlink_clone() { pq_context().unlink_clone(*this); }
   /*
     pq_is_clone() is different from parallel_exec: {parallel_exec==true and
     pq_is_clone()==true} happens for a top query block executed in a
@@ -2313,25 +2286,13 @@ class Query_block : public Query_term {
     {parallel_exec==false and pq_is_clone()==true} happens for a correlated
     subquery executed by a worker without involving the leader.
   */
-  bool pq_is_clone() const {
-    assert(!m_pq_is_clone_of || m_pq_is_clone_of->m_pq_last_clone == this);
-    return m_pq_is_clone_of != nullptr;
-  }
+  bool pq_is_clone() const { return pq_context().is_clone(*this); }
 
   /** Backup the serial execution plan before PQ modifies it */
   void pq_backup();
   /** Restore to the serial plan when PQ falls back to serial execution */
   void pq_restore();
 
-  /** saved #elements in windos function */
-  uint saved_windows_elements{0};
-  /** saved group list in prepare phase */
-  Group_list_ptrs *saved_group_list_ptrs{nullptr};
-  /** saved order list in prepare phase */
-  Group_list_ptrs *saved_order_list_ptrs{nullptr};
-  /** check for resolved group_list and order_list */
-  mem_root_unordered_map<uint, uint> *check_map_group_to_base{nullptr};
-  mem_root_unordered_map<uint, uint> *check_map_order_to_base{nullptr};
   /** record the map from group_list (or order_list) to base items */
   bool record_map_order(SQL_I_List<ORDER> &list,
                         mem_root_unordered_map<uint, uint> &map_order);

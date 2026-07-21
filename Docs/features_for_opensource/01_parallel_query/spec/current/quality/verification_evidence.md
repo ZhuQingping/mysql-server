@@ -1,40 +1,53 @@
-# Parallel Query Stable Branch Verification Evidence
+# Parallel Query Verification Evidence
 
 > 文档 ID：`PQ-QUALITY-VERIFY-001`
-> 状态：`commit-bound-runtime-evidence`
-> 适用提交：`1f6c4a5cbeab86dddcf8da7cdb3a3c29bb3509a9` (`stable_branch`)
-> 记录日期：2026-07-20
+> 状态：`partial-runtime-evidence`
+> 稳定对照基线：`1b9ffd755d4` (`stable_branch`)
+> 当前范围：`pq-local-refactor-clean` 上的 THD / Query_block / JOIN PQ context 重构
+> 记录日期：2026-07-21
 
 ## 1. 证据使用边界
 
-本文件记录已经在 `stable_branch` 上完成的构建和 MTR 门禁。它只证明命令所覆盖的
-构建配置和测试集合在该提交上通过；它不把尚未定向断言的 SQL 组合、故障路径或性能/并发
-性质自动升级为 `verified`。模块中的 Requirement 映射仍必须保留各自的 oracle、缺口和
-后续门禁。
+本文件区分历史稳定基线证据与本次 context 重构的针对性证据。每条记录只证明列出的
+构建配置和测试集合；它不把尚未定向断言的 SQL 组合、故障路径或性能/并发性质自动升级为
+`verified`。模块中的 Requirement 映射仍必须保留各自的 oracle、缺口和后续门禁。
 
-## 2. 已完成门禁
+## 2. 历史稳定基线证据
 
 | 类别 | 配置/命令 | 结果 | 边界 |
 |---|---|---|---|
-| Release build | `ninja -C build-ninja-release` | 通过 | 编译与链接成功；不代表运行期测试。 |
-| Debug build | `ninja -C build-ninja-debug` | 通过 | 编译与链接成功；不代表每个 DBUG 注入点已执行。 |
-| ASAN build | `ninja -C build-ninja-asan` | 通过 | 编译与链接成功；不代表 ASAN 运行期压力覆盖。 |
-| PQ MTR | `cd build-ninja-debug/mysql-test && ./mysql-test-run.pl --force --pq --suite=main,parallel_query --parallel=4` | 878 tests successful；698 skipped，其中 616 由测试自身跳过。 | 覆盖 `--pq` 下的 `main` 和 `parallel_query` 集合；跳过项、平台条件和未定向的组合场景不因此成为已验证能力。 |
+| Release build | `ninja -C build-ninja-release` | 历史通过记录 | 编译与链接成功；不代表运行期测试。 |
+| Debug build | `ninja -C build-ninja-debug` | 历史通过记录 | 编译与链接成功；不代表每个 DBUG 注入点已执行。 |
+| ASAN build | `ninja -C build-ninja-asan` | 历史通过记录 | 编译与链接成功；不代表 ASAN 运行期压力覆盖。 |
+| PQ MTR | `cd build-ninja-debug/mysql-test && ./mysql-test-run.pl --force --pq --suite=main,parallel_query --parallel=4` | 历史记录：878 tests successful；698 skipped，其中 616 由测试自身跳过。 | 该记录早于当前 `1b9ffd755d4`，不能作为本次重构的完整矩阵结论。 |
 
 MTR 在 macOS `lower_case_table_names=2` 环境完成。`stable_branch` 中的 result 基线已包含
 该环境下 PQ EXPLAIN/optimizer trace 的可移植性调整；这只是结果展示基线，不改变 PQ 的
 SQL 执行语义。
 
-## 3. 仍需单独取证的范围
+## 3. Context 重构已完成的针对性证据
+
+| 类别 | 配置/命令 | 结果 | 结论边界 |
+|---|---|---|---|
+| Release 编译 | `cmake --build build-ninja-release --target mysqld -j 8` | 通过 | 只验证本次变更可在 macOS arm64 AppleClang Release 配置编译和链接。 |
+| MQ 热路径静态审计 | `nm -nm build-ninja-release/runtime_output_directory/mysqld \| c++filt \| rg 'PQ_thd_context::is_error\|MQueue_handle::(send_bytes\|receive_bytes)'` | 仅保留 `MQueue_handle::{send_bytes,receive_bytes}` 符号；不存在 `PQ_thd_context::is_error` wrapper。 | 配合 `THD::is_pq_error()` 头内联和源级调用点审阅，证明未留下该跨编译单元 wrapper；不替代工作负载性能数据。 |
+| Debug PQ 生命周期回归 | `./mtr --force --max-test-fail=0 --retry=0 --parallel=8 --mtr-port-base=25000 --pq parallel_query.pq_clone_item parallel_query.refactor_fix_fields parallel_query.pq_fallback parallel_query.pq_record_buffer parallel_query.pq_read_view parallel_query.pq_kill parallel_query.pq_kill_query parallel_query.pq_worker_error parallel_query.pq_mq_error parallel_query.pq_sp_trigger` | 10 个指定用例全部通过。 | 覆盖 context 生命周期、clone/restore、fallback、read view、KILL 和 MQ/worker 错误路径；不等价于全量矩阵。 |
+| 隔离检查 | `git merge-base --is-ancestor 1b9ffd755d4 HEAD`；`git diff --check 1b9ffd755d4..HEAD` | 通过。 | 变更相对稳定基线收口；路径白名单在最终提交前再次核验。 |
+
+## 4. 仍需单独取证的范围
 
 - Prepared Statement binary protocol、reprepare、SP、stored function 和 trigger 的完整
   拒绝矩阵；当前全套成功不替代组合级 reason/oracle。
 - cursor restore、purge、page split/merge、正反向扫描和 record buffer 的并发差分；
   `stable_branch` 不含 restore-window DEBUG SYNC 专用用例。
+- Release、Debug、ASAN 三种构建的完整 `--suite=main` 与
+  `--pq --suite=main,parallel_query` 矩阵；结果须与 `stable_branch` 同条件对照。
+- 同机同负载的 stable/refactor 性能与内存对照：PQ 吞吐、P95/P99、短查询并发和每连接
+  常驻内存。当前结论是 `pending-validation`，不得写成“性能无影响”。
 - XA、READ UNCOMMITTED、完整事务隔离组合、DML/binlog exact-once、PTRC、资源泄漏与
   KILL/partial launch 的故障注入矩阵。
 
-## 4. 维护规则
+## 5. 维护规则
 
 1. 任何 `verified` 结论必须引用目标 commit、构建类型、完整命令和可复现结果。
 2. 新的失败、skip 原因变化或 result 基线变化必须更新本文件和受影响模块的 traceability。

@@ -251,7 +251,7 @@ int AggregateIterator::Read() {
             // the leader (not by the worker, which would be the case if the
             // aggregate belonged to a correlated subquery)
             (thd()->is_pq_worker() && /* (a) */
-             m_join->query_block->parallel_exec) /* (b) */) {
+             m_join->query_block->pq_context().parallel_exec) /* (b) */) {
           // Consider the case of failed to read the first row of data in PQ.
           // If this is a worker, it means that this worker has not fetched
           // any satisfied records. However, this worker should not set
@@ -294,7 +294,7 @@ int AggregateIterator::Read() {
           // Item_field::field would be updated when rows are sent by the
           // workers
 
-          if (m_join->query_block->parallel_exec) {
+          if (m_join->query_block->pq_context().parallel_exec) {
             for (Item *item : *m_join->query_block->get_fields_list()) {
               Field *result_field = item->get_result_field();
               if (result_field) {
@@ -992,10 +992,12 @@ MaterializeIterator<Profiler>::MaterializeIterator(
   assert(m_limit_rows == HA_POS_ERROR /* EXCEPT, INTERCEPT */ ||
          path_params->table->is_union_or_table());
 
-  if (thd->pq_leader_create_fake_iter && thd->lex->is_explain_analyze) {
+  if (thd->pq_context().leader_create_fake_iter &&
+      thd->lex->is_explain_analyze) {
     /* Used for PQ explain analyze */
     m_worker_info =
-        new (thd->pq_mem_root) ParallelIterTimingInfo(thd->pq_dop, thd);
+        new (thd->pq_context().mem_root)
+            ParallelIterTimingInfo(thd->pq_context().dop, thd);
   }
 
   if (m_ref_slice != -1) {
@@ -1436,7 +1438,7 @@ bool MaterializeIterator<Profiler>::MaterializeQueryBlock(
 
   THD *_thd = thd();
   auto join_cleanup = create_scope_guard([&query_block, _thd] {
-    if (_thd->has_pq) query_block.subquery_iterator->End();
+    if (_thd->pq_context().has_pq) query_block.subquery_iterator->End();
   });
 
   if (query_block.subquery_iterator->Init()) {
@@ -1753,14 +1755,15 @@ bool MaterializeIterator<Profiler>::pq_sharing_table() {
     // derived table
     if (m_query_expression && m_query_expression->outer_query_block()) {
       // If the parent query is doing parallel execution,
-      if (m_query_expression->outer_query_block()->parallel_exec) return true;
+      if (m_query_expression->outer_query_block()->pq_context().parallel_exec)
+        return true;
       // Or if the parent query is a correlated subquery whose parent query is
       // doing parallel execution (happens in TPC-DS Q1).
       auto parent_unit =
           m_query_expression->outer_query_block()->master_query_expression();
       if (parent_unit->subquery_suite_for_parallel_query() ==
               PQSubqueryExecution::kMultipleByWorkers &&
-          parent_unit->outer_query_block()->parallel_exec)
+          parent_unit->outer_query_block()->pq_context().parallel_exec)
         return true;
     }
     // semi-join materialization
@@ -2028,10 +2031,12 @@ TemptableAggregateIterator<Profiler>::TemptableAggregateIterator(
       m_temp_table_param(temp_table_param),
       m_join(join),
       m_ref_slice(ref_slice) {
-  if (thd->pq_leader_create_fake_iter && thd->lex->is_explain_analyze) {
+  if (thd->pq_context().leader_create_fake_iter &&
+      thd->lex->is_explain_analyze) {
     /* Used for PQ explain analyze */
     m_worker_info =
-        new (thd->pq_mem_root) ParallelIterTimingInfo(thd->pq_dop, thd);
+        new (thd->pq_context().mem_root)
+            ParallelIterTimingInfo(thd->pq_context().dop, thd);
   }
 }
 

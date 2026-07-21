@@ -80,27 +80,27 @@ bool ParallelScanIterator::pq_make_filesort(Filesort **sort) {
   SQL_I_List<ORDER> orig_list;
 
   /** construct sort order based on group */
-  if (m_join->pq_rebuilt_group) {
-    assert(m_join->saved_join_group_list);
-    restore_list(m_join->saved_join_group_list, orig_list);
+  if (m_join->pq_context().pq_rebuilt_group) {
+    assert(m_join->pq_context().saved_join_group_list);
+    restore_list(m_join->pq_context().saved_join_group_list, orig_list);
     m_order = restore_optimized_group_order(
-        orig_list, m_join->saved_optimized_vars.optimized_group_flags);
+        orig_list, m_join->pq_context().saved_optimized_vars.optimized_group_flags);
   } else {
     /**
      * if sorting is built after the first rewritten table, then
      * we have no need to rebuilt the sort order on leader.
      */
-    if (m_join->pq_last_sort_idx > (int)m_join->primary_tables) {
+    if (m_join->pq_context().pq_last_sort_idx > (int)m_join->primary_tables) {
       return false;
     } else if (m_stable_sort) {
       if ((m_order = m_join->order.order) == nullptr) {
         if (m_join->m_ordered_index_usage == JOIN::ORDERED_INDEX_ORDER_BY &&
-            m_join->query_block->saved_order_list_ptrs) {
-          restore_list(m_join->saved_join_order, orig_list);
+            m_join->query_block->pq_context().saved_order_list_ptrs) {
+          restore_list(m_join->pq_context().saved_join_order, orig_list);
           m_order = restore_optimized_group_order(
-              orig_list, m_join->saved_optimized_vars.optimized_order_flags);
+              orig_list, m_join->pq_context().saved_optimized_vars.optimized_order_flags);
         } else {
-          QEP_TAB *tab = &m_join->qep_tab0[m_join->idx_div_tab];
+          QEP_TAB *tab = &m_join->pq_context().qep_tab0[m_join->pq_context().idx_div_tab];
           std::vector<std::string> used_key_fields;
           if (get_table_key_fields(tab, used_key_fields) ||
               DBUG_EVALUATE_IF("pq_msort_error1", true, false))
@@ -136,7 +136,7 @@ bool ParallelScanIterator::pq_make_filesort(Filesort **sort) {
   if (m_order || m_stable_sort) {
     *sort = m_tab->filesort;
     if (!(*sort)) {
-      (*sort) = new (m_join->thd->pq_mem_root)
+      (*sort) = new (m_join->thd->pq_context().mem_root)
           Filesort(m_join->thd, {m_tab->table()}, /*keep_buffers=*/false,
                    m_order, HA_POS_ERROR, /*remove_duplicates=*/false,
                    /*force_sort_rowids=*/false, /*unwrap_rollup=*/false);
@@ -158,7 +158,7 @@ bool ParallelScanIterator::pq_init_record_gather() {
   if (m_record_gather) {
     m_record_gather->mq_scan_end();
   }
-  m_record_gather = new (thd->pq_mem_root)
+  m_record_gather = new (thd->pq_context().mem_root)
       MQ_record_gather(thd, m_tab, &m_join->tmp_fields[REF_SLICE_PQ_TMP]);
 
   // optimize merge sort procedure for table/index scan
@@ -246,15 +246,15 @@ bool ParallelScanIterator::pq_launch_worker() {
 #ifndef NDEBUG
     if (i >= m_dop / 2) DEBUG_SYNC(thd, "pq_wait_kill");
 #endif  // NDEBUG
-    if (thd->is_error() || thd->pq_error || thd->killed) goto err;
+    if (thd->is_error() || thd->pq_context().error || thd->killed) goto err;
     my_thread_handle id;
     id.thread = 0;
 
 #ifndef NDEBUG
     // this value will be copied by the worker at runtime
-    thd->pq_skip_fetch_ctx = false;
+    thd->pq_context().skip_fetch_ctx = false;
     if (i == 0 && DBUG_EVALUATE_IF("pq_skip_fetch_ctx", true, false)) {
-      thd->pq_skip_fetch_ctx = true;
+      thd->pq_context().skip_fetch_ctx = true;
     } else if (i == 1) {
       // all workers except worker_0 can fetch scan ctx
       DEBUG_SYNC(thd, "pq_launch_worker_1");
@@ -295,7 +295,7 @@ bool ParallelScanIterator::pq_launch_worker() {
 err:
   for (uint i = 0; i < m_dop; i++) {
     if (workers[i]->thread_id.thread && workers[i]->thd_worker) {
-      workers[i]->thd_worker->pq_error = true;
+      workers[i]->thd_worker->pq_context().error = true;
     }
   }
   return true;
@@ -357,12 +357,12 @@ int ParallelScanIterator::pq_error_code() {
   thd->pq_merge_status(temp_thd);
   // No push down select_distinct to woker because BUG2023080901645.
   // So the total number of rows in the statement's output is not
-  // thd->pq_current_found_rows, but rather the number of rows after
+  // thd->pq_context().current_found_rows, but rather the number of rows after
   // deduplication by the leader. So reset disable_distinct_in_pq_worker
   // to 0 and in Query_expression::ExecuteIteratorQuery function, it will
   // return *send_records_ptr.
-  if (m_join->query_block->disable_distinct_in_pq_worker)
-    thd->pq_current_found_rows = 0;
+  if (m_join->query_block->pq_context().disable_distinct_in_pq_worker)
+    thd->pq_context().current_found_rows = 0;
   // update PQ leader's examined_rows through cloned template_join in gather;
   // The whole query's examined_rows leader_thd->m_examined_rows will be
   // updated in ExecuteIteratorQuery() when the whole query is finished.
@@ -388,7 +388,7 @@ int ParallelScanIterator::pq_error_code() {
   }
   /**  output parallel error code */
   if (!temp_thd->is_error() && !thd->is_error() &&
-      !temp_thd->pq_explain_analyze && thd->pq_error) {
+      !temp_thd->pq_context().explain_analyze && thd->pq_context().error) {
     my_error(ER_PARALLEL_QUERY_ERROR, MYF(0), "Parallel execution error");
   }
   return 1;
@@ -473,7 +473,7 @@ bool ParallelScanIterator::Init() {
         return true;
     }
     if (para_exec_init(path)) {  // materialize shared tmp table
-      m_join->thd->pq_error = true;
+      m_join->thd->pq_context().error = true;
       return true;
     }
   }
@@ -487,7 +487,7 @@ bool ParallelScanIterator::Init() {
                    we have not generated read_view on divided (or cut) table*/
       pq_launch_worker() || /** launch worker threads */
       DBUG_EVALUATE_IF("pq_worker_error6", true, false)) {
-    m_join->thd->pq_error = true;
+    m_join->thd->pq_context().error = true;
     return true;
   }
   return false;
@@ -578,7 +578,7 @@ bool PQblockScanIterator::Init() {
 }
 
 int PQblockScanIterator::End() {
-  assert(thd() && thd()->pq_leader);
+  assert(thd() && thd()->pq_context().leader);
   table()->file->pq_worker_scan_end();
   return -1;
 }
@@ -680,7 +680,7 @@ PQRefIterator::~PQRefIterator() {
 }
 
 int PQRefIterator::End() {
-  assert(thd() && thd()->pq_leader);
+  assert(thd() && thd()->pq_context().leader);
   table()->file->pq_worker_scan_end();
   return -1;
 }

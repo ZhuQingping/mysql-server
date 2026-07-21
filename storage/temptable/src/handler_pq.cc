@@ -304,7 +304,7 @@ retry:
     }
     if (
 #ifndef NDEBUG
-        !current_thd->pq_skip_fetch_ctx &&
+        !current_thd->pq_context().skip_fetch_ctx &&
 #endif  // NDEBUG
         !pq_worker->dispatch_ctx(pq_ref_info, &cur_pq_ctx)) {
       err = DB_SUCCESS_AS_IN_INNODB;

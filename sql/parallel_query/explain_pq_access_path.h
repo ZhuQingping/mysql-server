@@ -57,7 +57,7 @@ class ParallelIterTimingInfo {
   ParallelIterTimingInfo() = delete;
   explicit ParallelIterTimingInfo(int dop, THD *thd)
       : copy_num(0), pq_dop(dop) {
-    time_info = new (thd->pq_mem_root) IteratorTimingInfo[dop];
+    time_info = new (thd->pq_context().mem_root) IteratorTimingInfo[dop];
   }
 };
 

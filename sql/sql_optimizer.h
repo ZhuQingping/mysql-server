@@ -45,6 +45,7 @@
 #include "sql/iterators/row_iterator.h"
 #include "sql/mem_root_array.h"
 #include "sql/opt_explain_format.h"  // Explain_sort_clause
+#include "sql/parallel_query/pq_context.h"
 #include "sql/parallel_query/sql_parallel.h"
 #include "sql/sql_executor.h"
 #include "sql/sql_lex.h"
@@ -461,10 +462,6 @@ class JOIN {
   */
   ORDER_with_src order, group_list;
 
-  Group_list_ptrs *saved_join_order{nullptr};
-
-  Group_list_ptrs *saved_join_group_list{nullptr};
-
   // Used so that AggregateIterator knows which items to signal when the rollup
   // level changes. Obviously only used in the presence of rollup.
   Prealloced_array<Item_rollup_group_item *, 4> rollup_group_items{
@@ -748,42 +745,9 @@ class JOIN {
   bool get_best_combination();
   bool attach_join_conditions(plan_idx last_tab);
 
-  /// added structure for parallel query
-  /** original qep_tab array */
-  QEP_TAB *qep_tab0{nullptr};
-  /** rewritten qep_tab array */
-  QEP_TAB *qep_tab1{nullptr};
-  /** saved temp table parameter for creating tmp table */
-  Temp_table_param *saved_tmp_table_param{nullptr};
-  /** need a tmp table to store partial results for worker */
-  bool need_tmp_pq{false};
-  /** needs a tmp table to receive partial results from MQ */
-  bool need_tmp_pq_leader{false};
-  /** list of tmp all fields */
-  mem_root_deque<Item *> *tmp_fields0{nullptr};
-  mem_root_deque<Item *> *tmp_fields1{nullptr};
-  /** optimized variables */
-  PQ_optimized_var saved_optimized_vars;
-  /** the index of PQ divided table */
-  int idx_div_tab{-1};
-  /** the index of PQ cut table, only used for hash join */
-  int idx_cut_tab{-1};
-  /** indicate whether needs to rebuild group field */
-  bool pq_rebuilt_group{false};
-  /** needs stable sort */
-  bool pq_stable_sort{false};
-  /** the index of sorted table */
-  int pq_last_sort_idx{-1};
-  /** base ref items */
-  Ref_item_array *ref_items0{nullptr};
-  Ref_item_array *ref_items1{nullptr};
-  /** msg queue's handler */
-  MQueue_handle *m_msg_handler{nullptr};
-  /** push having_cond to worker */
-  bool pq_pushdown_having{false};
-
-  /** query contain aggr(distinct) func */
-  bool has_count_distinct{false};
+  /** PQ-owned execution-plan state. It must not contain non-PQ JOIN state. */
+  PQ_join_context &pq_context() { return m_pq_context; }
+  const PQ_join_context &pq_context() const { return m_pq_context; }
 
   /** check fields whether suite for PQ */
   bool check_pq_select_fields();
@@ -820,11 +784,15 @@ class JOIN {
   /** set pq_pushdown_having */
   void set_push_down_having();
   /** get pq_pushdown_having */
-  bool push_down_having() const { return pq_pushdown_having; }
+  bool push_down_having() const { return pq_context().pq_pushdown_having; }
   /** Restore to the serial plan when PQ falls back to serial execution */
   void pq_restore();
 
  private:
+  // PQ plan state is intentionally not copied by JOIN::shallow_clone(),
+  // preserving the former individual members' non-copy semantics.
+  PQ_join_context m_pq_context;
+
   bool attach_join_condition_to_nest(plan_idx first_inner, plan_idx last_tab,
                                      Item *join_cond, bool is_sj_mat_cond);
 
@@ -1210,7 +1178,7 @@ class JOIN {
 */
 #define ASSERT_BEST_REF_IN_JOIN_ORDER(join)                             \
   do {                                                                  \
-    assert((join)->query_block->parallel_exec || (join)->tables == 0 || \
+    assert((join)->query_block->pq_context().parallel_exec || (join)->tables == 0 || \
            ((join)->best_ref && !(join)->join_tab));                    \
   } while (0)
 

@@ -357,7 +357,7 @@ MQ_RESULT MQueue_handle::receive(void **datap, uint32 *nbytesp, bool nowait) {
     }
     if (m_buffer) destroy(m_buffer);
     THD *thd = current_thd;
-    m_buffer = new (thd->pq_mem_root) char[m_buffer_len];
+    m_buffer = new (thd->pq_context().mem_root) char[m_buffer_len];
     /**  if m_buffer allocates fail, then directly return my_error */
     if (!m_buffer || DBUG_EVALUATE_IF("pq_mq_error3", true, false)) {
       my_error(ER_STD_BAD_ALLOC_ERROR, MYF(0), "", "(MQ::receive)");

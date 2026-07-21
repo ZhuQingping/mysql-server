@@ -1362,7 +1362,7 @@ static int plugins_dispatch(THD *thd, plugin_ref plugin, void *arg) {
   st_mysql_audit *data = plugin_data<st_mysql_audit *>(plugin);
 
   /* When the query is in the PQ process, it can not call audit plugin's API. */
-  if (thd && (thd->has_pq || thd->is_pq_worker())) return 0;
+  if (thd && (thd->pq_context().has_pq || thd->is_pq_worker())) return 0;
 
   /* Check to see if the plugin is interested in this event */
   if (check_audit_mask(data->class_mask[event_generic->event_class], subclass))

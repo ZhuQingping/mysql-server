@@ -402,9 +402,9 @@ class MQueue_handle {
    */
   bool init_mqueue_handle(THD *thd) {
     if (!m_buffer_len) return true;
-    m_buffer = new (thd->pq_mem_root) char[m_buffer_len];
+    m_buffer = new (thd->pq_context().mem_root) char[m_buffer_len];
     if (!m_buffer) return true;
-    m_ext_mgr = new (thd->pq_mem_root)
+    m_ext_mgr = new (thd->pq_context().mem_root)
         Batch_buffer_manager(thd->variables.parallel_batch_max_slot,
                              thd->variables.parallel_batch_max_mem_size);
     return false;

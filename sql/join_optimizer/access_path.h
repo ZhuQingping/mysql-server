@@ -1625,7 +1625,7 @@ inline Mem_root_array<MaterializePathParameters::QueryBlock>
 SingleMaterializeQueryBlock(THD *thd, AccessPath *path, int select_number,
                             JOIN *join, bool copy_items,
                             Temp_table_param *temp_table_param) {
-  assert(path != nullptr || thd->has_pq);
+  assert(path != nullptr || thd->pq_context().has_pq);
   Mem_root_array<MaterializePathParameters::QueryBlock> array(thd->mem_root, 1);
   MaterializePathParameters::QueryBlock &query_block = array[0];
   query_block.subquery_path = path;
@@ -1674,7 +1674,7 @@ inline AccessPath *NewMaterializeAccessPath(
 #ifndef NDEBUG
   for (MaterializePathParameters::QueryBlock &query_block :
        param->query_blocks) {
-    assert(query_block.subquery_path != nullptr || thd->has_pq);
+    assert(query_block.subquery_path != nullptr || thd->pq_context().has_pq);
   }
 #endif
 

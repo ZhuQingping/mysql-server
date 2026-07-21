@@ -72,7 +72,7 @@ static constexpr size_t kZeroKeyLengthHash = 2669509769;
 /// from a PQ worker. Note that the memory is still managed by the PQ leader's
 /// THD, so do not call delete on the returned object!
 static VfdManager *GetVfdManager(const THD *thd) {
-  return thd->is_pq_worker() ? thd->pq_leader->m_vfd_manager.get()
+  return thd->is_pq_worker() ? thd->pq_context().leader->m_vfd_manager.get()
                              : thd->m_vfd_manager.get();
 }
 
@@ -121,7 +121,7 @@ HashJoinIterator::HashJoinIterator(
     m_chunk_files = m_pq_hash_join->ChunkFilesOnDisk();
   } else {
     m_chunk_files = std::make_shared<ChunkFilesWrapper>(
-        thd->mem_root, /*needs_mutex_protection=*/false, thd->pq_dop);
+        thd->mem_root, /*needs_mutex_protection=*/false, thd->pq_context().dop);
   }
 
   assert(m_build_input != nullptr);
@@ -762,7 +762,8 @@ bool HashJoinIterator::BuildHashTable() {
               m_pq_hash_join->HashTableMutex());
           if (m_chunk_files->Size() == 0) {
             if (InitializeChunkFiles(
-                    static_cast<size_t>(m_estimated_build_rows * thd()->pq_dop),
+                    static_cast<size_t>(m_estimated_build_rows *
+                                        thd()->pq_context().dop),
                     m_row_buffer.size(), kMaxChunks,
                     /*include_match_flag_for_probe=*/m_join_type ==
                         JoinType::OUTER,

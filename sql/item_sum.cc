@@ -1099,7 +1099,7 @@ bool Aggregator_distinct::setup(THD *thd) {
     Query_block *query_block = item_sum->aggr_query_block;
     Item_sum *target_item = item_sum;
 
-    if (query_block->parallel_exec &&
+    if (query_block->pq_context().parallel_exec &&
         (item_sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC) &&
         (current_thd->is_pq_leader() || current_thd->is_pq_real_worker())) {
       Item *orig_func = item_sum->orig_func;
@@ -1215,7 +1215,7 @@ bool Aggregator_distinct::setup(THD *thd) {
 #ifndef NDEBUG
     if ((item_sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC) && !tree) {
       // tree is nullptr for COUNT_DISTINCT_FUNC , should not run with pq.
-      assert(!query_block->parallel_exec || !current_thd->is_pq_leader());
+      assert(!query_block->pq_context().parallel_exec || !current_thd->is_pq_leader());
     }
 #endif
     return false;
@@ -1369,7 +1369,7 @@ bool Aggregator_distinct::add() {
     }
 
     // for leader in parallel_query, merge tree
-    if (item_sum->aggr_query_block->parallel_exec && thd->is_pq_leader() &&
+    if (item_sum->aggr_query_block->pq_context().parallel_exec && thd->is_pq_leader() &&
         item_sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC) {
       return merge_count_distinct_tree(item_sum);
     }

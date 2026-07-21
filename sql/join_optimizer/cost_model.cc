@@ -216,9 +216,10 @@ void EstimateMaterializeCost(THD *thd, AccessPath *path) {
       table_path_table = table_path->table_scan().table;
       table_path_num_output_rows = path->num_output_rows();
     } else {
-      assert(thd->pq_dop > 0);
+      assert(thd->pq_context().dop > 0);
       table_path_table = table_path->pq_block_scan().table;
-      table_path_num_output_rows = (path->num_output_rows() / thd->pq_dop);
+      table_path_num_output_rows =
+          (path->num_output_rows() / thd->pq_context().dop);
     }
     path->cost = 0.0;
     path->init_cost = 0.0;

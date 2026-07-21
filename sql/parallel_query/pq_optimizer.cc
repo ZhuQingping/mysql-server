@@ -37,267 +37,41 @@
 #include "sql/sql_tmp_table.h"
 
 bool JOIN::alloc_indirection_slices1() {
-  const int num_slices = REF_SLICE_WIN_1 + m_windows.elements;
-
-  assert(ref_items1 == nullptr);
-
-  ref_items1 = (Ref_item_array *)(*THR_MALLOC)
-                   ->Alloc(sizeof(Ref_item_array) * num_slices);
-  if (ref_items1 == nullptr) return true;
-
-  tmp_fields1 =
-      (*THR_MALLOC)
-          ->ArrayAlloc<mem_root_deque<Item *>>(num_slices, *THR_MALLOC);
-  if (tmp_fields1 == nullptr) return true;
-
-  for (int i = 0; i < num_slices; i++) {
-    ref_items1[i].reset();
-    tmp_fields1[i].empty();
-    tmp_fields1[i].empty();
-  }
-  ref_items = ref_items1;
-  tmp_fields = tmp_fields1;
-
-  return false;
+  return pq_context().allocate_indirection_slices(*this);
 }
 
 bool JOIN::alloc_qep1(uint n) {
-  static_assert(MAX_TABLES <= INT_MAX8, "plan_idx needs to be wide enough.");
-  assert(tables == n);
-
-  qep_tab1 = new (thd->pq_mem_root) QEP_TAB[n + 1];
-  if (!qep_tab1) return true; /* purecov: inspected */
-
-  QEP_shared *qs = new (thd->pq_mem_root) QEP_shared[n + 1];
-  if (!qs) return true;
-
-  for (uint i = 0; i < n; i++) {
-    qep_tab1[i].pos = i;
-    qep_tab1[i].set_qs(&qs[i]);
-    qep_tab1[i].set_join(this);
-    qep_tab1[i].set_idx(i);
-  }
-  qep_tab = qep_tab1;
-
-  return false;
-}
-
-/**
-  restore the optimized group/order list, using saved group/order list
-  and optimized_flags.
-
-  @param[in]  ptr              saved group/order list
-  @param[in]  src_arg          origin of order list
-  @param[in]  optimized_flags  saved optimized_flags
-  @param[out] group_order_list restored group/order list
-*/
-static void pq_restore_optimized_group_order(
-    Group_list_ptrs *ptr, Explain_sort_clause src_arg,
-    const std::vector<bool> &optimized_flags,
-    ORDER_with_src &group_order_list) {
-  ORDER *optimized_order = nullptr;
-  if (ptr != nullptr && optimized_flags.size() != 0) {
-    SQL_I_List<ORDER> orig_list{};
-    int idx = 0;
-    for (auto order : *ptr) {
-      if (!optimized_flags[idx]) orig_list.link_in_list(order, &order->next);
-      idx++;
-    }
-    optimized_order = orig_list.first;
-  }
-  group_order_list.clean();
-  if (optimized_order) {
-    group_order_list = ORDER_with_src(optimized_order, src_arg);
-  }
+  return pq_context().allocate_qep(*this, n);
 }
 
 bool JOIN::restore_optimized_vars() {
-  // After the temporary table is created in the make_tmp_tables_info function,
-  // the ref_items corresponding to join->fields are switched to the field
-  // objects of the temporary table. This may trigger a recalculation of
-  // m_accum_properties, potentially causing the loss of the PROP_AGGREGATION
-  // attribute. Prior to creating the temporary table in PQ, ref_items for
-  // join->fields are reset to base_ref_items. Therefore, it is necessary to
-  // call Item::update_used_tables to update the m_accum_properties field
-  // accordingly.
-  for (Item *item : *fields) item->update_used_tables();
-  // restore the make_tmp_tables_info's parameter through
-  // saved_optimized_variables
-  grouped = saved_optimized_vars.pq_grouped;
-  group_optimized_away = saved_optimized_vars.pq_group_optimized_away;
-  implicit_grouping = saved_optimized_vars.pq_implicit_grouping;
-  need_tmp_before_win = saved_optimized_vars.pq_need_tmp_before_win;
-  simple_group = saved_optimized_vars.pq_simple_group;
-  simple_order = saved_optimized_vars.pq_simple_order;
-  streaming_aggregation = saved_optimized_vars.pq_streaming_aggregation;
-  m_ordered_index_usage = static_cast<ORDERED_INDEX_USAGE>(
-      saved_optimized_vars.pq_m_ordered_index_usage);
-  skip_sort_order = saved_optimized_vars.pq_skip_sort_order;
-  select_distinct = saved_optimized_vars.pq_select_distinct;
-
-  pq_restore_optimized_group_order(saved_join_group_list, ESC_GROUP_BY,
-                                   saved_optimized_vars.optimized_group_flags,
-                                   group_list);
-  pq_restore_optimized_group_order(saved_join_order, ESC_ORDER_BY,
-                                   saved_optimized_vars.optimized_order_flags,
-                                   order);
-  if (group_list.order) {
-    uint old_group_parts = send_group_parts;
-    calc_group_buffer(this, group_list.order);
-    send_group_parts = tmp_table_param.group_parts; /* Save org parts */
-    if (send_group_parts != old_group_parts)  // error: leader and worker have
-                                              // different group fields
-      return true;
-  }
-
-  having_cond = saved_optimized_vars.pq_saved_having_cond;
-  // Note that, mysteriously, the worker uses Query_block->having_cond() while
-  // the leader uses pq_saved_having_cond.
-  if (query_block->parallel_exec) {
-    if (push_down_having()) {
-      // If HAVING has been pushed to worker, leader should reset having_cond to
-      // null; otherwise, worker's having_cond should reset to null.
-      if (thd->is_pq_leader()) {
-        having_cond = nullptr;
-      } else {
-        having_cond = query_block->having_cond();
-        if (having_cond) having_cond->update_used_tables();
-      }
-    } else {
-      if (thd->is_pq_worker()) having_cond = nullptr;
-    }
-  }
-
-  return false;
+  return pq_context().restore_optimized_vars(*this);
 }
 
 void JOIN::save_optimized_vars() {
-  // saved optimized variables
-  saved_optimized_vars.pq_grouped = grouped;
-  saved_optimized_vars.pq_group_optimized_away = group_optimized_away;
-  saved_optimized_vars.pq_implicit_grouping = implicit_grouping;
-  saved_optimized_vars.pq_need_tmp_before_win = need_tmp_before_win;
-  saved_optimized_vars.pq_simple_group = simple_group;
-  saved_optimized_vars.pq_simple_order = simple_order;
-  saved_optimized_vars.pq_streaming_aggregation = streaming_aggregation;
-  saved_optimized_vars.pq_skip_sort_order = skip_sort_order;
-  saved_optimized_vars.pq_m_ordered_index_usage = m_ordered_index_usage;
-  saved_optimized_vars.pq_select_distinct = select_distinct;
-
-  // record the mapping: JOIN::group_list -> Query_block->group_list
-  saved_join_order = query_block->saved_order_list_ptrs;
-  if (!saved_join_group_list) {
-    saved_join_group_list = query_block->saved_group_list_ptrs;
-  }
-
-  record_optimized_group_order(saved_join_group_list, group_list,
-                               saved_optimized_vars.optimized_group_flags);
-  record_optimized_group_order(saved_join_order, order,
-                               saved_optimized_vars.optimized_order_flags);
-  saved_optimized_vars.pq_saved_having_cond = having_cond;
+  pq_context().save_optimized_vars(*this);
 }
 
 void JOIN::set_push_down_having() {
-  assert(!pq_pushdown_having);
-  // If HAVING contains aggregation, it cannot be pushed to worker
-  if (!having_cond || having_cond->has_aggregation() ||
-      having_cond->has_grouping_func()) {
-    pq_pushdown_having = false;
-    return;
-  }
-  // If select_list contains aggregation and query does not has group by
-  // clause, it cannot be pushed to worker. Because in AggregateIterator::Read
-  // function, if there's no GROUP BY, it will output a row even if there are
-  // no input rows. If it has a having_cond, having_cond will filter results
-  // from AggregateIterator::Read. For pq, if having_cond has pushed down to
-  // worker in this scenario, leader has not having_cond and the query result
-  // would not meet the MySQL expectation because the result from
-  // AggregateIterator::Read is not filtered by having_cond. For details, see
-  // mysql-test/suite/parallel_query/t/BUG2023110202800.test. So in this
-  // scenario, having_cond in leader should not be set to nullptr and saved.
-  bool has_agg = false;
-  for (Item *item : *fields) {
-    if (item->type() == Item::SUM_FUNC_ITEM && !item->const_item() &&
-        down_cast<Item_sum *>(item)->aggr_query_block == query_block) {
-      has_agg = true;
-      break;
-    }
-  }
-  if (has_agg && !grouped && !group_optimized_away) {
-    pq_pushdown_having = false;
-    return;
-  }
-  pq_pushdown_having = true;
+  pq_context().set_push_down_having(*this);
 }
 
-void JOIN::pq_restore() {
-  // Restore TABLE::do_parallel_scan modified in make_pq_leader_plan
-  // to its default value.
-  for (uint i = const_tables; i < primary_tables; i++) {
-    qep_tab[i].table()->file->do_parallel_scan = false;
-  }
-
-  auto query_blocks_to_clone = list_query_blocks_to_clone(query_block);
-  for (auto query_block : query_blocks_to_clone) {
-    JOIN *join = query_block->join;
-    if (!join) continue;
-    // Although the current JOIN::group_list/order does not require
-    // pq_restore processing and this does not affect functionality,
-    // considering that future new features may necessitate pq_restore,
-    // we have added pq_restore processing for JOIN::group_list/order.
-    for (auto &clause : {join->group_list, join->order}) {
-      for (auto order = clause.order; order; order = order->next) {
-        (*order->item)->walk(&Item::pq_restore, enum_walk::PREFIX, nullptr);
-      }
-    }
-    // Restore Semijoin_mat_exec::m_pq_shared_info modified in
-    // Semijoin_mat_exec::pq_clone to its default value.
-    for (uint i = 0; i < join->tables; i++) {
-      QEP_TAB *tab = &join->qep_tab[i];
-      if (tab->sj_mat_exec()) {
-        tab->sj_mat_exec()->m_pq_shared_info = nullptr;
-      }
-    }
-  }
-
-  // Restore table->file modified in SetupPQTab() to default value
-  key_range ref_key{};
-  for (auto idx : {idx_cut_tab, idx_div_tab}) {
-    if (idx < 0) continue;
-    TABLE *table = qep_tab[idx].table();
-    if (!table) continue;
-    table->file->ha_set_reverse_scan(false);
-    table->file->pq_ref = false;
-    table->file->pq_ref_key = ref_key;
-  }
-
-  // Restore idx_div_tab/idx_cut_tab to default value.
-  idx_div_tab = -1;
-  idx_cut_tab = -1;
-}
+void JOIN::pq_restore() { pq_context().restore_plan(*this); }
 
 bool JOIN::setup_tmp_table_info(JOIN *orig) {
-  ref_items[REF_SLICE_ACTIVE] = query_block->base_ref_items;
-  tmp_table_param.pq_copy(orig->saved_tmp_table_param);
-  saved_tmp_table_param = new (thd->mem_root) Temp_table_param();
-  if (!saved_tmp_table_param) return true;
-  saved_tmp_table_param->pq_copy(orig->saved_tmp_table_param);
-
-  select_distinct = orig->select_distinct;
-  if (restore_optimized_vars() || alloc_func_list()) return true;
-  return false;
+  return pq_context().setup_tmp_table_info(*this, *orig);
 }
 
 bool JOIN::make_leader_rewritten_tab() {
-  if (alloc_qep1(tables) ||        /** alloc qep_tab1 */
+  if (alloc_qep1(tables) ||        /** alloc pq_context().qep_tab1 */
       alloc_indirection_slices1()) /** alloc item_ref_slice */
     return true;
 
-  assert(idx_div_tab >= 0);
+  assert(pq_context().idx_div_tab >= 0);
   QEP_TAB *tab = &qep_tab[0];
   tab->pq_div_tab = true;
-  POSITION *position = new (thd->pq_mem_root) POSITION;
-  if (!position || position->pq_copy(thd, &qep_tab0[idx_div_tab])) return true;
+  POSITION *position = new (thd->pq_context().mem_root) POSITION;
+  if (!position || position->pq_copy(thd, &pq_context().qep_tab0[pq_context().idx_div_tab])) return true;
 
   tab->set_position(position);
   if (tab->filesort) {
@@ -307,11 +81,11 @@ bool JOIN::make_leader_rewritten_tab() {
   tab->set_type(JT_ALL);
 
   /** create Table_ref object for explain */
-  Table_ref *tbl = new (thd->pq_mem_root) Table_ref();
+  Table_ref *tbl = new (thd->pq_context().mem_root) Table_ref();
   if (!tbl) return true;
 
   char buff[64] = {0};
-  TABLE *div_table = qep_tab0[idx_div_tab].table();
+  TABLE *div_table = pq_context().qep_tab0[pq_context().idx_div_tab].table();
   assert(div_table);
 
   tbl->query_block = query_block;
@@ -327,7 +101,7 @@ bool JOIN::make_leader_rewritten_tab() {
 
   tab->table_ref = tbl;
   query_block->m_table_list.link_in_list(tbl, &tbl->next_local);
-  Index_lookup *ref = new (thd->pq_mem_root) Index_lookup();
+  Index_lookup *ref = new (thd->pq_context().mem_root) Index_lookup();
   if (!ref) return true;
 
   tab->set_ref(ref);
@@ -339,7 +113,7 @@ bool JOIN::make_leader_rewritten_tab() {
   ref_items[REF_SLICE_ACTIVE] = query_block->base_ref_items;
   // replace parallel scan table with a tmp table
   tmp_tables = primary_tables = const_tables = 0;
-  need_tmp_pq_leader = true;
+  pq_context().need_tmp_pq_leader = true;
 
   return false;
 }
@@ -443,25 +217,25 @@ bool JOIN::suite_for_parallel_query() {
   Opt_trace_context *const trace = &thd->opt_trace;
 
   // for quickly determine whether is suitable for parallel query
-  if (!query_block->m_suite_for_pq) {
-    if (thd->retry_without_pq) {
-      query_block->pq_unsuite_info = PQUnsuiteInfo::RETRY_WITHOUT_PQ;
+  if (!query_block->pq_context().m_suite_for_pq) {
+    if (thd->pq_context().retry_without_pq) {
+      query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::RETRY_WITHOUT_PQ;
     }
-    assert(query_block->pq_unsuite_info < PQUnsuiteInfo::PQ_MAX_UNSUITE);
+    assert(query_block->pq_context().pq_unsuite_info < PQUnsuiteInfo::PQ_MAX_UNSUITE);
     goto print_info;
   }
 
   if (query_block->group_list.elements > 0) {
     uint saved_group_list_elements =
-        query_block->saved_group_list_ptrs
-            ? query_block->saved_group_list_ptrs->size()
+        query_block->pq_context().saved_group_list_ptrs
+            ? query_block->pq_context().saved_group_list_ptrs->size()
             : 0;
     // for subquery change to derived table scenario, query block may implicitly
     // generate aggregate function after prepare stage, currently pq record
     // optimized group order and restore optimized group order logic can not
     // support this scenario.
     if (saved_group_list_elements < query_block->group_list.elements) {
-      query_block->pq_unsuite_info = PQUnsuiteInfo::IMPLICIT_AGG_AFTER_PREPARE;
+      query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::IMPLICIT_AGG_AFTER_PREPARE;
       goto print_info;
     }
   }
@@ -472,7 +246,7 @@ bool JOIN::suite_for_parallel_query() {
     // However suitable for PQ, this will run single-threaded, inside the
     // parent query block's worker. We return false to signal that. But still,
     // Query_block::m_suite_for_pq is true in this case.
-    query_block->pq_unsuite_info = PQUnsuiteInfo::SUB_MTIP_WORKER;
+    query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::SUB_MTIP_WORKER;
     goto print_info;
   }
 
@@ -514,7 +288,7 @@ bool JOIN::suite_for_parallel_query() {
                });
 
       if (depends_on_const_table) {
-        query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
+        query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
         goto print_info;
       }
     }
@@ -523,40 +297,40 @@ bool JOIN::suite_for_parallel_query() {
   // max PQ memory size limit
   if (get_pq_memory_total() >= parallel_memory_limit) {
     atomic_add<uint>(parallel_memory_refused, 1);
-    query_block->pq_unsuite_info = PQUnsuiteInfo::MEMORY_LIMIT;
+    query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::MEMORY_LIMIT;
     goto print_info;
   }
 
   if (!choose_parallel_tables(true) || !check_pq_select_fields()) {
-    if (query_block->pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
-      query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
+    if (query_block->pq_context().pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
+      query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
     goto print_info;
   }
 
   {
     bool has_threads = check_pq_running_threads(
-        thd->pq_dop, thd->variables.parallel_queue_timeout);
+        thd->pq_context().dop, thd->variables.parallel_queue_timeout);
     if (!has_threads ||
         DBUG_EVALUATE_IF("no_available_idle_threads", true, false)) {
       atomic_add<uint>(parallel_threads_refused, 1);
-      query_block->pq_unsuite_info = PQUnsuiteInfo::IDLE_THREAD;
+      query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::IDLE_THREAD;
       goto print_info;
     }
   }
 
   if (!check_pq_support_features_switch()) {
-    query_block->pq_unsuite_info =
+    query_block->pq_context().pq_unsuite_info =
         PQUnsuiteInfo::DISABLED_IN_PQ_SUPPORT_FEATURES;
     goto print_info;
   }
 
   if (!is_suit_for_pq_based_cost()) {
-    query_block->pq_unsuite_info = PQUnsuiteInfo::PQ_COST_HIGHER;
+    query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::PQ_COST_HIGHER;
     goto print_info;
   }
 
-  query_block->parallel_exec = true;
-  thd->has_pq = true;  // pass the RBO & CBO
+  query_block->pq_context().parallel_exec = true;
+  thd->pq_context().has_pq = true;  // pass the RBO & CBO
 
   m_root_iterator =
       CreateIteratorFromAccessPath(thd, m_root_access_path, this, false);
@@ -566,7 +340,7 @@ bool JOIN::suite_for_parallel_query() {
 print_info:
   add_reason_to_trace(
       trace, query_block->select_number,
-      PQ_UNSUITABLE_INFO[static_cast<int>(query_block->pq_unsuite_info)]);
+      PQ_UNSUITABLE_INFO[static_cast<int>(query_block->pq_context().pq_unsuite_info)]);
   return false;
 }
 
@@ -584,7 +358,7 @@ static bool check_simple_agg(JOIN *join, bool &feature_switch_state) {
   //  4. no count distinct, which is controlled by
   //     PQ_SUPPORT_FEATURES_SWITCH_COUNT_DISTINCT.
   if (!join->query_block->is_implicitly_grouped() || join->primary_tables > 1 ||
-      join->has_count_distinct)
+      join->pq_context().has_count_distinct)
     return false;
 
   return true;
@@ -594,7 +368,7 @@ static bool check_count_distinct(JOIN *join, bool &feature_switch_state) {
   feature_switch_state = join->thd->pq_support_features_switch_flag(
       PQ_SUPPORT_FEATURES_SWITCH_COUNT_DISTINCT);
 
-  return join->has_count_distinct;
+  return join->pq_context().has_count_distinct;
 }
 
 /*
@@ -815,7 +589,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
   if (arg->type() == Item::REF_ITEM) {
     Item_ref *item_ref = down_cast<Item_ref *>(arg);
     if (pq_not_support_ref(item_ref)) {
-      join->query_block->pq_unsuite_info = PQUnsuiteInfo::UNSUPPORT_REF_TYPE;
+      join->query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::UNSUPPORT_REF_TYPE;
       return false;
     }
     if (item_ref->used_tables() & OUTER_REF_TABLE_BIT) {
@@ -823,7 +597,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
       // of the top query, and which is referenced by a subquery through
       // an alias: SELECT MIN(a) AS m ... WHERE (SELECT m ... )
       if (item_ref->real_item()->type() == Item::SUM_FUNC_ITEM) {
-        join->query_block->pq_unsuite_info = PQUnsuiteInfo::OUTREF_WITH_SUMITEM;
+        join->query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::OUTREF_WITH_SUMITEM;
         return false;
       }
       // Case of a merged {view or derived table}'s column which wraps a
@@ -851,7 +625,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
       // 'is_direct_view_ref').
       if (item_ref->ref_type() == Item_ref::VIEW_REF &&
           item_ref->has_subquery()) {
-        join->query_block->pq_unsuite_info = PQUnsuiteInfo::REF_WITH_SUBQUERY;
+        join->query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::REF_WITH_SUBQUERY;
         return false;
       }
     }
@@ -860,7 +634,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
   Item *const item = arg->real_item();
   if (!item) return false;
   if (pq_not_support_datatype(item->data_type())) {
-    join->query_block->pq_unsuite_info =
+    join->query_block->pq_context().pq_unsuite_info =
         PQUnsuiteInfo::UNSUPPORT_FUNCTION_DATATYPE;
     return false;
   }
@@ -871,7 +645,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
     assert(field);
     // not supported for generated column
     if (field && (field->is_gcol() || pq_not_support_datatype(field->type()))) {
-      join->query_block->pq_unsuite_info =
+      join->query_block->pq_context().pq_unsuite_info =
           PQUnsuiteInfo::UNSUPPORT_FUNCTION_DATATYPE;
       return false;
     }
@@ -880,7 +654,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
     assert(func);
 
     // check func type
-    if (pq_not_support_func(func, &join->query_block->pq_unsuite_info))
+    if (pq_not_support_func(func, &join->query_block->pq_context().pq_unsuite_info))
       return false;
 
     // the case of Item_in_optimizer
@@ -937,7 +711,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
     assert(cond);
 
     if (pq_not_support_functype(cond->functype())) {
-      join->query_block->pq_unsuite_info =
+      join->query_block->pq_context().pq_unsuite_info =
           PQUnsuiteInfo::UNSUPPORT_FUNCTION_DATATYPE;
       return false;
     }
@@ -953,10 +727,10 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
     if (item->const_item()) return false;
     Item_sum *sum = static_cast<Item_sum *>(item);
     if (!sum) return false;
-    join->has_count_distinct |=
+    join->pq_context().has_count_distinct |=
         (sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC);
     if (pq_not_support_aggr_functype(sum->sum_func())) {
-      join->query_block->pq_unsuite_info =
+      join->query_block->pq_context().pq_unsuite_info =
           PQUnsuiteInfo::UNSUPPORT_FUNCTION_DATATYPE;
       return false;
     }
@@ -966,7 +740,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
     }
 
     if (sum->has_with_distinct() && sum->has_blob_in_aggr()) {
-      join->query_block->pq_unsuite_info = PQUnsuiteInfo::AGGR_DISTINCT;
+      join->query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::AGGR_DISTINCT;
       return false;
     }
 
@@ -979,14 +753,14 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
         further down because the aggregation is made in the subquery (because
         the subquery in in the top Q's WHERE).
       */
-      join->query_block->pq_unsuite_info = PQUnsuiteInfo::SUMITEM_OUTREF;
+      join->query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::SUMITEM_OUTREF;
       return false;
     }
   } else if (item_type == Item::REF_ITEM) {
     // As 'item' is the result of real_item(), this branch is probably dead.
     Item_ref *item_ref = down_cast<Item_ref *>(item);
     if (pq_not_support_ref(item_ref)) {
-      join->query_block->pq_unsuite_info = PQUnsuiteInfo::UNSUPPORT_REF_TYPE;
+      join->query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::UNSUPPORT_REF_TYPE;
       return false;
     }
 
@@ -1032,7 +806,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
     // computed in the top query:
     // SELECT (SELECT .. ORDER BY MIN(t1.a)) FROM t1;
     if (item->has_aggregation()) {
-      join->query_block->pq_unsuite_info = PQUnsuiteInfo::SUMITEM_OUTREF;
+      join->query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::SUMITEM_OUTREF;
       return false;
     }
     auto *sub_item = down_cast<Item_subselect *>(item);
@@ -1040,7 +814,7 @@ static bool check_pq_support_fieldtype(Item *arg, JOIN *join) {
                               PQSubqueryExecution::kImpossible) {
       return true;
     }
-    join->query_block->pq_unsuite_info =
+    join->query_block->pq_context().pq_unsuite_info =
         PQUnsuiteInfo::UNSUPPORTED_SUBQUERY_TYPE;
     return false;
   } else if (item_type == Item::VALUES_COLUMN_ITEM) {
@@ -1170,7 +944,7 @@ bool JOIN::check_pq_select_fields() {
 
   tmp_all_fields = (last_slice_before_pq == REF_SLICE_SAVED_BASE)
                        ? fields
-                       : &tmp_fields0[last_slice_before_pq];
+                       : &pq_context().tmp_fields0[last_slice_before_pq];
   tmp_param = new (pq_check_root) Temp_table_param();
   if (!tmp_param) goto err;
   tmp_param->pq_copy(&tmp_table_param);
@@ -1179,7 +953,7 @@ bool JOIN::check_pq_select_fields() {
 
   suite_for_pq = pq_create_result_fields(thd, tmp_param, tmp_all_fields, true,
                                          query_block->active_options(),
-                                         &query_block->pq_unsuite_info);
+                                         &query_block->pq_context().pq_unsuite_info);
 err:
   // free the memory
   pq_check_root->Clear();
@@ -1202,32 +976,32 @@ bool JOIN::pq_copy_from(JOIN *orig) {
   explain_flags = orig->explain_flags;
   set_plan_state(orig->plan_state);
   zero_result_cause = orig->zero_result_cause;
-  idx_div_tab = orig->idx_div_tab;
-  idx_cut_tab = orig->idx_cut_tab;
+  pq_context().idx_div_tab = orig->pq_context().idx_div_tab;
+  pq_context().idx_cut_tab = orig->pq_context().idx_cut_tab;
   calc_found_rows = orig->calc_found_rows;
   m_select_limit = orig->m_select_limit;
   query_expression()->select_limit_cnt =
       orig->query_expression()->select_limit_cnt;
   query_expression()->offset_limit_cnt =
       orig->query_expression()->offset_limit_cnt;
-  if (query_block->parallel_exec) {
+  if (query_block->pq_context().parallel_exec) {
     // If there are workers, they should not apply offset, as it depends on
     // how many rows are returned by other workers. But if this is a cloned
     // correlated subquery, the worker is the single executor and should apply
     query_expression()->offset_limit_cnt = 0;
   }
-  pq_stable_sort = orig->pq_stable_sort;
-  saved_optimized_vars = orig->saved_optimized_vars;
+  pq_context().pq_stable_sort = orig->pq_context().pq_stable_sort;
+  pq_context().saved_optimized_vars = orig->pq_context().saved_optimized_vars;
   send_group_parts = orig->send_group_parts;
-  saved_join_order = query_block->saved_order_list_ptrs;
+  pq_context().saved_join_order = query_block->pq_context().saved_order_list_ptrs;
   found_const_table_map = orig->found_const_table_map;
-  has_count_distinct = orig->has_count_distinct;
+  pq_context().has_count_distinct = orig->pq_context().has_count_distinct;
 
-  if (orig->saved_join_group_list == orig->query_block->saved_group_list_ptrs) {
-    saved_join_group_list = query_block->saved_group_list_ptrs;
+  if (orig->pq_context().saved_join_group_list == orig->query_block->pq_context().saved_group_list_ptrs) {
+    pq_context().saved_join_group_list = query_block->pq_context().saved_group_list_ptrs;
   } else {
     SQL_I_List<ORDER> cloned_list;
-    for (auto group : *orig->saved_join_group_list) {
+    for (auto group : *orig->pq_context().saved_join_group_list) {
       ORDER *new_group = pq_dup_order(thd, query_block, group);
       if (!new_group ||
           find_order_in_list(
@@ -1239,13 +1013,13 @@ bool JOIN::pq_copy_from(JOIN *orig) {
     }
 
     if (query_block->save_order_properties(thd, &cloned_list,
-                                           &saved_join_group_list))
+                                           &pq_context().saved_join_group_list))
       return true;
   }
 
   // See comment in TABLE::pq_copy about partial result cache:
   best_rowcount = orig->best_rowcount;
-  pq_pushdown_having = orig->pq_pushdown_having;
+  pq_context().pq_pushdown_having = orig->pq_context().pq_pushdown_having;
 
   // Hypergraph optimizer doesn't create QEP_TABs, and PQ clones QEP_TABs.
   assert(!thd->lex->using_hypergraph_optimizer());
@@ -1289,7 +1063,7 @@ static inline bool check_div_table_rows_fetched(const QEP_TAB *qep_tab,
  */
 
 bool JOIN::choose_parallel_tables(bool do_mark) {
-  if (thd->no_pq || (!query_block->m_suite_for_pq)) return false;
+  if (thd->pq_context().no_pq || (!query_block->pq_context().m_suite_for_pq)) return false;
 
   bool is_correlated_subquery =
       (query_expression() &&
@@ -1303,8 +1077,8 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
       (has_lateral) || (query_block->fields.size() > MAX_FIELDS) ||
       (rollup_state != RollupState::NONE) ||
       query_block->pq_check_table_list()) {
-    if (query_block->pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
-      query_block->pq_unsuite_info = PQUnsuiteInfo::COST_OR_LATERAL;
+    if (query_block->pq_context().pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
+      query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::COST_OR_LATERAL;
     return false;
   }
 
@@ -1313,7 +1087,7 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
     for (uint i = 0; i < tables; i++) {
       TABLE *table = qep_tab[i].table();
       if (table && table->file->ht->db_type == DB_TYPE_DSTORE) {
-        query_block->pq_unsuite_info = PQUnsuiteInfo::ONLY_SUPPORT_INNODB;
+        query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::ONLY_SUPPORT_INNODB;
         return false;
       }
     }
@@ -1327,7 +1101,7 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
         if (prev_tbl &&
             !my_strcasecmp(table_alias_charset, prev_tbl->alias, tbl->alias) &&
             !strcmp(prev_tbl->db, tbl->db)) {
-          query_block->pq_unsuite_info = PQUnsuiteInfo::SYS_OR_TMP_TABLE;
+          query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::SYS_OR_TMP_TABLE;
           return false;
         }
       }
@@ -1387,16 +1161,16 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
             /** see the RBO computation method in second paragraph in last
              *  comment */
             uint64 pq_scan_records =
-                table_records / thd->pq_dop +
-                std::min(table_records / thd->pq_dop, estimate_groups) *
-                    thd->pq_dop;
+                table_records / thd->pq_context().dop +
+                std::min(table_records / thd->pq_context().dop, estimate_groups) *
+                    thd->pq_context().dop;
             if (pq_scan_records > orig_scan_records) {
 #ifndef NDEBUG
               sql_print_information(
                   "Parallel query: not support for group-by with indexing scan "
                   "as there are few records in each group");
 #endif  // NDEBUG
-              query_block->pq_unsuite_info = PQUnsuiteInfo::SCAN_RECORDS;
+              query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::SCAN_RECORDS;
               return false;
             }
           }
@@ -1410,8 +1184,8 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
   for (auto iter = query_block->fields.begin();
        iter != query_block->fields.end(); ++iter) {
     if (!check_pq_support_fieldtype(*iter, this)) {
-      if (query_block->pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
-        query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
+      if (query_block->pq_context().pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
+        query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
       return false;
     }
   }
@@ -1419,8 +1193,8 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
   // Check WHERE and HAVING condition.
   for (auto cond : {query_block->where_cond(), query_block->having_cond()}) {
     if (cond && !check_pq_support_fieldtype(cond, this)) {
-      if (query_block->pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
-        query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
+      if (query_block->pq_context().pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
+        query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
       return false;
     }
   }
@@ -1435,7 +1209,7 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
   // this scenario.
   if (query_block->having_cond() &&
       (query_block->having_cond()->used_tables() & OUTER_REF_TABLE_BIT)) {
-    query_block->pq_unsuite_info =
+    query_block->pq_context().pq_unsuite_info =
         PQUnsuiteInfo::HAVING_WITH_OUTER_REF_IN_SUBQUERY;
     return false;
   }
@@ -1443,8 +1217,8 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
   for (uint i = const_tables; i < tables; i++) {
     Item *cond = qep_tab[i].condition();
     if (cond && !check_pq_support_fieldtype(cond, this)) {
-      if (query_block->pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
-        query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
+      if (query_block->pq_context().pq_unsuite_info == PQUnsuiteInfo::INFO_NONE)
+        query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
       return false;
     }
   }
@@ -1505,7 +1279,7 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
           query_block->m_current_table_nest,
           &Item::walk_helper_thunk<decltype(is_correlated_subq)>,
           enum_walk::POSTFIX, reinterpret_cast<uchar *>(&is_correlated_subq))) {
-    query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
+    query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
     return false;
   }
 
@@ -1531,7 +1305,7 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
   // sense if this execution is known to be instant:
   if (tables_list == nullptr || zero_result_cause ||
       (primary_tables == const_tables)) {
-    query_block->pq_unsuite_info = PQUnsuiteInfo::ZERO_RESULT;
+    query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::ZERO_RESULT;
     return false;
   }
 
@@ -1554,13 +1328,13 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
             }
             return false;
           })) {
-        query_block->pq_unsuite_info = PQUnsuiteInfo::ORDER_BY_SUBQUERY;
+        query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::ORDER_BY_SUBQUERY;
         return false;
       }
     }
   }
-  if (need_tmp_before_win && has_count_distinct) {
-    query_block->pq_unsuite_info =
+  if (need_tmp_before_win && pq_context().has_count_distinct) {
+    query_block->pq_context().pq_unsuite_info =
         PQUnsuiteInfo::COUNT_DISTINCT_NOT_SUPPORT_NEED_TEMP;
     return false;
   }
@@ -1626,7 +1400,7 @@ bool JOIN::choose_parallel_tables(bool do_mark) {
   }
 
   if (div_tab < 0) {
-    query_block->pq_unsuite_info = PQUnsuiteInfo::NO_DIVIDED_TABLE;
+    query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::NO_DIVIDED_TABLE;
     return false;
   }
 
@@ -1634,15 +1408,15 @@ ok:
   // If do_mark, "save_XX" objects have already been createdy
   if (!do_mark) {
     // save temp table param for later PQ scan
-    saved_tmp_table_param = new (thd->pq_mem_root) Temp_table_param();
-    if (!saved_tmp_table_param ||
+    pq_context().saved_tmp_table_param = new (thd->pq_context().mem_root) Temp_table_param();
+    if (!pq_context().saved_tmp_table_param ||
         DBUG_EVALUATE_IF("have_error_in_saving", true, false)) {
-      query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_ERROR;
+      query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_ERROR;
       return false;
     }
     set_push_down_having();
-    saved_tmp_table_param->pq_copy(&tmp_table_param);
-    // saved optimized variables to saved_optimized_vars.
+    pq_context().saved_tmp_table_param->pq_copy(&tmp_table_param);
+    // saved optimized variables to pq_context().saved_optimized_vars.
     save_optimized_vars();
   }
   return true;
@@ -1661,12 +1435,12 @@ void check_pq_suite_for_insert_select(THD *thd, Query_block *query_block) {
   // b) Binlog is row based - need S locks for replication otherwise
   if ((thd->lex->sql_command == SQLCOM_INSERT_SELECT ||
        thd->lex->sql_command == SQLCOM_REPLACE_SELECT) &&
-      query_block->m_suite_for_pq &&
+      query_block->pq_context().m_suite_for_pq &&
       (!thd->pq_support_features_switch_flag(
            PQ_SUPPORT_FEATURES_SWITCH_INSERT_SELECT) ||  // a)
        !thd->is_current_stmt_binlog_format_row())) {     // b)
-    query_block->m_suite_for_pq = false;
-    query_block->pq_unsuite_info = PQUnsuiteInfo::SWITCH_INSERT_SELECT;
+    query_block->pq_context().m_suite_for_pq = false;
+    query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::SWITCH_INSERT_SELECT;
   }
 }
 
@@ -1681,29 +1455,29 @@ void disable_pq_if_limit_without_orderby(THD *thd, Query_block *query_block,
     2. The query block is implicitly grouped, resulting in only
     one row.
   */
-  if (query_block->m_suite_for_pq &&
+  if (query_block->pq_context().m_suite_for_pq &&
       !thd->variables.parallel_limit_no_order_by && query_block->has_limit() &&
       no_order_by && !query_block->m_internal_limit &&
       !(implicit_grouping || query_block->m_was_implicitly_grouped)) {
-    query_block->m_suite_for_pq = false;
-    query_block->pq_unsuite_info = PQUnsuiteInfo::LIMIT_NO_ORDERBY;
+    query_block->pq_context().m_suite_for_pq = false;
+    query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::LIMIT_NO_ORDERBY;
   }
 }
 
 void pq_save_join_group_list(THD *thd, Query_block *query_block,
                              ORDER *old_group_list, bool select_distinct,
                              Group_list_ptrs **join_group_list) {
-  if (query_block->m_suite_for_pq && query_block->is_distinct() &&
+  if (query_block->pq_context().m_suite_for_pq && query_block->is_distinct() &&
       old_group_list && !select_distinct) {
     // The group_list.order belongs to the JOIN object, so we save it in
-    // saved_join_group_list to differenciate between the group_list we save
+    // pq_context().saved_join_group_list to differenciate between the group_list we save
     // from the JOIN and the one we save from the query_block, that is saved in
     // saved_group_list_ptrs
     SQL_I_List<ORDER> tmp_list;
     if (old_group_list->convert_to_list(tmp_list, thd) ||
         query_block->save_order_properties(thd, &tmp_list, join_group_list)) {
-      query_block->m_suite_for_pq = false;
-      query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_ERROR;
+      query_block->pq_context().m_suite_for_pq = false;
+      query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_ERROR;
     }
   }
 }

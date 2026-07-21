@@ -289,7 +289,7 @@ bool JOIN::create_intermediate_table(
     if (m_ordered_index_usage != ORDERED_INDEX_GROUP_BY &&
         add_sorting_to_table(const_tables, &group_list,
                              /*sort_before_group=*/true)) {
-      pq_last_sort_idx = const_tables;
+      pq_context().pq_last_sort_idx = const_tables;
       goto err;
     }
 
@@ -439,7 +439,7 @@ bool setup_sum_funcs(THD *thd, Item_sum **func_ptr) {
          ((func->get_aggr()->Aggrtype() == Aggregator::DISTINCT_AGGREGATOR) &&
           !dynamic_cast<Aggregator_distinct *>(func->get_aggr())
                ->has_using_tree_to_unqiue()))) {
-      func->base_query_block->m_suite_for_pq = false;
+      func->base_query_block->pq_context().m_suite_for_pq = false;
       if (current_thd->is_pq_worker()) return true;
     }
   }
@@ -1426,8 +1426,8 @@ static AccessPath *NewWeedoutAccessPathForTables(
   // optimization of the single-threaded JOIN takes us here, we disable PQ. By
   // disabling PQ at this moment, PQ plan cloning should not come here later,
   // which is asserted.
-  join->query_block->m_suite_for_pq = false;
-  join->query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
+  join->query_block->pq_context().m_suite_for_pq = false;
+  join->query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_UNSUITE;
   assert(!thd->is_pq_worker());
 
   SJ_TMP_TABLE *sjtbl =
@@ -2065,8 +2065,8 @@ static inline void pq_rewrite_rowcount(AccessPath *path, double &rows_fetched,
        (path->filter().qep_tab != nullptr) &&
        (path->filter().qep_tab->pq_div_tab ||
         path->filter().qep_tab->pq_cut_tab))) {
-    rows_fetched /= current_thd->pq_dop;
-    prefix_rowcount /= current_thd->pq_dop;
+    rows_fetched /= current_thd->pq_context().dop;
+    prefix_rowcount /= current_thd->pq_context().dop;
   }
 }
 
@@ -2152,7 +2152,8 @@ static void UpdateNestedLoopAccessPathCost(
   if ((div_table_map != 0) &&
       ((GetUsedTableMap(inner, true) & div_table_map) ||
        (GetUsedTableMap(outer, true) & div_table_map))) {
-    path->cost = outer->cost + (pos_inner->read_cost / current_thd->pq_dop) +
+    path->cost = outer->cost +
+                 (pos_inner->read_cost / current_thd->pq_context().dop) +
                  cost_model.row_evaluate_cost(joined_rows);
   }
 
@@ -2309,17 +2310,18 @@ static AccessPath *CreateHashJoinAccessPath(
       // parallel query (parallel hash_join_spill_to_disk is OFF), and we expect
       // single worker spill to disk to outperform parallel query without spill
       // to disk.
-      qep_tab->join()->query_block->m_suite_for_pq = false;
-      qep_tab->join()->query_block->pq_unsuite_info =
+      qep_tab->join()->query_block->pq_context().m_suite_for_pq = false;
+      qep_tab->join()->query_block->pq_context().pq_unsuite_info =
           PQUnsuiteInfo::HASH_JOIN_SPILL;
     }
   }
 
-  if (thd->pq_leader != nullptr) {
+  if (thd->pq_context().leader != nullptr) {
     // If we are executing a PQ hash join (both parallel-oblivious and
     // parallel-aware), we need to tell the leader THD that the VfdManager must
     // be mutex protected as all workers will use the same VfdManager.
-    thd->pq_leader->m_vfd_manager->SetNeedsMutex(/*needs_mutex=*/true);
+    thd->pq_context().leader->m_vfd_manager->SetNeedsMutex(
+        /*needs_mutex=*/true);
   }
 
   table_map left_table_map =
@@ -3351,10 +3353,10 @@ void JOIN::create_access_paths() {
 }
 
 AccessPath *JOIN::create_root_access_path_for_join() {
-  // When creating a PQ leader or worker plan, if idx_div_tab is not -1,
+  // When creating a PQ leader or worker plan, if pq_context().idx_div_tab is not -1,
   // we use it to determine whether to use innodb-based parallel execution
   // for `count(*)`.
-  if (select_count && idx_div_tab == -1) {
+  if (select_count && pq_context().idx_div_tab == -1) {
     return NewUnqualifiedCountAccessPath(thd);
   }
 
@@ -3370,14 +3372,14 @@ AccessPath *JOIN::create_root_access_path_for_join() {
     // Only const tables, so add a fake single row (or the rewritten table ) to
     // join in all the const tables (only inner-joined tables are promoted to
     // const tables in the optimizer).
-    if (need_tmp_pq_leader) {
-      assert(query_block->parallel_exec && !thd->is_pq_worker());
+    if (pq_context().need_tmp_pq_leader) {
+      assert(query_block->pq_context().parallel_exec && !thd->is_pq_worker());
       QEP_TAB *tab = &qep_tab[0];
       assert(tab->split_table()
                  ->file->do_parallel_scan); /** pass info to storage engine */
       path =
           NewParallelScanAccessPath(thd, tab, tab->table(), this, tab->gather,
-                                    pq_stable_sort, m_root_access_path);
+                                    pq_context().pq_stable_sort, m_root_access_path);
       EstimatePQGatherOperatorCost(path, thd);
     } else {
       path = NewFakeSingleRowAccessPath(thd, /*count_examined_rows=*/true);
@@ -4159,7 +4161,8 @@ bool QEP_TAB::use_order() const {
 AccessPath *QEP_TAB::access_path() {
   assert(table());
   // Only some access methods support reversed access:
-  assert(current_thd->has_pq || !m_reversed_access || type() == JT_REF ||
+  assert(current_thd->pq_context().has_pq || !m_reversed_access ||
+         type() == JT_REF ||
          type() == JT_INDEX_SCAN);
   Index_lookup *used_ref = nullptr;
   AccessPath *path = nullptr;
@@ -4303,12 +4306,12 @@ AccessPath *QEP_TAB::access_path() {
     if (non_constant_look_up)
       path = NewPQrefScanAccessPath(current_thd, table(), gather,
                                     pq_div_tab ? DIV_TAB : CUT_TAB,
-                                    join()->pq_stable_sort, used_ref,
+                                    join()->pq_context().pq_stable_sort, used_ref,
                                     m_reversed_access, use_order(), this);
     else
       path = NewPQblockScanAccessPath(current_thd, table(), gather,
                                       pq_div_tab ? DIV_TAB : CUT_TAB, this,
-                                      join()->pq_stable_sort);
+                                      join()->pq_context().pq_stable_sort);
     SetCostOnTableAccessPath(*current_thd->cost_model(), position(),
                              /*is_after_filter=*/false, path);
   }

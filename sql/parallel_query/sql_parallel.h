@@ -49,31 +49,6 @@ struct PQ_REF_VAL {
   uint keylen;
 };
 
-/** optimized variables */
-struct PQ_optimized_var {
-  bool pq_grouped;
-  bool pq_implicit_grouping;
-  bool pq_simple_group;
-  bool pq_simple_order;
-  bool pq_streaming_aggregation;
-  bool pq_group_optimized_away;
-  bool pq_need_tmp_before_win;
-  bool pq_skip_sort_order;
-  int pq_m_ordered_index_usage;
-
-  /*
-   * optimized_*_flags record each element in Query_block->group_list (or
-   * order_list) is optimized or not. Specifically, optimized_group_flags[i] = 1
-   * means that group_list[i] is optimized in JOIN::optimize(); otherwise,
-   * pq_group_optimized[i] = 0 and group_list[i] is remained in
-   * JOIN::group_list.
-   */
-  std::vector<bool> optimized_group_flags;
-  std::vector<bool> optimized_order_flags;
-  bool pq_select_distinct;  // for distinct
-  Item *pq_saved_having_cond{nullptr};
-};
-
 enum PQ_exec_status { SEQ_EXEC = 0, PARL_EXEC, ABORT_EXEC };
 
 enum PQ_worker_state {

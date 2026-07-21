@@ -7,15 +7,16 @@
 
 | 项目 | 值 |
 |---|---|
-| implementation commit | `1f6c4a5cbeab86dddcf8da7cdb3a3c29bb3509a9` |
-| branch | `stable_branch` |
+| implementation commit | `1b9ffd755d4` |
+| branch | `pq-local-refactor-clean` |
 | bound PQ source/test tree | `clean` |
-| captured at | `2026-07-20` |
+| base-to-HEAD policy | `source-only` |
+| captured at | `2026-07-21` |
 | source hash scope | `sql/parallel_query/** plus storage/innobase/include/row0pread_pq.h, storage/innobase/row/row0pread_pq.cc, storage/innobase/handler/ha_innodb_pq.cc` |
 | external source evidence | other SQL/InnoDB integration paths are commit-bound path::symbol static evidence only; they are not individually content-hashed |
 | test hash scope | `mysql-test/suite/parallel_query/t/*.test plus r/*.result-pq on stable_branch` |
-| build verified | `true` |
-| MTR verified | `true` |
+| build verified | `partial` |
+| MTR verified | `partial` |
 
 `dirty` 只表示 manifest 声明的 PQ source/test 路径存在未提交修改；
 无关 build/log 文件不影响本清单。运行验证范围见
@@ -25,10 +26,10 @@
 
 | 范围 | workspace | tracked | SHA-256 tree digest |
 |---|---:|---:|---|
-| `sql/parallel_query/` | 33 files / 17802 lines | n/a | `a44b667674af59160db9442dd779a608af349c88a67712b1f364ce4a8a5af90d`（含下列 InnoDB PQ 文件） |
+| `sql/parallel_query/` | 35 files / 17985 lines | n/a | `609432f98785fe9be9d8db8e9c346de18bcc3f0b52c46716e7a7f6a4e83323f9`（含下列 InnoDB PQ 文件） |
 | InnoDB PQ core | 3 files / 2264 lines | n/a | 同上 |
-| PQ `.test` | 98 | 98 | `066ac7d1945da34e0d1418973542e5f6f94b33529b996185d0498d182331b9f6`（与 result 合并） |
-| PQ `.result-pq` | 98 | 98 | 同上 |
+| PQ `.test` | 99 | 99 | `8c59c7d8af6db3feffa377ca1aab9de9a822b6a80e2091e7b1cfd1db01b43bea`（与 result 合并） |
+| PQ `.result-pq` | 99 | 99 | 同上 |
 
 ## 3. SQL/PQ 源文件
 
@@ -47,6 +48,8 @@
 - `sql/parallel_query/pq_clone.cc`
 - `sql/parallel_query/pq_clone.h`
 - `sql/parallel_query/pq_clone_item.cc`
+- `sql/parallel_query/pq_context.cc`
+- `sql/parallel_query/pq_context.h`
 - `sql/parallel_query/pq_handler.cc`
 - `sql/parallel_query/pq_handler.h`
 - `sql/parallel_query/pq_hash_join_shared_context.cc`
@@ -81,6 +84,7 @@
 - `mysql-test/suite/parallel_query/t/parallel_replace_select_behavior_changes.test`
 - `mysql-test/suite/parallel_query/t/pq_abort.test`
 - `mysql-test/suite/parallel_query/t/pq_agg_distinct.test`
+- `mysql-test/suite/parallel_query/t/pq_agg_distinct_debug.test`
 - `mysql-test/suite/parallel_query/t/pq_aggr_no_record.test`
 - `mysql-test/suite/parallel_query/t/pq_audit_log.test`
 - `mysql-test/suite/parallel_query/t/pq_auto_retry_failed_parallel_query.test`
@@ -182,6 +186,7 @@
 - `mysql-test/suite/parallel_query/r/parallel_replace_select_behavior_changes.result-pq`
 - `mysql-test/suite/parallel_query/r/pq_abort.result-pq`
 - `mysql-test/suite/parallel_query/r/pq_agg_distinct.result-pq`
+- `mysql-test/suite/parallel_query/r/pq_agg_distinct_debug.result-pq`
 - `mysql-test/suite/parallel_query/r/pq_aggr_no_record.result-pq`
 - `mysql-test/suite/parallel_query/r/pq_audit_log.result-pq`
 - `mysql-test/suite/parallel_query/r/pq_auto_retry_failed_parallel_query.result-pq`

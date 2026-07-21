@@ -1905,10 +1905,10 @@ static void retry_without_parallel_query(THD *thd, Parser_state *parser_state,
   // chosen again.
   auto saved_parallel_cost_threshold = thd->variables.parallel_cost_threshold;
   thd->variables.parallel_cost_threshold = ULONG_MAX;
-  thd->no_pq = true;
+  thd->pq_context().no_pq = true;
 
   // Restart the statement.
-  thd->retry_without_pq = true;
+  thd->pq_context().retry_without_pq = true;
 
   dispatch_sql_command(thd, parser_state, /*clean_pq_variables=*/true);
 
@@ -2552,7 +2552,7 @@ bool dispatch_command(THD *thd, const COM_DATA *com_data,
 
         log_slow_statement(thd);
 
-        thd->pq_executed = false;
+        thd->pq_context().executed = false;
 
         thd->reset_copy_status_var();
 
@@ -2957,7 +2957,7 @@ done:
 
   log_slow_statement(thd);
 
-  thd->pq_executed = false;
+  thd->pq_context().executed = false;
 
   THD_STAGE_INFO(thd, stage_cleaning_up);
 
@@ -3476,7 +3476,7 @@ int mysql_execute_command(THD *thd, bool first_level) {
     return 1;
   }
 
-  if (!read_only && !pq_master_enable) thd->no_pq = true;
+  if (!read_only && !pq_master_enable) thd->pq_context().no_pq = true;
 
   /*
     pq_dop maybe already set when parse pq hint, only update pq_dop if
@@ -3484,8 +3484,8 @@ int mysql_execute_command(THD *thd, bool first_level) {
     check no_pq here is that we want to separate PQUnsuiteInfo in function
     THD::suite_for_parallel_query.
   */
-  if (thd->variables.force_parallel_execute && (thd->pq_dop == 0))
-    thd->pq_dop = thd->variables.parallel_default_dop;
+  if (thd->variables.force_parallel_execute && (thd->pq_context().dop == 0))
+    thd->pq_context().dop = thd->variables.parallel_default_dop;
 
   /*
     If there is a CREATE TABLE...START TRANSACTION command which
@@ -3551,7 +3551,7 @@ int mysql_execute_command(THD *thd, bool first_level) {
     thd->get_stmt_da()->reset_condition_info(thd);
   }
 
-  if (thd->retry_without_pq) {
+  if (thd->pq_context().retry_without_pq) {
     // The query failed executing with parallel query, so we are now retrying
     // without parallel query. Send a warning to the client so they are aware of
     // this.
@@ -5944,8 +5944,8 @@ void THD::reset_for_next_command() {
   */
   thd->security_context()->checkout_access_maps();
 
-  thd->has_pq = false;
-  thd->pq_executed = false;
+  thd->pq_context().has_pq = false;
+  thd->pq_context().executed = false;
 
 #ifndef NDEBUG
   thd->set_tmp_table_seq_id(1);

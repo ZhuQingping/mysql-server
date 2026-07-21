@@ -883,7 +883,7 @@ bool Table_ref::setup_materialized_derived_tmp_table(THD *thd)
     // workers is base on rollup tmp table, which mismatch with leader' derived
     // tmp table fields. Rollup lack PQ infrastructure currently, so we should
     // disable this case.
-    if (derived_contain_rollup_item(derived)) thd->no_pq = true;
+    if (derived_contain_rollup_item(derived)) thd->pq_context().no_pq = true;
 
     if (m_derived_column_names) {
       /*

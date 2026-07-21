@@ -835,7 +835,8 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
         // iterator of worker's plan, this iterator only used to gather workers'
         // execution timing info, for this scenario, do not create parallel hash
         // join shared context.
-        if (thd->has_pq && !thd->pq_leader_create_fake_iter) {
+        if (thd->pq_context().has_pq &&
+            !thd->pq_context().leader_create_fake_iter) {
           // If parallel hash_join_spill_to_disk is OFF, go back to the old
           // behavior where spill to disk was not supported for parallel hash
           // join (it could easily create an excessive amount of files, hitting
@@ -865,7 +866,7 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
 
             if (path->hash_join().partial_results_from_build_input &&
                 path->hash_join().partial_results_from_probe_input) {
-              pq_hash_join = thd->pq_worker_info->m_gather
+              pq_hash_join = thd->pq_context().worker_info->m_gather
                                  ->m_pq_hash_join_shared_context.get();
               assert(!use_bloom_filter && pq_hash_join);
             }
@@ -1077,14 +1078,14 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
             bool pass = false;
             if (param->unit) {
               auto parent_query_block = param->unit->outer_query_block();
-              if (parent_query_block->parallel_exec)
+              if (parent_query_block->pq_context().parallel_exec)
                 pass = true;
               else {
                 auto parent_unit =
                     parent_query_block->master_query_expression();
                 if (parent_unit->subquery_suite_for_parallel_query() ==
                         PQSubqueryExecution::kMultipleByWorkers &&
-                    parent_unit->outer_query_block()->parallel_exec)
+                    parent_unit->outer_query_block()->pq_context().parallel_exec)
                   pass = true;
               }
             }
@@ -1099,7 +1100,7 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
               // iterator already created, not create again during create fake
               // worker plan's running iterator, TPC-H query 13 scenario.
               job.children[i + 1] = nullptr;
-              if (!thd->pq_leader_create_fake_iter ||
+              if (!thd->pq_context().leader_create_fake_iter ||
                   !from.subquery_path->iterator) {
                 todo.push_back({from.subquery_path,
                                 from.join,
@@ -1363,7 +1364,7 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
             thd, mem_root, path->pq_block_scan().table, estimated_build_rows,
             examined_rows, path->pq_block_scan().tabType, gather,
             path->pq_block_scan().qep_tab, path->pq_block_scan().need_rowid,
-            join->m_msg_handler);
+            join->pq_context().m_msg_handler);
         break;
       }
       case AccessPath::PQ_REF_SCAN: {
@@ -1819,7 +1820,7 @@ void MarkCutTable(AccessPath *root_access_path, const JOIN *join) {
     }
   }
 
-  // Since we did an assert on join->thd->has_pq, we should find a divided
+  // Since we did an assert on join->thd->pq_context().has_pq, we should find a divided
   // table.
   assert(divided_table_map > 0);
 
@@ -1926,9 +1927,10 @@ bool MarkPartialInputsForHashJoin(AccessPath *root_access_path,
         // has not already been so (which should mean that we're gather).
         if (gather->m_pq_hash_join_shared_context == nullptr) {
           HashJoin::PQHashJoinSharedContext *pq_hash_join =
-              new (join->thd->pq_leader->pq_mem_root)
+              new (join->thd->pq_context().leader->pq_context().mem_root)
                   HashJoin::PQHashJoinSharedContext(
-                      join->thd->pq_dop, join->thd->variables.join_buff_size);
+                      join->thd->pq_context().dop,
+                      join->thd->variables.join_buff_size);
           if (pq_hash_join == nullptr) {
             mark_partial_inputs = true;
             return true;

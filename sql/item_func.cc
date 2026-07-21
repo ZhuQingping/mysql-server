@@ -6623,7 +6623,7 @@ static int get_var_with_binlog(THD *thd, enum_sql_command sql_command,
   user_var_entry *var_entry;
 
   /* obtain user variables from leader thread */
-  THD *entry_thd = thd->is_pq_worker() ? thd->pq_leader : thd;
+  THD *entry_thd = thd->is_pq_worker() ? thd->pq_context().leader : thd;
   /* Protects thd->user_vars. */
   mysql_mutex_lock(&entry_thd->LOCK_thd_data);
   var_entry = get_variable(entry_thd, name, NULL);

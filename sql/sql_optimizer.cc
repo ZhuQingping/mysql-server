@@ -223,16 +223,16 @@ bool JOIN::alloc_indirection_slices() {
   const int num_slices = REF_SLICE_WIN_1 + m_windows.elements;
 
   assert(ref_items == nullptr);
-  ref_items0 = (*THR_MALLOC)->ArrayAlloc<Ref_item_array>(num_slices);
-  if (ref_items0 == nullptr) return true;
+  pq_context().ref_items0 = (*THR_MALLOC)->ArrayAlloc<Ref_item_array>(num_slices);
+  if (pq_context().ref_items0 == nullptr) return true;
 
-  tmp_fields0 =
+  pq_context().tmp_fields0 =
       (*THR_MALLOC)
           ->ArrayAlloc<mem_root_deque<Item *>>(num_slices, *THR_MALLOC);
-  if (tmp_fields0 == nullptr) return true;
+  if (pq_context().tmp_fields0 == nullptr) return true;
 
-  ref_items = ref_items0;
-  tmp_fields = tmp_fields0;
+  ref_items = pq_context().ref_items0;
+  tmp_fields = pq_context().tmp_fields0;
 
   return false;
 }
@@ -362,9 +362,9 @@ bool JOIN::optimize(bool finalize_access_paths) {
   trace_optimize.add_select_number(query_block->select_number);
   Opt_trace_array trace_steps(trace, "steps");
 
-  bool saved_no_pq = thd->no_pq;
+  bool saved_no_pq = thd->pq_context().no_pq;
   auto restore_no_pq_guard =
-      create_scope_guard([this, saved_no_pq]() { thd->no_pq = saved_no_pq; });
+      create_scope_guard([this, saved_no_pq]() { thd->pq_context().no_pq = saved_no_pq; });
 
   const bool has_windows = m_windows.elements != 0;
 
@@ -609,7 +609,7 @@ bool JOIN::optimize(bool finalize_access_paths) {
     // Make plan visible for EXPLAIN
     set_plan_state(NO_TABLES);
     create_access_paths();
-    query_block->m_suite_for_pq = choose_parallel_tables(false);
+    query_block->pq_context().m_suite_for_pq = choose_parallel_tables(false);
     return false;
   }
   error = -1;  // Error is sent to client
@@ -1051,7 +1051,7 @@ bool JOIN::optimize(bool finalize_access_paths) {
 
   check_pq_suite_for_insert_select(thd, query_block);
 
-  query_block->m_suite_for_pq = choose_parallel_tables(false);
+  query_block->pq_context().m_suite_for_pq = choose_parallel_tables(false);
 
   if (make_join_readinfo(this, no_jbuf_after))
     return true; /* purecov: inspected */
@@ -1158,7 +1158,7 @@ setup_subq_exit:
     unplug_join_tabs();
   }
 
-  query_block->m_suite_for_pq = choose_parallel_tables(false);
+  query_block->pq_context().m_suite_for_pq = choose_parallel_tables(false);
   set_plan_state(ZERO_RESULT);
   return false;
 }
@@ -1369,14 +1369,14 @@ bool JOIN::alloc_qep(uint n) {
 
   ASSERT_BEST_REF_IN_JOIN_ORDER(this);
 
-  qep_tab0 = new (thd->mem_root)
+  pq_context().qep_tab0 = new (thd->mem_root)
       QEP_TAB[n + 1];         // The last one holds only the final op_type.
-  if (!qep_tab0) return true; /* purecov: inspected */
+  if (!pq_context().qep_tab0) return true; /* purecov: inspected */
   for (uint i = 0; i < n; ++i) {
-    qep_tab0[i].init(best_ref[i]);
-    qep_tab0[i].pos = i;
+    pq_context().qep_tab0[i].init(best_ref[i]);
+    pq_context().qep_tab0[i].pos = i;
   }
-  qep_tab = qep_tab0;
+  qep_tab = pq_context().qep_tab0;
 
   return false;
 }
@@ -1678,7 +1678,7 @@ bool JOIN::optimize_distinct_group_order() {
   ORDER *old_group_list = group_list.order;
 
   pq_save_join_group_list(thd, query_block, old_group_list, select_distinct,
-                          &saved_join_group_list);
+                          &pq_context().saved_join_group_list);
 
   group_list = ORDER_with_src(
       remove_const(group_list.order, where_cond,
@@ -5033,7 +5033,7 @@ static bool change_cond_ref_to_const(THD *thd, I_List<COND_CMP> *save_list,
       args[0] = args[1];  // For easy check
       thd->change_item_tree(args + 1, value);
       // The two lines above form an inconsistent mix which harms PQ [1]
-      thd->no_pq = true;
+      thd->pq_context().no_pq = true;
       cond->marker = Item::MARKER_CONST_PROPAG;
       COND_CMP *const cond_cmp = new COND_CMP(and_father, func);
       if (cond_cmp == nullptr) return true;
@@ -12248,7 +12248,7 @@ double EstimateRowAccesses(const AccessPath *path, double num_evaluations,
                                             num_materializations, kNoLimit);
 #ifndef NDEBUG
               else
-                assert(current_thd->has_pq);
+                assert(current_thd->pq_context().has_pq);
 #endif
             }
             return true;

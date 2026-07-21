@@ -92,7 +92,7 @@ bool POSITION::pq_copy(THD *thd, QEP_TAB *orig_tab) {
   if (orig_tab->ref().key != -1) {
     const bool for_plan_cache =
         plan_cache::is_clone_for_plan_cache(orig_tab->join()->query_block);
-    const auto mem_root = for_plan_cache ? thd->mem_root : thd->pq_mem_root;
+    const auto mem_root = for_plan_cache ? thd->mem_root : thd->pq_context().mem_root;
     Key_use_array *key_uses = new (mem_root) Key_use_array(mem_root);
     if (!key_uses) return true;
     uint keyparts, length;
@@ -170,7 +170,7 @@ bool QEP_TAB::pq_copy(THD *thd, QEP_TAB *orig) {
 
   const bool for_plan_cache =
       plan_cache::is_clone_for_plan_cache(orig->join()->query_block);
-  const auto mem_root = for_plan_cache ? thd->mem_root : thd->pq_mem_root;
+  const auto mem_root = for_plan_cache ? thd->mem_root : thd->pq_context().mem_root;
   if (orig->position()) {
     POSITION *position = new (mem_root) POSITION;
     if (!position || position->pq_copy(thd, orig)) return true;
@@ -380,7 +380,7 @@ static bool pq_clone_sj_mat_exec(THD *thd, Query_block *select, QEP_TAB *tab,
   count_field_types(select, &sj_mat_exec->table_param, nj->sj_inner_exprs,
                     false, true);
   sj_mat_exec->table_param.bit_fields_as_long = true;
-  char *name = strmake_root(thd->pq_mem_root, orig_tab->table_ref->table_name,
+  char *name = strmake_root(thd->pq_context().mem_root, orig_tab->table_ref->table_name,
                             orig_tab->table_ref->table_name_length);
   TABLE *table;
   if (!(table = create_tmp_table(
@@ -433,7 +433,7 @@ static bool pq_set_table_ref(THD *thd, JOIN *cloned_join, QEP_TAB *tab,
     // exists out of this list, created by the optimization process. Thus every
     // worker needs to clone it when it clones the relevant QEP_TAB, which is
     // done here.
-    tbl = new (thd->pq_mem_root) Table_ref();
+    tbl = new (thd->pq_context().mem_root) Table_ref();
     if (!tbl) return true;
     if (tbl->pq_copy(thd, orig_tbl)) return true;
     tbl->query_block = select;
@@ -519,10 +519,10 @@ bool pq_dup_tabs(JOIN *join, JOIN *top_orig, bool gather) {
                      : list_query_blocks_to_clone(orig->query_block);
 
   const auto mem_root =
-      for_plan_cache ? join->thd->mem_root : join->thd->pq_mem_root;
+      for_plan_cache ? join->thd->mem_root : join->thd->pq_context().mem_root;
 
   auto exit_guard =
-      create_scope_guard([&]() { join->thd->clone_phase = THD::PQ_UNKONWN; });
+      create_scope_guard([&]() { join->thd->pq_context().clone_phase = PQ_clone_phase::UNKNOWN; });
 
   for (const auto query_block : query_blocks_to_clone) {
     if (!for_plan_cache) {
@@ -551,7 +551,7 @@ bool pq_dup_tabs(JOIN *join, JOIN *top_orig, bool gather) {
     Switch_for_resolution_of_query_block switch_resol(
         thd->lex, select, query_block != top_orig->query_block);
 
-    join->thd->clone_phase = THD::PQ_OPTIMIZE;
+    join->thd->pq_context().clone_phase = PQ_clone_phase::OPTIMIZE;
     // It can happen that orig->qep_tab==nullptr if this is a correlated
     // subquery executed by a worker and having a zero_result_cause. In this
     // case, the clone shouldn't get QEP_TABs either.
@@ -559,9 +559,9 @@ bool pq_dup_tabs(JOIN *join, JOIN *top_orig, bool gather) {
       // create qep_tab
       QEP_shared *qs = new (mem_root) QEP_shared[join->tables + 1];
       if (!qs) return true;
-      join->qep_tab0 = new (mem_root) QEP_TAB[join->tables + 1];
-      if (!join->qep_tab0) return true;
-      join->qep_tab = join->qep_tab0;
+      join->pq_context().qep_tab0 = new (mem_root) QEP_TAB[join->tables + 1];
+      if (!join->pq_context().qep_tab0) return true;
+      join->qep_tab = join->pq_context().qep_tab0;
 
       for (uint i = 0; i < join->tables; i++) {
         join->qep_tab[i].set_qs(&qs[i]);
@@ -765,7 +765,7 @@ bool pq_dup_tabs(JOIN *join, JOIN *top_orig, bool gather) {
  */
 ORDER *pq_dup_order(THD *thd, Query_block *select, ORDER *orig) {
   const bool for_plan_cache = plan_cache::is_clone_for_plan_cache(select);
-  const auto mem_root = for_plan_cache ? thd->mem_root : thd->pq_mem_root;
+  const auto mem_root = for_plan_cache ? thd->mem_root : thd->pq_context().mem_root;
   ORDER *order = new (mem_root) ORDER();
   if (!order) return nullptr;
   order->next = nullptr;
@@ -900,7 +900,7 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
     This is the root query block of an independent PQ phase, we're going to
     duplicate the tree of UNITs. All members of this tree share the same THD.
   */
-  LEX *lex = new (thd->pq_mem_root) LEX();
+  LEX *lex = new (thd->pq_context().mem_root) LEX();
   if (!lex) return nullptr;
   lex->reset();
   lex->result = top_orig->parent_lex->result;
@@ -930,7 +930,7 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
     assert(orig_unit->subquery_suite_for_parallel_query() ==
            PQSubqueryExecution::kMultipleByWorkers);
     assert(orig_unit->first_query_block() == orig && !orig->next_query_block());
-    assert(orig->m_suite_for_pq);
+    assert(orig->pq_context().m_suite_for_pq);
     // clone this subquery as a part of the parent query. A subquery
     // which is at the root of an independent PQ phase is NOT cloned here, it is
     // handled by the separate phase.
@@ -951,7 +951,7 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
   }
 
   thd->mark_used_columns = MARK_COLUMNS_READ;
-  thd->clone_phase = THD::PQ_PREPARE;
+  thd->pq_context().clone_phase = PQ_clone_phase::PREPARE;
 
   for (auto orig : query_blocks_to_clone) {
     Query_block *select = orig->pq_last_clone();
@@ -965,11 +965,11 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
     select->select_n_having_items = orig->select_n_having_items;
     select->select_n_where_fields = orig->select_n_where_fields;
     select->m_active_options = orig->m_active_options;
-    select->parallel_exec = orig->parallel_exec;
+    select->pq_context().parallel_exec = orig->pq_context().parallel_exec;
     select->hidden_group_field_count = orig->hidden_group_field_count;
     select->hidden_order_field_count = orig->hidden_order_field_count;
-    select->check_map_group_to_base = orig->check_map_group_to_base;
-    select->check_map_order_to_base = orig->check_map_order_to_base;
+    select->pq_context().check_map_group_to_base = orig->pq_context().check_map_group_to_base;
+    select->pq_context().check_map_order_to_base = orig->pq_context().check_map_order_to_base;
     select->opt_hints_qb = orig->opt_hints_qb;
     select->nest_level = orig->nest_level;
     select->uncacheable = orig->uncacheable;
@@ -985,15 +985,15 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
       // We want to push everything to worker, mark const table non-const
       tbl_list->table->const_table = false;
       LEX_CSTRING *db_name =
-          new (thd->pq_mem_root) LEX_CSTRING{tbl_list->db, tbl_list->db_length};
-      LEX_CSTRING *tbl_name = new (thd->pq_mem_root)
+          new (thd->pq_context().mem_root) LEX_CSTRING{tbl_list->db, tbl_list->db_length};
+      LEX_CSTRING *tbl_name = new (thd->pq_context().mem_root)
           LEX_CSTRING{tbl_list->table_name, tbl_list->table_name_length};
       Table_ident *tbl_ident =
-          new (thd->pq_mem_root) Table_ident(*db_name, *tbl_name);
+          new (thd->pq_context().mem_root) Table_ident(*db_name, *tbl_name);
       tbl_ident->sel = tbl_list->is_view_or_derived()
                            ? tbl_list->derived_query_expression()
                            : nullptr;
-      char *db_alias = strmake_root(thd->pq_mem_root, tbl_list->alias,
+      char *db_alias = strmake_root(thd->pq_context().mem_root, tbl_list->alias,
                                     strlen(tbl_list->alias));
       if (!db_name || !tbl_name || !tbl_ident || !db_alias) return nullptr;
       auto new_tbl_list =
@@ -1114,7 +1114,7 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
 
         /** restore derived types property */
         reset_avg_property(*derived->get_unit_column_types());
-        mem_root_deque<Item *> visible_fields(thd->pq_mem_root);
+        mem_root_deque<Item *> visible_fields(thd->pq_context().mem_root);
         for (Item *item : VisibleFields(*derived->get_unit_column_types())) {
           visible_fields.push_back(item);
           item->swap_pq_derived_info();
@@ -1185,7 +1185,7 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
             orig->join->thd->is_pq_leader() && orig == top_orig &&
             tbl_list->common_table_expr()) {
           Common_table_expr *common_table_expr =
-              new (thd->pq_mem_root) Common_table_expr(thd->pq_mem_root);
+              new (thd->pq_context().mem_root) Common_table_expr(thd->pq_context().mem_root);
           common_table_expr->recursive =
               tbl_list->common_table_expr()->recursive;
           common_table_expr->name = tbl_list->common_table_expr()->name;
@@ -1210,7 +1210,7 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
 
     uint n_elements = orig->base_ref_items.size();
     Item **array = static_cast<Item **>(
-        thd->pq_mem_root->Alloc(sizeof(Item *) * n_elements));
+        thd->pq_context().mem_root->Alloc(sizeof(Item *) * n_elements));
     if (array == nullptr ||
         DBUG_EVALUATE_IF("dup_select_abort2", true, false)) {
       return nullptr;
@@ -1267,12 +1267,12 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
     // leader's saved_group_list_ptrs to get access to original
     // group_list, and then copy it to template. For worker's query_block,
     // we directly use template's info to generate its group_list.
-    if (pq_dup_order_list(thd, select, orig->saved_group_list_ptrs,
+    if (pq_dup_order_list(thd, select, orig->pq_context().saved_group_list_ptrs,
                           orig->group_list, select->group_list)) {
       return nullptr;
     }
 
-    if (pq_dup_order_list(thd, select, orig->saved_order_list_ptrs,
+    if (pq_dup_order_list(thd, select, orig->pq_context().saved_order_list_ptrs,
                           orig->order_list, select->order_list)) {
       return nullptr;
     }
@@ -1280,20 +1280,20 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
     /** mainly used for optimized_group_by */
     if (select->group_list.elements) {
       if (select->save_order_properties(thd, &select->group_list,
-                                        &select->saved_group_list_ptrs))
+                                        &select->pq_context().saved_group_list_ptrs))
         return nullptr;
     }
 
     if (select->order_list.elements) {
       if (select->save_order_properties(thd, &select->order_list,
-                                        &select->saved_order_list_ptrs))
+                                        &select->pq_context().saved_order_list_ptrs))
         return nullptr;
     }
 
     // phase 5. duplicate where cond
     if (orig->where_cond()) {
       Item *used_cond =
-          orig->saved_where_cond ? orig->saved_where_cond : orig->where_cond();
+          orig->pq_context().saved_where_cond ? orig->pq_context().saved_where_cond : orig->where_cond();
       if (auto new_cond = used_cond->pq_clone(thd, select))
         select->set_where_cond(new_cond);
       else
@@ -1308,7 +1308,7 @@ static Query_block *pq_dup_select(THD *thd, Query_block *top_orig) {
 
     // phase 6. duplicate having cond
     if (orig->having_cond()) {
-      Item *used_having = orig->saved_having_cond ? orig->saved_having_cond
+      Item *used_having = orig->pq_context().saved_having_cond ? orig->pq_context().saved_having_cond
                                                   : orig->having_cond();
       if (auto new_cond = used_having->pq_clone(thd, select))
         select->set_having_cond(new_cond);
@@ -1443,12 +1443,12 @@ static bool pq_select_prepare(THD *thd, Query_block *select,
   // the recorded order. If not, the resolved process in parallel query may be
   // error and we directly return true and report PQ error.
   if (select->fields.size() != orig_fields.size() ||
-      (select->check_map_group_to_base &&
+      (select->pq_context().check_map_group_to_base &&
        check_resolved_order_item(select->group_list, select->base_ref_items,
-                                 *select->check_map_group_to_base)) ||
-      (select->check_map_order_to_base &&
+                                 *select->pq_context().check_map_group_to_base)) ||
+      (select->pq_context().check_map_order_to_base &&
        check_resolved_order_item(select->order_list, select->base_ref_items,
-                                 *select->check_map_order_to_base))) {
+                                 *select->pq_context().check_map_order_to_base))) {
     return true;
   }
   for (uint i = 0; i < select->fields.size(); i++) {
@@ -1481,7 +1481,7 @@ JOIN *pq_make_join(THD *thd, JOIN *join) {
     THD&LEX.
   */
   auto clone_phase_guard =
-      create_scope_guard([thd]() { thd->clone_phase = THD::PQ_UNKONWN; });
+      create_scope_guard([thd]() { thd->pq_context().clone_phase = PQ_clone_phase::UNKNOWN; });
   JOIN *pq_join = nullptr;
   Query_block *select = pq_dup_select(thd, join->query_block);
   if (!select) return nullptr;
@@ -1515,7 +1515,7 @@ JOIN *pq_make_join(THD *thd, JOIN *join) {
       goto err;
     }
     Table_ref *it = select->leaf_tables;
-    pq_join = new (thd->pq_mem_root) JOIN(thd, select);
+    pq_join = new (thd->pq_context().mem_root) JOIN(thd, select);
     if (!pq_join || DBUG_EVALUATE_IF("dup_join_abort", true, false)) {
       goto err;
     }
@@ -1536,8 +1536,8 @@ JOIN *pq_make_join(THD *thd, JOIN *join) {
      */
     if (select == top_select && join->query_expression()->select_limit_cnt) {
       if (join->query_block->with_sum_func ||  // c1
-          (join->pq_rebuilt_group &&           // c2
-           join->pq_last_sort_idx >= (int)join->primary_tables)) {
+          (join->pq_context().pq_rebuilt_group &&           // c2
+           join->pq_context().pq_last_sort_idx >= (int)join->primary_tables)) {
         pq_join->m_select_limit = HA_POS_ERROR;  // no limit
         pq_join->query_expression()->select_limit_cnt = HA_POS_ERROR;
       }
@@ -1554,14 +1554,14 @@ Semijoin_mat_exec *Semijoin_mat_exec::pq_clone(THD *thd, Query_block *select) {
   // clone gather's execution plan.
   if (!m_pq_shared_info) {
     m_pq_shared_info =
-        (PQ_shared_info **)thd->pq_mem_root->Alloc(sizeof(PQ_shared_info *));
+        (PQ_shared_info **)thd->pq_context().mem_root->Alloc(sizeof(PQ_shared_info *));
     if (!m_pq_shared_info) return nullptr;
     *m_pq_shared_info = nullptr;  // not pointing anywhere, yet
   }
 
   assert(sj_nest);
   NESTED_JOIN *orig_nj = sj_nest->nested_join;
-  NESTED_JOIN *nj = new (thd->pq_mem_root) NESTED_JOIN();
+  NESTED_JOIN *nj = new (thd->pq_context().mem_root) NESTED_JOIN();
   if (!nj) return nullptr;
 
   nj->first_nested = orig_nj->first_nested;
@@ -1599,7 +1599,7 @@ Semijoin_mat_exec *Semijoin_mat_exec::pq_clone(THD *thd, Query_block *select) {
     }
   }
 
-  Table_ref *sj_nest1 = new (thd->pq_mem_root) Table_ref();
+  Table_ref *sj_nest1 = new (thd->pq_context().mem_root) Table_ref();
   if (!sj_nest1) return nullptr;
 
   sj_nest1->nested_join = nj;
@@ -1609,7 +1609,7 @@ Semijoin_mat_exec *Semijoin_mat_exec::pq_clone(THD *thd, Query_block *select) {
         strmake_root(thd->mem_root, sj_nest->alias, strlen(sj_nest->alias));
   }
 
-  Semijoin_mat_exec *sj_mat_exec = new (thd->pq_mem_root)
+  Semijoin_mat_exec *sj_mat_exec = new (thd->pq_context().mem_root)
       Semijoin_mat_exec(sj_nest1, is_scan, table_count, mat_table_index,
                         inner_table_index, m_pq_shared_info);
 
@@ -1682,8 +1682,7 @@ void THD::pq_copy_from(THD *thd) {
   tx_isolation = thd->tx_isolation;
   tx_read_only = thd->tx_read_only;
   previous_found_rows = thd->previous_found_rows;
-  has_pq = thd->has_pq;
-  pq_dop = thd->pq_dop;
+  pq_context().copy_from(*thd);
   running_explain_analyze = thd->running_explain_analyze;
   arg_of_last_insert_id_function = thd->arg_of_last_insert_id_function;
   first_successful_insert_id_in_prev_stmt =
@@ -1701,14 +1700,7 @@ void THD::pq_copy_from(THD *thd) {
 }
 
 bool THD::pq_merge_status(THD *thd) {
-  status_var.pq_merge_status(thd->status_var);
-  // For gather, merge worker's found_rows to gather's pq_current_found_rows
-  // For leader, copy pq_current_found_rows from gather
-  if (is_pq_worker())
-    pq_current_found_rows += thd->current_found_rows;
-  else
-    pq_current_found_rows = thd->pq_current_found_rows;
-  return false;
+  return pq_context().merge_status(*this, *thd);
 }
 
 // @TODO: remove it later when item_sum_avg has no
@@ -1743,7 +1735,7 @@ AccessPath *CopyRangeScanAccessPath(THD *thd, AccessPath *orig_path,
   assert((orig_path->type != AccessPath::INDEX_SKIP_SCAN) &&
          (orig_path->type != AccessPath::GROUP_INDEX_SKIP_SCAN));
 
-  AccessPath *path = new (thd->pq_mem_root) AccessPath;
+  AccessPath *path = new (thd->pq_context().mem_root) AccessPath;
   *path = *orig_path;
   switch (path->type) {
     case AccessPath::INDEX_RANGE_SCAN: {

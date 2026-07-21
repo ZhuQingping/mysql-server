@@ -1857,26 +1857,26 @@ void JOIN::destroy() {
   set_plan_state(NO_PLAN);
 
   if (m_root_iterator) {
-    assert(query_block->parallel_exec);
+    assert(query_block->pq_context().parallel_exec);
     m_root_iterator.reset();
   }
 
   /*
-   * for worker (or normal mode), we know that qep_tab0 = qep_tab, and qep_tab1
-   * = NULL; Nevertheless, qep_tab0 = old(qep_tab), and qep_tab = qep_tab1 = new
-   * (qep_tab) for leader. Note that: as qep_tab0 and qep_tab (qep_tab1) share
+   * for worker (or normal mode), we know that pq_context().qep_tab0 = qep_tab, and pq_context().qep_tab1
+   * = NULL; Nevertheless, pq_context().qep_tab0 = old(qep_tab), and qep_tab = pq_context().qep_tab1 = new
+   * (qep_tab) for leader. Note that: as pq_context().qep_tab0 and qep_tab (pq_context().qep_tab1) share
    * the same QEP_shared_owner (i.e., m_qs), they must have the same table info.
    */
-  if (qep_tab0) {
+  if (pq_context().qep_tab0) {
     assert(!join_tab);
     for (uint i = 0; i < tables; i++) {
-      TABLE *table = qep_tab0[i].table();
+      TABLE *table = pq_context().qep_tab0[i].table();
 
       if (NULL != table) {
         table->sorting_iterator = nullptr;
         table->duplicate_removal_iterator = nullptr;
       }
-      qep_tab0[i].cleanup();
+      pq_context().qep_tab0[i].cleanup();
     }
   } else if (thd->lex->using_hypergraph_optimizer()) {
     // Same, for hypergraph queries.
@@ -1914,19 +1914,19 @@ void JOIN::destroy() {
     temp_tables.clear();
     filesorts_to_cleanup.clear();
   }
-  if (qep_tab1) {
+  if (pq_context().qep_tab1) {
     for (uint i = 0; i < tables; i++) {
-      TABLE *table = qep_tab1[i].table();
+      TABLE *table = pq_context().qep_tab1[i].table();
 
-      if (qep_tab1[i].gather && thd->is_pq_leader()) {
-        pq_free_gather(qep_tab1[i].gather);
-        qep_tab1[i].gather = nullptr;
+      if (pq_context().qep_tab1[i].gather && thd->is_pq_leader()) {
+        pq_free_gather(pq_context().qep_tab1[i].gather);
+        pq_context().qep_tab1[i].gather = nullptr;
       }
       if (NULL != table) {
         table->sorting_iterator = nullptr;
         table->duplicate_removal_iterator = nullptr;
       }
-      qep_tab1[i].cleanup();
+      pq_context().qep_tab1[i].cleanup();
     }
   }
 
@@ -1954,26 +1954,26 @@ void JOIN::destroy() {
   tmp_table_param.cleanup();
 
   /* Cleanup items referencing temporary table columns */
-  if (tmp_fields1 != nullptr) {
+  if (pq_context().tmp_fields1 != nullptr) {
     assert(thd->is_pq_leader());
-    cleanup_item_list(tmp_fields1[REF_SLICE_TMP1]);
-    cleanup_item_list(tmp_fields1[REF_SLICE_TMP2]);
+    cleanup_item_list(pq_context().tmp_fields1[REF_SLICE_TMP1]);
+    cleanup_item_list(pq_context().tmp_fields1[REF_SLICE_TMP2]);
     // worker use slice REF_SLICE_PQ_TMP to store items that need to send data
-    // to MQ; thus, tmp_fields0[REF_SLICE_PQ_TMP] has no need to clean and
+    // to MQ; thus, pq_context().tmp_fields0[REF_SLICE_PQ_TMP] has no need to clean and
     // destroy them. Conversely, leader create these items and insert them into
-    // tmp_fields0[REF_SLICE_PQ_TMP] and needs to destroy them.
-    cleanup_item_list(tmp_fields1[REF_SLICE_PQ_TMP]);
+    // pq_context().tmp_fields0[REF_SLICE_PQ_TMP] and needs to destroy them.
+    cleanup_item_list(pq_context().tmp_fields1[REF_SLICE_PQ_TMP]);
     for (uint widx = 0; widx < m_windows.elements; widx++) {
-      cleanup_item_list(tmp_fields1[REF_SLICE_WIN_1 + widx]);
+      cleanup_item_list(pq_context().tmp_fields1[REF_SLICE_WIN_1 + widx]);
     }
   }
 
   /* Cleanup items referencing temporary table columns */
-  if (tmp_fields0 != nullptr) {
-    cleanup_item_list(tmp_fields0[REF_SLICE_TMP1]);
-    cleanup_item_list(tmp_fields0[REF_SLICE_TMP2]);
+  if (pq_context().tmp_fields0 != nullptr) {
+    cleanup_item_list(pq_context().tmp_fields0[REF_SLICE_TMP1]);
+    cleanup_item_list(pq_context().tmp_fields0[REF_SLICE_TMP2]);
     for (uint widx = 0; widx < m_windows.elements; widx++) {
-      cleanup_item_list(tmp_fields0[REF_SLICE_WIN_1 + widx]);
+      cleanup_item_list(pq_context().tmp_fields0[REF_SLICE_WIN_1 + widx]);
     }
   }
 
@@ -3028,8 +3028,8 @@ void QEP_TAB::push_index_cond(const JOIN_TAB *join_tab, uint keyno,
       join_->thd->want_privilege = 0;
       pq_cond = condition()->pq_clone(join_->thd, join_->query_block);
       if (!pq_cond) {
-        join_->query_block->m_suite_for_pq = false;
-        join_->query_block->pq_unsuite_info = PQUnsuiteInfo::INTER_ERROR;
+        join_->query_block->pq_context().m_suite_for_pq = false;
+        join_->query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::INTER_ERROR;
       }
       join_->thd->want_privilege = saved_thd_want_privilege;
     }
@@ -3830,10 +3830,10 @@ void JOIN::offset_pushdown() {
         is true. We could improve this, but LIMIT OFFSET is probably uncommon
         in a subquery.
       */
-      if (query_block->m_suite_for_pq) {
+      if (query_block->pq_context().m_suite_for_pq) {
         if (offset_value < thd->variables.op_over_pq_offset_threshold) return;
-        query_block->m_suite_for_pq = false;
-        query_block->pq_unsuite_info = PQUnsuiteInfo::OFFSET_PUSHDOWN_PRIO;
+        query_block->pq_context().m_suite_for_pq = false;
+        query_block->pq_context().pq_unsuite_info = PQUnsuiteInfo::OFFSET_PUSHDOWN_PRIO;
       }
       /* Offset pushdown is activated, communicate the offset value to the
        * handler*/
@@ -4078,20 +4078,20 @@ void JOIN::cleanup() {
 
   assert(const_tables <= primary_tables && primary_tables <= tables);
 
-  if (qep_tab0 || join_tab || best_ref) {
+  if (pq_context().qep_tab0 || join_tab || best_ref) {
     // Optimization has gone so far that there are tables to clean up; they
     // may be reachable from this or that array, depending on where
     // optimization stopped.
     for (uint i = 0; i < tables; i++) {
-      TABLE *table = qep_tab0
-                         ? qep_tab0[i].table()
+      TABLE *table = pq_context().qep_tab0
+                         ? pq_context().qep_tab0[i].table()
                          : (join_tab ? &join_tab[i] : best_ref[i])->table();
       if (!table) continue;
       cleanup_table(table);
 
-      if (qep_tab1 && qep_tab1[i].table()) {
+      if (pq_context().qep_tab1 && pq_context().qep_tab1[i].table()) {
         assert(thd->is_pq_leader());
-        cleanup_table(qep_tab1[i].table());
+        cleanup_table(pq_context().qep_tab1[i].table());
       }
     }
   } else if (thd->lex->using_hypergraph_optimizer()) {
@@ -4693,7 +4693,7 @@ bool JOIN::make_worker_tmp_table() {
   assert(query_result && query_result->m_param);
 
   Temp_table_param *tmp_param = query_result->m_param;
-  tmp_param->pq_copy(saved_tmp_table_param);
+  tmp_param->pq_copy(pq_context().saved_tmp_table_param);
   tmp_param->hidden_field_count = CountHiddenFields(*curr_fields);
   tmp_param->m_window_frame_buffer = false;
   tmp_param->skip_create_table = true;
@@ -4707,12 +4707,12 @@ bool JOIN::make_worker_tmp_table() {
                            "<send_data>", false, true);
   query_result->m_table = table;
 
-  assert(qep_tab[idx_div_tab].gather && qep_tab[idx_div_tab].pq_div_tab);
-  uint check_table_rec = qep_tab[idx_div_tab].gather->pq_check_reclen;
-  uint check_table_fields = qep_tab[idx_div_tab].gather->pq_check_fields;
+  assert(qep_tab[pq_context().idx_div_tab].gather && qep_tab[pq_context().idx_div_tab].pq_div_tab);
+  uint check_table_rec = qep_tab[pq_context().idx_div_tab].gather->pq_check_reclen;
+  uint check_table_fields = qep_tab[pq_context().idx_div_tab].gather->pq_check_fields;
 
   // the leader/worker's table is not same
-  if (!table || !thd->pq_leader || check_table_rec != table->s->reclength ||
+  if (!table || !thd->pq_context().leader || check_table_rec != table->s->reclength ||
       check_table_fields != table->s->fields ||
       DBUG_EVALUATE_IF("pq_worker_error5", true, false)) {
     goto err;
@@ -4736,14 +4736,14 @@ bool JOIN::make_worker_tmp_table() {
   return false;
 
 err:
-  if (!thd->pq_error) {
+  if (!thd->pq_context().error) {
     /** error handling */
     MQueue_handle *handle = query_result->get_mq_handler();
     if (handle) {
       handle->send_exception_msg(ERROR_MSG);
       handle->set_detached_status(MQ_HAVE_DETACHED);
     }
-    thd->pq_error = true;
+    thd->pq_context().error = true;
   }
   return true;
 }
@@ -4752,9 +4752,9 @@ bool JOIN::make_leader_tmp_table() {
   DBUG_TRACE;
   bool base_slice = (last_slice_before_pq == REF_SLICE_SAVED_BASE);
   mem_root_deque<Item *> *curr_fields =
-      base_slice ? fields : &tmp_fields0[last_slice_before_pq];
+      base_slice ? fields : &pq_context().tmp_fields0[last_slice_before_pq];
 
-  tmp_table_param.pq_copy(saved_tmp_table_param);
+  tmp_table_param.pq_copy(pq_context().saved_tmp_table_param);
   tmp_table_param.cleanup(); /** clean grouped_expressions and copy_fields */
 
   assert(primary_tables == 0 && tmp_tables == 0);
@@ -4870,7 +4870,7 @@ bool JOIN::make_leader_tmp_table() {
 bool JOIN::make_tmp_tables_info() {
   assert(!join_tab);
   mem_root_deque<Item *> *curr_fields =
-      need_tmp_pq_leader ? &tmp_fields[REF_SLICE_PQ_TMP] : fields;
+      pq_context().need_tmp_pq_leader ? &tmp_fields[REF_SLICE_PQ_TMP] : fields;
   bool materialize_join = false;
   uint curr_tmp_table = const_tables;
   TABLE *exec_tmp_table = nullptr;
@@ -4914,11 +4914,11 @@ bool JOIN::make_tmp_tables_info() {
     However, in parallel query we should not use having_cond as it may have
     been pushed to worker.
   */
-  having_for_explain = need_tmp_pq_leader
-                           ? saved_optimized_vars.pq_saved_having_cond
+  having_for_explain = pq_context().need_tmp_pq_leader
+                           ? pq_context().saved_optimized_vars.pq_saved_having_cond
                            : having_cond;
 
-  pq_rebuilt_group = (m_ordered_index_usage == ORDERED_INDEX_GROUP_BY);
+  pq_context().pq_rebuilt_group = (m_ordered_index_usage == ORDERED_INDEX_GROUP_BY);
 
   const bool has_group_by = this->grouped;
 
@@ -4954,7 +4954,7 @@ bool JOIN::make_tmp_tables_info() {
     if the sort is too complicated to be evaluated as a filesort.
   */
   if (need_tmp_before_win) {
-    curr_tmp_table = need_tmp_pq_leader ? tmp_tables : primary_tables;
+    curr_tmp_table = pq_context().need_tmp_pq_leader ? tmp_tables : primary_tables;
     Opt_trace_object trace_this_outer(trace);
     trace_this_outer.add("adding_tmp_table_in_plan_at_position",
                          curr_tmp_table);
@@ -4969,7 +4969,7 @@ bool JOIN::make_tmp_tables_info() {
       Note that: for the leader thread, it has alloced the REF_SLICE_TMP_PQ
                  slice in create_leader_tmp_table.
     */
-    if (!need_tmp_pq_leader) {
+    if (!pq_context().need_tmp_pq_leader) {
       if (alloc_ref_item_slice(thd, REF_SLICE_SAVED_BASE)) return true;
 
       copy_ref_item_slice(REF_SLICE_SAVED_BASE, REF_SLICE_ACTIVE);
@@ -5034,7 +5034,7 @@ bool JOIN::make_tmp_tables_info() {
     qep_tab[curr_tmp_table].ref_item_slice = REF_SLICE_TMP1;
     setup_tmptable_write_func(&qep_tab[curr_tmp_table], &trace_this_outer);
 
-    if (!need_tmp_pq_leader) last_slice_before_pq = REF_SLICE_TMP1;
+    if (!pq_context().need_tmp_pq_leader) last_slice_before_pq = REF_SLICE_TMP1;
 
     /*
       If having is not handled here, it will be checked before the row is sent
@@ -5179,7 +5179,7 @@ bool JOIN::make_tmp_tables_info() {
       qep_tab[curr_tmp_table].ref_item_slice = REF_SLICE_TMP2;
       setup_tmptable_write_func(&qep_tab[curr_tmp_table], &trace_this_tbl);
 
-      if (!need_tmp_pq_leader) last_slice_before_pq = REF_SLICE_TMP2;
+      if (!pq_context().need_tmp_pq_leader) last_slice_before_pq = REF_SLICE_TMP2;
     }
     if (qep_tab[curr_tmp_table].table()->s->is_distinct)
       select_distinct = false; /* Each row is unique */
@@ -5239,7 +5239,7 @@ bool JOIN::make_tmp_tables_info() {
         trace_this_outer.add("reading_from_table_eliminates_duplicates", true);
         explain_flags.set(ESC_DISTINCT, ESP_DUPS_REMOVAL);
         select_distinct = false;
-        query_block->disable_distinct_in_pq_worker = true;
+        query_block->pq_context().disable_distinct_in_pq_worker = true;
       }
     }
     /* Clean tmp_table_param for the next tmp table. */
@@ -5366,7 +5366,7 @@ bool JOIN::make_tmp_tables_info() {
       if (need_tmp_before_win && !materialize_join && !exec_tmp_table->group)
         explain_flags.set(order_arg.src, ESP_USING_TMPTABLE);
 
-      pq_last_sort_idx = curr_tmp_table;
+      pq_context().pq_last_sort_idx = curr_tmp_table;
       if (add_sorting_to_table(curr_tmp_table, &order_arg,
                                /*sort_before_group=*/false))
         return true;
@@ -5552,7 +5552,7 @@ void JOIN::refresh_base_slice() {
   // data (not related to <receive_data> tmp table) and lead to unexpected
   // behaviours.
   auto curr_fields =
-      need_tmp_pq_leader ? &tmp_fields[REF_SLICE_PQ_TMP] : fields;
+      pq_context().need_tmp_pq_leader ? &tmp_fields[REF_SLICE_PQ_TMP] : fields;
   unsigned num_hidden_fields = CountHiddenFields(*curr_fields);
   const size_t num_select_elements = curr_fields->size() - num_hidden_fields;
   const size_t orig_num_select_elements =

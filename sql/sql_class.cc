@@ -639,16 +639,7 @@ THD::THD(bool enable_plugins)
       m_dd_client(new dd::cache::Dictionary_client(this)),
       m_query_string(NULL_CSTR),
       m_db(NULL_CSTR),
-      pq_leader(nullptr),
-      has_pq(false),
-      pq_leader_create_fake_iter(false),
-      pq_threads_running(0),
-      pq_dop(0),
-      no_pq(false),
       in_sp_trigger(false),
-      pq_error(0),
-      pq_current_found_rows(0),
-      pq_executed(false),
       rli_fake(nullptr),
       rli_slave(nullptr),
       copy_status_var_ptr(nullptr),
@@ -740,11 +731,7 @@ THD::THD(bool enable_plugins)
   mdl_context.init(this);
   init_sql_alloc(key_memory_thd_main_mem_root, &main_mem_root,
                  global_system_variables.query_alloc_block_size);
-  pq_mem_root = new MEM_ROOT();
-  init_sql_alloc(key_memory_pq_mem_root, pq_mem_root,
-                 global_system_variables.query_alloc_block_size);
-  pq_mem_root->allocCBFunc = add_pq_memory;
-  pq_mem_root->freeCBFunc = sub_pq_memory;
+  m_pq_context.initialize_mem_root();
   stmt_arena = this;
   thread_stack = nullptr;
   m_catalog.str = "std";
@@ -1516,10 +1503,7 @@ THD::~THD() {
   unregister_replica(this, true, true);
 
   main_mem_root.Clear();
-  if (pq_mem_root) {
-    pq_mem_root->Clear();
-    delete pq_mem_root;
-  }
+  m_pq_context.destroy_mem_root();
 
   if (m_token_array != nullptr) {
     my_free(m_token_array);
@@ -1569,9 +1553,9 @@ void THD::awake(THD::killed_state state_to_set) {
   */
   if (this->m_server_idle && state_to_set == KILL_QUERY) { /* nothing */
   } else {
-    for (auto gather : pq_gathers) {
+    for (auto gather : m_pq_context.gathers) {
       if (gather->m_workers) {
-        for (uint i = 0; i < pq_dop; i++) {
+        for (uint i = 0; i < m_pq_context.dop; i++) {
           if (gather->m_workers[i])
             gather->m_workers[i]->set_kill_state(state_to_set);
         }
@@ -1890,24 +1874,9 @@ void THD::cleanup_after_query(bool clean_pq_variables) {
   check_for_truncated_fields = CHECK_FIELD_IGNORE;
 
   if (!in_sp_trigger && clean_pq_variables) {
-    // cleanup for parallel query
-    if (pq_threads_running > 0) {
-      release_pq_running_threads(pq_threads_running);
-      pq_threads_running = 0;
-    }
-    if (pq_mem_root) pq_mem_root->Clear();
-    pq_dop = 0;
-    no_pq = false;
-    pq_error = false;
-    has_pq = false;
-    pq_current_found_rows = 0;
-    pq_gathers.clear();
-#ifndef NDEBUG
-    pq_skip_fetch_ctx = false;
-#endif  // NDEBUG
+    m_pq_context.cleanup_statement();
   }
-
-  retry_without_pq = false;
+  m_pq_context.retry_without_pq = false;
 
   // Since the same THD instance may be re-used multiple times, reset
   // m_needs_mutex to its original state. We will set it back to "true" during
@@ -2299,7 +2268,7 @@ void THD::send_kill_message() const {
       assuming it's come as far as the execution stage, so that the user
       can look at the execution plan and statistics so far.
     */
-    if (!pq_explain_analyze && !running_explain_analyze) {
+    if (!m_pq_context.explain_analyze && !running_explain_analyze) {
       my_error(err, MYF(ME_FATALERROR));
     }
   }

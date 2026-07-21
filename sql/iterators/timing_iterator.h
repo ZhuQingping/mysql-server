@@ -178,10 +178,11 @@ class TimingIterator final : public RowIterator {
       : RowIterator(thd),
         m_iterator(thd, std::forward<Args>(args)...),
         m_worker_info(nullptr) {
-    if (thd->pq_leader_create_fake_iter) {
+    if (thd->pq_context().leader_create_fake_iter) {
       /* Used for PQ explain analyze */
       m_worker_info =
-          new (thd->pq_mem_root) ParallelIterTimingInfo(thd->pq_dop, thd);
+          new (thd->pq_context().mem_root)
+              ParallelIterTimingInfo(thd->pq_context().dop, thd);
     }
   }
 

@@ -7843,8 +7843,8 @@ void Item_func_trig_cond::print(const THD *thd, String *str,
       Because qep_tab may be rewritten in PQ.
     */
     QEP_TAB *saved_qep_tab = m_join->qep_tab;
-    if (m_join->qep_tab0) {
-      m_join->qep_tab = m_join->qep_tab0;
+    if (m_join->pq_context().qep_tab0) {
+      m_join->qep_tab = m_join->pq_context().qep_tab0;
     }
     get_table_range(&first_table, &last_table);
     /* restore qep_tab */

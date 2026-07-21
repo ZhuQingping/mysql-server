@@ -2679,8 +2679,8 @@ MDL_ticket *MDL_context::find_ticket(MDL_request *mdl_request,
       // Instead, the worker first sees if the leader has a lock. If it does,
       // the worker can proceed without waiting ; for that it borrows the
       // leader's ticket, so the MDL system will let it run.
-      auto t = get_thd()->pq_leader->mdl_context.find_ticket(mdl_request,
-                                                             result_duration);
+      auto t = get_thd()->pq_context().leader->mdl_context.find_ticket(
+          mdl_request, result_duration);
       if (t) {
         DBUG_ASSERT(this != t->get_ctx());  // Not our own ticket.
         // It is safer if the worker doesn't directy use the leader's ticket,

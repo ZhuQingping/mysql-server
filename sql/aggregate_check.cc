@@ -163,7 +163,7 @@ bool Distinct_check::check_query(THD *thd, bool skip_error_message) {
       // no need to output error message in parallel query because the
       // sql_mode has be set to skip the check.
       if (skip_error_message) {
-        assert(select->m_suite_for_pq);
+        assert(select->pq_context().m_suite_for_pq);
         assert(!(thd->variables.sql_mode & MODE_ONLY_FULL_GROUP_BY));
         return true;
       }
@@ -248,7 +248,7 @@ err:
   // When the query is not passed the check in parallel query (i.e. sql_mode is
   // set to skip the check in resolve), we have no need to output error message.
   if (skip_error_message) {
-    assert(select->m_suite_for_pq);
+    assert(select->pq_context().m_suite_for_pq);
     assert(!(thd->variables.sql_mode & MODE_ONLY_FULL_GROUP_BY));
     return true;
   }

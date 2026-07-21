@@ -206,11 +206,29 @@ def validate_snapshot(
         "--",
         *BOUND_TREE_PATHS,
     )
+    delta_policy = snapshot.get("bound_source_delta_policy", "clean")
+    if delta_policy not in {"clean", "source-only"}:
+        raise BuildError(
+            "snapshot.bound_source_delta_policy must be 'clean' or 'source-only'"
+        )
+    changed_paths = [Path(path) for path in changed_bound_paths.splitlines() if path]
+    if delta_policy == "source-only":
+        test_delta = [
+            path for path in changed_paths
+            if path.is_relative_to(Path("mysql-test/suite/parallel_query"))
+        ]
+        if test_delta:
+            raise BuildError(
+                "source-only snapshot contains PQ test delta:\n  "
+                + "\n  ".join(path.as_posix() for path in test_delta)
+            )
+
     checks = {
         "branch": (snapshot.get("branch"), inventory["branch"]),
         "bound_source_test_delta": (
-            "clean",
-            "dirty" if changed_bound_paths else "clean",
+            delta_policy,
+            "source-only" if delta_policy == "source-only"
+            else ("dirty" if changed_bound_paths else "clean"),
         ),
         "working_tree": (
             snapshot.get("working_tree"),
@@ -280,6 +298,7 @@ def render_inventory(
         f"| implementation commit | `{snapshot['implementation_commit']}` |",
         f"| branch | `{inventory['branch']}` |",
         f"| bound PQ source/test tree | `{'dirty' if inventory['dirty'] else 'clean'}` |",
+        f"| base-to-HEAD policy | `{snapshot.get('bound_source_delta_policy', 'clean')}` |",
         f"| captured at | `{snapshot['captured_at']}` |",
         f"| source hash scope | `{snapshot['source_tree_scope']}` |",
         f"| external source evidence | {snapshot['external_source_evidence_scope']} |",

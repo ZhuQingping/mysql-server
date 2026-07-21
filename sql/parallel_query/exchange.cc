@@ -38,27 +38,27 @@ bool Exchange::init() {
   uint64 ring_size = lower_exponent(msg_queue_size);
 
   /** note that: all workers share one receiver. */
-  m_receiver = new (m_thd->pq_mem_root) MQ_event(m_thd);
+  m_receiver = new (m_thd->pq_context().mem_root) MQ_event(m_thd);
   if (!m_receiver) goto err;
 
-  mqueue_handles = new (m_thd->pq_mem_root) MQueue_handle *[m_nqueues] { NULL };
+  mqueue_handles = new (m_thd->pq_context().mem_root) MQueue_handle *[m_nqueues] { NULL };
   if (!mqueue_handles) goto err;
 
-  mqueues = new (m_thd->pq_mem_root) MQueue *[m_nqueues] { NULL };
+  mqueues = new (m_thd->pq_context().mem_root) MQueue *[m_nqueues] { NULL };
   if (!mqueues) goto err;
   for (i = 0; i < m_nqueues; i++) {
-    char *ring_buffer = new (m_thd->pq_mem_root) char[ring_size];
+    char *ring_buffer = new (m_thd->pq_context().mem_root) char[ring_size];
     if (!ring_buffer) goto err;
-    MQ_event *sender = new (m_thd->pq_mem_root) MQ_event();
+    MQ_event *sender = new (m_thd->pq_context().mem_root) MQ_event();
     if (!sender) goto err;
-    mqueues[i] = new (m_thd->pq_mem_root)
+    mqueues[i] = new (m_thd->pq_context().mem_root)
         MQueue(sender, m_receiver, ring_buffer, ring_size);
     if (!mqueues[i] || DBUG_EVALUATE_IF("pq_mq_error1", true, false)) goto err;
   }
 
   for (i = 0; i < m_nqueues; i++) {
     mqueue_handles[i] =
-        new (m_thd->pq_mem_root) MQueue_handle(mqueues[i], MQ_BUFFER_SIZE);
+        new (m_thd->pq_context().mem_root) MQueue_handle(mqueues[i], MQ_BUFFER_SIZE);
     if (!mqueue_handles[i] || mqueue_handles[i]->init_mqueue_handle(m_thd) ||
         DBUG_EVALUATE_IF("pq_mq_error2", true, false))
       goto err;
@@ -110,7 +110,7 @@ char *const_item_and_field_flag(uint value) {
 bool Exchange::convert_mq_data_to_record(uchar *data, int msg_len,
                                          uchar *row_id) {
   /** there is error */
-  if (m_thd->is_killed() || m_thd->pq_error || msg_len == 1) {
+  if (m_thd->is_killed() || m_thd->pq_context().error || msg_len == 1) {
     // A statement timeout is an expected user-visible error.  It interrupts
     // the leader while it is waiting for worker messages, but does not mean
     // that parallel execution itself has failed.
@@ -118,7 +118,7 @@ bool Exchange::convert_mq_data_to_record(uchar *data, int msg_len,
       sql_print_error("[Parallel query]: error query. %s\n",
                       m_thd->query().str);
     }
-    m_thd->pq_error = true;
+    m_thd->pq_context().error = true;
     return false;
   }
 
@@ -144,7 +144,7 @@ bool Exchange::convert_mq_data_to_record(uchar *data, int msg_len,
           (double)(m_table->s->reclength + 6 + null_len +
                    2 * m_table->s->fields + (m_stab_output ? m_ref_length : 0) +
                    (size_field - m_table->s->fields) / 4)) {
-    m_thd->pq_error = true;
+    m_thd->pq_context().error = true;
     sql_print_error(
         "[Parallel query]: sending (or receiving) msg from MQ error");
     return false;
@@ -260,7 +260,7 @@ bool Exchange_nosort::read_next(void **datap, uint32 *m_len) {
   THD *thd = get_thd();
 
   /** round-robin method to acquire the data */
-  while (!thd->is_killed() && !thd->pq_error) {
+  while (!thd->is_killed() && !thd->pq_context().error) {
     read_result = get_next(datap, m_len, readerdone, first_readdone);
     /** detached and its content is also read done */
     if (readerdone) {

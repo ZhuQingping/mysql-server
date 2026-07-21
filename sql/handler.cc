@@ -6827,7 +6827,7 @@ int DsMrr_impl::dsmrr_init(RANGE_SEQ_IF *seq_funcs, void *seq_init_param,
                       MRR_HINT_ENUM, OPTIMIZER_SWITCH_MRR) ||
       mode &
           (HA_MRR_USE_DEFAULT_IMPL | HA_MRR_SORTED) ||  // DS-MRR doesn't sort
-      (!thd->in_sp_trigger && thd->has_pq &&
+      (!thd->in_sp_trigger && thd->pq_context().has_pq &&
        (mode & HA_MRR_SKIP_BY_PQ)))  // PQ only supports h1
   {
     use_default_impl = true;

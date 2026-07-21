@@ -36,24 +36,24 @@ bool Exchange_sort::alloc() {
   int readers = launch_workers();
   THD *thd = get_thd();
 
-  m_min_records = new (thd->pq_mem_root) mq_record_st *[readers] { NULL };
+  m_min_records = new (thd->pq_context().mem_root) mq_record_st *[readers] { NULL };
   if (!m_min_records) goto err;
 
   for (i = 0; i < readers; i++) {
-    m_min_records[i] = new (thd->pq_mem_root) mq_record_st();
+    m_min_records[i] = new (thd->pq_context().mem_root) mq_record_st();
     if (!m_min_records[i]) goto err;
   }
 
-  m_record_groups = new (thd->pq_mem_root) mq_records_batch_st[readers];
+  m_record_groups = new (thd->pq_context().mem_root) mq_records_batch_st[readers];
   if (!m_record_groups) goto err;
 
   for (i = 0; i < readers; i++) {
     m_record_groups[i].records =
-        new (thd->pq_mem_root) mq_record_st *[MAX_RECORD_STORE] { NULL };
+        new (thd->pq_context().mem_root) mq_record_st *[MAX_RECORD_STORE] { NULL };
     if (!m_record_groups[i].records) goto err;
 
     for (j = 0; j < MAX_RECORD_STORE; j++) {
-      m_record_groups[i].records[j] = new (thd->pq_mem_root) mq_record_st();
+      m_record_groups[i].records[j] = new (thd->pq_context().mem_root) mq_record_st();
       if (!m_record_groups[i].records[j]) goto err;
 
       //@TODO: if we use two different tmp tables on worker and leader thread,
@@ -61,9 +61,9 @@ bool Exchange_sort::alloc() {
       if (m_sort_param) {
         m_record_groups[i].records[j]->m_length = get_table()->s->reclength;
         m_record_groups[i].records[j]->m_data =
-            new (thd->pq_mem_root) uchar[get_table()->s->reclength];
+            new (thd->pq_context().mem_root) uchar[get_table()->s->reclength];
         m_record_groups[i].records[j]->m_sort_key =
-            new (thd->pq_mem_root) uchar[m_sort_param->max_record_length() + 1];
+            new (thd->pq_context().mem_root) uchar[m_sort_param->max_record_length() + 1];
 
         if (!m_record_groups[i].records[j]->m_data ||
             !m_record_groups[i].records[j]->m_sort_key) {
@@ -72,18 +72,18 @@ bool Exchange_sort::alloc() {
       } else {
         m_record_groups[i].records[j]->m_buffer_len = RECORD_BUFFER_SIZE;
         m_record_groups[i].records[j]->m_data =
-            new (thd->pq_mem_root) uchar[RECORD_BUFFER_SIZE];
+            new (thd->pq_context().mem_root) uchar[RECORD_BUFFER_SIZE];
         if (!m_record_groups[i].records[j]->m_data) goto err;
       }
 
       if (is_stable()) {
         m_record_groups[i].records[j]->m_row_id =
-            new (thd->pq_mem_root) uchar[ref_length()];
+            new (thd->pq_context().mem_root) uchar[ref_length()];
         if (!m_record_groups[i].records[j]->m_row_id) goto err;
       }
     }
   }
-  m_heap = new (thd->pq_mem_root)
+  m_heap = new (thd->pq_context().mem_root)
       binary_heap(readers + 1, this, heap_compare_node, thd);
   if (!m_heap || m_heap->init_binary_heap()) goto err;
 
@@ -119,7 +119,7 @@ bool Exchange_sort::init() {
       }
     }
     if (!s_length) return true;
-    m_sort_param = new (thd->pq_mem_root) Sort_param();
+    m_sort_param = new (thd->pq_context().mem_root) Sort_param();
     if (!m_sort_param) return true;
 
     /** generate sort_param */
@@ -134,7 +134,7 @@ bool Exchange_sort::init() {
         Bounds_checked_array<st_sort_field>(m_sort->sortorder, s_length);
 
     /** cache sort key for compare */
-    m_tmp_key = new (thd->pq_mem_root) uchar[row_id_length];
+    m_tmp_key = new (thd->pq_context().mem_root) uchar[row_id_length];
     memset(m_tmp_key, 0, row_id_length);
     if (!m_tmp_key) return true;
   }
@@ -142,8 +142,8 @@ bool Exchange_sort::init() {
   assert(m_sort_param || is_stable());
   if (m_sort_param) {
     int key_len = m_sort_param->max_record_length() + 1;
-    keys[0] = new (thd->pq_mem_root) uchar[key_len];
-    keys[1] = new (thd->pq_mem_root) uchar[key_len];
+    keys[0] = new (thd->pq_context().mem_root) uchar[key_len];
+    keys[1] = new (thd->pq_context().mem_root) uchar[key_len];
     memset(keys[0], 0, key_len);
     memset(keys[1], 0, key_len);
 
@@ -350,7 +350,7 @@ bool Exchange_sort::store_mq_record(mq_record_st *rec, uchar *data,
       while (msg_len > new_buffer_len) {
         new_buffer_len *= 2;
       }
-      rec->m_data = new (thd->pq_mem_root) uchar[new_buffer_len];
+      rec->m_data = new (thd->pq_context().mem_root) uchar[new_buffer_len];
       if (!rec->m_data) goto err;
       rec->m_buffer_len = new_buffer_len;
     }

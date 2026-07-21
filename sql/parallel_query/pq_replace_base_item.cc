@@ -79,7 +79,7 @@ bool Query_block::find_base_ref_array(Item **found, Item_ref *ref,
        down_cast<Item_ref *>(found[0])->ref_type() ==
            Item_ref::AGGREGATE_REF)) {
     Item_ref *item_ref = static_cast<Item_ref *>(found[0]);
-    assert(!pq_try_clone_item);
+    assert(!pq_context().pq_try_clone_item);
     // Unlike in Item_ref::pq_clone, this is called only if we have already
     // cloned query blocks (see assertion above), thus the computation of
     // source_select is simpler:

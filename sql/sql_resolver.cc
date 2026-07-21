@@ -184,7 +184,7 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
   assert(join == nullptr);
   assert(!thd->is_error());
 
-  if (has_windows()) saved_windows_elements = m_windows.elements;
+  if (has_windows()) pq_context().saved_windows_elements = m_windows.elements;
 
   // If this query block is a table value constructor, a lot of the preparation
   // done in Query_block::prepare becomes irrelevant. Thus we call our own
@@ -555,7 +555,7 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
 
   // We may disable PQ during the above resolve, thus we should first
   // check it.
-  m_suite_for_pq = m_suite_for_pq && suite_for_parallel_query(thd);
+  pq_context().m_suite_for_pq = pq_context().m_suite_for_pq && suite_for_parallel_query(thd);
   /*
     When reaching the top-most query block, or the next-to-top query block for
     the SQL command SET and for SP instructions (indicated with SQLCOM_END),
@@ -815,11 +815,11 @@ bool Query_block::apply_local_transforms(THD *thd, bool prune) {
    */
   if ((is_distinct() || is_grouped())) {
     bool only_full_group_by = thd->variables.sql_mode & MODE_ONLY_FULL_GROUP_BY;
-    if (only_full_group_by || m_suite_for_pq) {
+    if (only_full_group_by || pq_context().m_suite_for_pq) {
       if (check_only_full_group_by(thd,
-                                   (m_suite_for_pq && !only_full_group_by))) {
-        m_suite_for_pq = false;
-        pq_unsuite_info = PQUnsuiteInfo::ONLY_FULL_GROUP_BY;
+                                   (pq_context().m_suite_for_pq && !only_full_group_by))) {
+        pq_context().m_suite_for_pq = false;
+        pq_context().pq_unsuite_info = PQUnsuiteInfo::ONLY_FULL_GROUP_BY;
         if (only_full_group_by) return true;
       }
     }

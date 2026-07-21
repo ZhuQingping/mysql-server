@@ -280,7 +280,7 @@ bool PT_qb_level_hint::contextualize(Parse_context *pc) {
       qb->register_ptrc_hint(this);
       break;
     case NO_PQ_HINT_ENUM:
-      pc->thd->no_pq = true;
+      pc->thd->pq_context().no_pq = true;
       break;
     default:
       assert(0);
@@ -372,9 +372,9 @@ bool PT_table_level_hint::contextualize(Parse_context *pc) {
 
   if (type() == PQ_HINT_ENUM) {
     if (args > 0)
-      pc->thd->pq_dop = std::min((int)args, 1024);
+      pc->thd->pq_context().dop = std::min((int)args, 1024);
     else
-      pc->thd->pq_dop = pc->thd->variables.parallel_default_dop;
+      pc->thd->pq_context().dop = pc->thd->variables.parallel_default_dop;
   }
 
   if (table_list.empty())  // Query block level hint

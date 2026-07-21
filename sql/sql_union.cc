@@ -1912,7 +1912,7 @@ bool Query_expression::ExecuteIteratorQuery(THD *thd) {
 
   {
     auto join_cleanup = create_scope_guard([this, thd] {
-      if (thd->has_pq) m_root_iterator->End();
+      if (thd->pq_context().has_pq) m_root_iterator->End();
       for (Query_block *sl = first_query_block(); sl;
            sl = sl->next_query_block()) {
         JOIN *join = sl->join;
@@ -1972,7 +1972,7 @@ bool Query_expression::ExecuteIteratorQuery(THD *thd) {
           one, which is not a big problem but could be improved.
         */
         if (handler) {
-          thd->pq_error = true;
+          thd->pq_context().error = true;
           handler->send_exception_msg(ERROR_MSG);
           handler->set_detached_status(MQ_HAVE_DETACHED);
         } else {
@@ -1991,7 +1991,7 @@ bool Query_expression::ExecuteIteratorQuery(THD *thd) {
             SELECT statement continue.
           */
           if (thd->is_error()) {
-            thd->pq_error = true;  // will stop all threads
+            thd->pq_context().error = true;  // will stop all threads
           }
         }
       }
@@ -2007,10 +2007,10 @@ bool Query_expression::ExecuteIteratorQuery(THD *thd) {
   // But for not an UNION, found_rows() applies to the join, so if with
   // SQL_CALC_FOUND_ROWS, found_rows() should be pq_current_found_rows which
   // merges all worker's found_rows()
-  if (is_simple() && thd->pq_current_found_rows &&
+  if (is_simple() && thd->pq_context().current_found_rows &&
       (first_query_block()->active_options() & OPTION_FOUND_ROWS)) {
-    thd->current_found_rows = thd->pq_current_found_rows;
-    thd->pq_current_found_rows = 0;
+    thd->current_found_rows = thd->pq_context().current_found_rows;
+    thd->pq_context().current_found_rows = 0;
   } else {
     thd->current_found_rows = *send_records_ptr;
   }
@@ -2412,7 +2412,7 @@ PQSubqueryExecution Query_expression::subquery_suite_for_parallel_query()
        item->substype() == Item_subselect::SINGLEROW_SUBS) &&
       is_simple()) {
     if (uncacheable == UNCACHEABLE_DEPENDENT &&
-        first_query_block()->m_suite_for_pq &&
+        first_query_block()->pq_context().m_suite_for_pq &&
         current_thd->pq_support_features_switch_flag(
             PQ_SUPPORT_FEATURES_SWITCH_CORRELATED_SUBQUERY)) {
       // Correlated subquery.

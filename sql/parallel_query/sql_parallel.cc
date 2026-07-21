@@ -115,7 +115,7 @@ bool check_pq_running_threads(uint dop, ulong timeout_ms) {
 
   if (success) {
     parallel_threads_running += dop;
-    current_thd->pq_threads_running += dop;
+    current_thd->pq_context().threads_running += dop;
   }
   mysql_mutex_unlock(&LOCK_pq_threads_running);
   return success;
@@ -130,7 +130,7 @@ bool MQ_record_gather::mq_scan_init(Filesort *sort, int workers,
                                     const std::set<const ORDER *> &desc_groups,
                                     bool stab_output, bool index_sort) {
   if (sort) {
-    m_exchange = new (m_thd->pq_mem_root)
+    m_exchange = new (m_thd->pq_context().mem_root)
         Exchange_sort(m_thd,
                       // this TABLE is used for exchanging data in the MQ,
                       // its handler is not yet open
@@ -142,7 +142,7 @@ bool MQ_record_gather::mq_scan_init(Filesort *sort, int workers,
                       // groups using desc indexes
                       desc_groups, stab_output, index_sort);
   } else {
-    m_exchange = new (m_thd->pq_mem_root)
+    m_exchange = new (m_thd->pq_context().mem_root)
         Exchange_nosort(m_thd, m_tab->table(), m_recv_items, workers,
                         m_tab->split_table()->file->ref_length, stab_output);
   }
@@ -352,7 +352,7 @@ bool pq_build_sum_funcs(THD *thd, Query_block *select, Ref_item_array &ref_ptr,
       if (item_ref->type() == Item::SUM_FUNC_ITEM) {
         restore_item_name(thd, item_ref, item_field);
         item_field->table_name = "<temporary>";
-        thd->clone_phase = THD::PQ_EXECUTEION;
+        thd->pq_context().clone_phase = PQ_clone_phase::EXECUTION;
         // If count_distinct_func is in having_condition, like
         // 'select * from t1 group by id having count(distinct id) > 0;'
         // Item_sum_count(count(distinct id))->hidden is true and
@@ -386,7 +386,7 @@ bool pq_build_sum_funcs(THD *thd, Query_block *select, Ref_item_array &ref_ptr,
 THD *pq_new_thd(THD *thd) {
   DBUG_TRACE;
 
-  THD *new_thd = new (thd->pq_mem_root) THD();
+  THD *new_thd = new (thd->pq_context().mem_root) THD();
   if (!new_thd ||
       DBUG_EVALUATE_IF("dup_thd_abort", (!(new_thd->net.error = 0)), false)) {
     goto err;
@@ -401,9 +401,9 @@ THD *pq_new_thd(THD *thd) {
   new_thd->set_db(thd->db());
   new_thd->pq_copy_from(thd);
 
-  if (thd->pq_explain_analyze ||
+  if (thd->pq_context().explain_analyze ||
       (thd->lex->is_explain() && thd->lex->explain_format->is_iterator_based()))
-    new_thd->pq_explain_analyze = true;
+    new_thd->pq_context().explain_analyze = true;
 
   return new_thd;
 
@@ -454,7 +454,7 @@ static void reset_derived_materialize_query_blocks(THD *thd, Query_block *orig,
     Query_expression *derived = tbl_list->derived_query_expression();
 
     Mem_root_array<MaterializePathParameters::QueryBlock> query_blocks(
-        thd->pq_mem_root);
+        thd->pq_context().mem_root);
     bool is_find = false;
     WalkAccessPathsProxy(
         orig->join->m_root_access_path, /*cross_query_blocks=*/false,
@@ -497,7 +497,7 @@ static void reset_derived_materialize_query_blocks(THD *thd, Query_block *orig,
  */
 Gather_operator *make_pq_gather_operator(JOIN *join, uint dop) {
   THD *thd = current_thd;
-  assert(thd == join->thd && thd->has_pq && (join->idx_div_tab >= 0));
+  assert(thd == join->thd && thd->pq_context().has_pq && (join->pq_context().idx_div_tab >= 0));
   JOIN *template_join = nullptr;
   Gather_operator *gather_opr = nullptr;
   std::vector<Query_block *> query_blocks_to_clone;
@@ -506,15 +506,15 @@ Gather_operator *make_pq_gather_operator(JOIN *join, uint dop) {
   // Whereas the leader will use the original query block (Query_block).
   THD *new_thd = pq_new_thd(join->thd);
   if (!new_thd) goto err;
-  new_thd->pq_leader = thd;
-  new_thd->has_pq = true;
+  new_thd->pq_context().leader = thd;
+  new_thd->pq_context().has_pq = true;
   template_join = pq_make_join(new_thd, join);
 
   if (!template_join || pq_dup_tabs(template_join, join, true)) {
     goto err;
   }
 
-  template_join->need_tmp_pq = true;
+  template_join->pq_context().need_tmp_pq = true;
 
   query_blocks_to_clone =
       list_query_blocks_to_clone(template_join->query_block);
@@ -535,7 +535,7 @@ Gather_operator *make_pq_gather_operator(JOIN *join, uint dop) {
   /** duplicate a new THD and set it as current_thd, so here should restore old
    * THD */
   thd->store_globals();
-  gather_opr = new (thd->pq_mem_root) Gather_operator(dop, thd->pq_mem_root);
+  gather_opr = new (thd->pq_context().mem_root) Gather_operator(dop, thd->pq_context().mem_root);
 
   if (!gather_opr || DBUG_EVALUATE_IF("pq_gather_error2", true, false)) {
     goto err;
@@ -558,10 +558,10 @@ Gather_operator *make_pq_gather_operator(JOIN *join, uint dop) {
   });
 
   gather_opr->m_template_join = template_join;
-  if (join->idx_cut_tab >= 0) gather_opr->tab_set.insert(CUT_TAB);
+  if (join->pq_context().idx_cut_tab >= 0) gather_opr->tab_set.insert(CUT_TAB);
 
   for (auto tabType : gather_opr->tab_set) {
-    auto idx = (tabType == DIV_TAB) ? join->idx_div_tab : join->idx_cut_tab;
+    auto idx = (tabType == DIV_TAB) ? join->pq_context().idx_div_tab : join->pq_context().idx_cut_tab;
     gather_opr->pq_tabs[tabType].m_tab = &join->qep_tab[idx];
     gather_opr->pq_tabs[tabType].m_table = join->qep_tab[idx].table();
   }
@@ -573,7 +573,7 @@ Gather_operator *make_pq_gather_operator(JOIN *join, uint dop) {
   template_join->thd->push_diagnostics_area(&gather_opr->m_stmt_da);
 
   gather_opr->m_workers =
-      thd->pq_mem_root->ArrayAlloc<PQ_worker_manager *>(dop);
+      thd->pq_context().mem_root->ArrayAlloc<PQ_worker_manager *>(dop);
 
   if (!gather_opr->m_workers ||
       DBUG_EVALUATE_IF("pq_gather_error3", (!(gather_opr->m_workers = nullptr)),
@@ -582,7 +582,7 @@ Gather_operator *make_pq_gather_operator(JOIN *join, uint dop) {
   }
 
   for (uint i = 0; i < dop; i++) {
-    gather_opr->m_workers[i] = new (thd->pq_mem_root) PQ_worker_manager();
+    gather_opr->m_workers[i] = new (thd->pq_context().mem_root) PQ_worker_manager();
     if (!gather_opr->m_workers[i]) goto err;
     gather_opr->m_workers[i]->m_gather = gather_opr;
     gather_opr->m_workers[i]->thd_leader = thd;
@@ -678,8 +678,8 @@ void SetupPQTab(PQTab *pqTab, QEP_TAB *tab, JOIN *join) {
 void Gather_operator::prepare() {
   for (auto tabType : tab_set) {
 #ifndef NDEBUG
-    auto idx = (tabType == DIV_TAB) ? m_template_join->idx_div_tab
-                                    : m_template_join->idx_cut_tab;
+    auto idx = (tabType == DIV_TAB) ? m_template_join->pq_context().idx_div_tab
+                                    : m_template_join->pq_context().idx_cut_tab;
     assert(idx >= 0);
     assert(current_thd == pq_tabs[tabType].m_table->in_use);
 #endif  // NDEBUG
@@ -782,10 +782,10 @@ static void restore_leader_plan(
     THD *thd MY_ATTRIBUTE((unused)), bool graceful_fallback,
     const std::vector<uint32_t> &orig_digests MY_ATTRIBUTE((unused)),
     JOIN *join) {
-  join->pq_stable_sort = false;
-  join->qep_tab = join->qep_tab0;
-  join->ref_items = join->ref_items0;
-  join->tmp_fields = join->tmp_fields0;
+  join->pq_context().pq_stable_sort = false;
+  join->qep_tab = join->pq_context().qep_tab0;
+  join->ref_items = join->pq_context().ref_items0;
+  join->tmp_fields = join->pq_context().tmp_fields0;
   if (!graceful_fallback) return;
 
   join->query_block->pq_restore();
@@ -811,7 +811,7 @@ static void restore_leader_plan(
   // values, it is confirmed that the memory content of thd->mem_root has
   // not been modified, which means that the serial execution plan has not
   // changed and falling back to the serial execution plan is reliable.
-  // From backup_leader_plan to restore_leader_plan, thd->pq_mem_root is
+  // From backup_leader_plan to restore_leader_plan, thd->pq_context().mem_root is
   // used, and thd->mem_root is not used. This is a prerequisite for the
   // aforementioned verification mechanism.
   // A PQ clone of a derived table shares the original Query_expression while
@@ -919,7 +919,7 @@ void mark_desc_groups(JOIN *join, Gather_operator *gather) {
   // If leader doesn't need to merge groups, That means leader
   // will add a tmp table to do the deduplicate, this function is
   // not needed.
-  if (!join->pq_rebuilt_group) {
+  if (!join->pq_context().pq_rebuilt_group) {
     return;
   }
 
@@ -992,11 +992,11 @@ void mark_desc_groups(JOIN *join, Gather_operator *gather) {
 
   // This function fills gather->m_desc_groups with groups with descending
   // index: In bool ParallelScanIterator::pq_init_record_gather(), Filesort
-  // *sort is made using join->saved_join_group_list, then mq_scan_init() takes
+  // *sort is made using join->pq_context().saved_join_group_list, then mq_scan_init() takes
   // in sort and  m_desc_groups, and compares the two, it therefore makes sense
-  // to use join->saved_join_group_list here
-  if (join->saved_join_group_list) {
-    for (auto group : *join->saved_join_group_list) mark_desc_group(group);
+  // to use join->pq_context().saved_join_group_list here
+  if (join->pq_context().saved_join_group_list) {
+    for (auto group : *join->pq_context().saved_join_group_list) mark_desc_group(group);
   } else {
     for (auto &group : join->query_block->group_list) mark_desc_group(&group);
   }
@@ -1109,7 +1109,7 @@ static void rewrite_hash_join_access_path_cost(THD *thd, JOIN *join,
     to restore the original table size.
   */
   if (IsPartialResultsInputHashJoin(join, path)) {
-    joined_rows *= thd->pq_dop;
+    joined_rows *= thd->pq_context().dop;
   }
   AdjustOutLefJoinRows(path, inner->num_output_rows(), joined_rows);
 
@@ -1135,7 +1135,7 @@ static void rewrite_hash_join_access_path_cost(THD *thd, JOIN *join,
   double outer_read_cost = pos_outer->read_cost;
   if ((GetUsedTableMap(inner, true) & div_table_map) ||
       (GetUsedTableMap(outer, true) & div_table_map)) {
-    outer_read_cost /= thd->pq_dop;
+    outer_read_cost /= thd->pq_context().dop;
   }
   path->set_num_output_rows(joined_rows * pos_outer->filter_effect);
   path->cost = inner->cost + outer_read_cost +
@@ -1237,9 +1237,9 @@ bool pq_rewrite_full_access_path_cost(THD *thd, JOIN *join, AccessPath *path,
             // the lower-level MATERIALIZE, this needs to be corrected. After
             // the upper operator finishes computing the cost and row count,
             // we should then traverse pq_materialize_paths to restore it.
-            if (thd->pq_dop && p->materialize().table_path->type ==
+            if (thd->pq_context().dop && p->materialize().table_path->type ==
                                    AccessPath::PQ_BLOCK_SCAN) {
-              p->set_num_output_rows(p->num_output_rows() / thd->pq_dop);
+              p->set_num_output_rows(p->num_output_rows() / thd->pq_context().dop);
               pq_materialize_paths.push_back(p);
             }
             break;
@@ -1264,7 +1264,7 @@ bool pq_rewrite_full_access_path_cost(THD *thd, JOIN *join, AccessPath *path,
       },
       /*post_order_traversal=*/true);
   for (auto p : pq_materialize_paths) {
-    p->set_num_output_rows(p->num_output_rows() * thd->pq_dop);
+    p->set_num_output_rows(p->num_output_rows() * thd->pq_context().dop);
   }
   return ret;
 }
@@ -1415,7 +1415,7 @@ bool JOIN::is_suit_for_pq_based_cost() {
     return false;
   }
   double exchange_rows_num =
-      get_full_access_path_row_nums(m_root_access_path) * thd->pq_dop;
+      get_full_access_path_row_nums(m_root_access_path) * thd->pq_context().dop;
   double parl_cost = get_full_access_path_cost(m_root_access_path);
   pq_resore_full_access_path_cost(m_root_access_path, orig_costs);
   /*
@@ -1457,34 +1457,34 @@ PQ_exec_status make_pq_leader_plan(JOIN *join, THD *thd) {
   std::vector<uint32_t> orig_digests =
       backup_leader_plan(thd, graceful_fallback, join);
   MEM_ROOT *saved_mem_root = thd->mem_root;
-  thd->mem_root = thd->pq_mem_root;
+  thd->mem_root = thd->pq_context().mem_root;
   Query_block *saved_select = thd->lex->current_query_block();
   thd->lex->set_current_query_block(join->query_block);
 
   for (uint i = join->const_tables; i < join->primary_tables; i++) {
     if (join->qep_tab[i].pq_div_tab) {
-      join->idx_div_tab = i;
+      join->pq_context().idx_div_tab = i;
       join->qep_tab[i].table()->file->do_parallel_scan = true;
     }
 
     if (join->qep_tab[i].pq_cut_tab) {
-      join->idx_cut_tab = i;
+      join->pq_context().idx_cut_tab = i;
       join->qep_tab[i].table()->file->do_parallel_scan = true;
     }
   }
-  assert(join->idx_div_tab < (int)join->primary_tables);
-  Table_ref *table_ref = join->qep_tab[join->idx_div_tab].table_ref;
-  join->pq_stable_sort = pq_check_stable_sort(join);
+  assert(join->pq_context().idx_div_tab < (int)join->primary_tables);
+  Table_ref *table_ref = join->qep_tab[join->pq_context().idx_div_tab].table_ref;
+  join->pq_context().pq_stable_sort = pq_check_stable_sort(join);
   Opt_trace_object trace_one_table(trace);
   trace_one_table.add_utf8_table(table_ref)
-      .add("degree of parallel", thd->pq_dop)
-      .add("merge_sort", join->pq_stable_sort);
+      .add("degree of parallel", thd->pq_context().dop)
+      .add("merge_sort", join->pq_context().pq_stable_sort);
 
   // describes what to do in case of failure:
   PQ_exec_status exec_code =
       graceful_fallback ? PQ_exec_status::SEQ_EXEC : PQ_exec_status::ABORT_EXEC;
 
-  gather = make_pq_gather_operator(join, thd->pq_dop);
+  gather = make_pq_gather_operator(join, thd->pq_context().dop);
   if (!gather || !gather->m_template_join ||
       DBUG_EVALUATE_IF("pq_leader_abort1", true, false)) {
     trace_wrapper.add_alnum("failed reason",
@@ -1526,7 +1526,7 @@ PQ_exec_status make_pq_leader_plan(JOIN *join, THD *thd) {
 
   tab = join->qep_tab;
   tab->gather = gather;
-  thd->pq_gathers.push_back(gather);
+  thd->pq_context().gathers.push_back(gather);
 
   // here we collect the reverse-sorted groups, and later this
   // collection is used to set up the merge sort's order properly
@@ -1550,7 +1550,7 @@ PQ_exec_status make_pq_leader_plan(JOIN *join, THD *thd) {
   tab->table()->pos_in_table_list = tab->table_ref;
   join->create_access_paths();
   pq_stmt_executed++;
-  thd->pq_executed = true;
+  thd->pq_context().executed = true;
   thd->mem_root = saved_mem_root;
   thd->want_privilege = saved_thd_want_privilege;
   // Plan cache doesn't support parallel query plan. Plan caching was decided
@@ -1595,9 +1595,9 @@ static JOIN *make_pq_worker_plan(PQ_worker_manager *mngr) {
   // duplicate a query plan from template join, which is used in PQ workers
   THD *new_thd = pq_new_thd(template_join->thd);
   if (!new_thd) goto err;
-  new_thd->pq_leader = mngr->thd_leader;
-  new_thd->mem_root = new_thd->pq_mem_root;
-  new_thd->pq_worker_info = mngr;
+  new_thd->pq_context().leader = mngr->thd_leader;
+  new_thd->mem_root = new_thd->pq_context().mem_root;
+  new_thd->pq_context().worker_info = mngr;
 
   // A worker is created to execute one Query_block and dies when it's done.
   // Its Query_block is a clone of the original Query_block, but its
@@ -1610,8 +1610,8 @@ static JOIN *make_pq_worker_plan(PQ_worker_manager *mngr) {
     goto err;
   }
 
-  join->need_tmp_pq = true;
-  join->m_msg_handler = msg_handler;
+  join->pq_context().need_tmp_pq = true;
+  join->pq_context().m_msg_handler = msg_handler;
   query_blocks_to_clone = list_query_blocks_to_clone(join->query_block);
 
   for (auto query_block : query_blocks_to_clone) {
@@ -1639,8 +1639,8 @@ static JOIN *make_pq_worker_plan(PQ_worker_manager *mngr) {
   }
 
   /** set query result */
-  mq_result = new (join->thd->pq_mem_root)
-      Query_result_mq(join, msg_handler, join->pq_stable_sort);
+  mq_result = new (join->thd->pq_context().mem_root)
+      Query_result_mq(join, msg_handler, join->pq_context().pq_stable_sort);
   if (!mq_result || DBUG_EVALUATE_IF("pq_worker_error2", true, false)) {
     sql_print_warning("[Parallel query] Create worker result mq failed");
     goto err;
@@ -1655,7 +1655,7 @@ err:
   if (new_thd) {
     // If make worker plan failed, mark pq_error, so that if will not wait at
     // the barrier when free join later.
-    new_thd->pq_error = true;
+    new_thd->pq_context().error = true;
     new_thd->store_globals();
   }
   pq_free_join(new_thd, join);
@@ -1705,8 +1705,8 @@ void *pq_worker_exec(void *arg) {
 
   thd = join->thd;
 #ifndef NDEBUG
-  assert(current_thd == join->thd && thd->pq_leader == leader_thd);
-  thd->pq_skip_fetch_ctx = leader_thd->pq_skip_fetch_ctx;
+  assert(current_thd == join->thd && thd->pq_context().leader == leader_thd);
+  thd->pq_context().skip_fetch_ctx = leader_thd->pq_context().skip_fetch_ctx;
 #endif  // NDEBUG
 
   // Only when this query block contains innodb tables, we need consistent
@@ -1730,7 +1730,7 @@ void *pq_worker_exec(void *arg) {
     goto err;
 
   mngr->signal_status(thd, PQ_worker_state::READY);
-  thd->killed.store(thd->pq_leader->killed.load());
+  thd->killed.store(thd->pq_context().leader->killed.load());
 
   {
     Ignore_error_handler ignore_handler;
@@ -1741,7 +1741,7 @@ void *pq_worker_exec(void *arg) {
   }
   mngr->signal_status(thd, PQ_worker_state::OVER);
   if (thd->lex->is_explain_analyze) {
-    JOIN *leader_template_join = thd->pq_worker_info->m_gather->m_template_join;
+    JOIN *leader_template_join = thd->pq_context().worker_info->m_gather->m_template_join;
     CollectWorkerIterTimingInfo(join->query_expression()->root_access_path(),
                                 join, leader_template_join->m_root_access_path,
                                 leader_template_join);
@@ -1752,8 +1752,8 @@ err:
   if (res) {
     assert(msg_handler && leader_thd);
     assert(mngr->m_status == PQ_worker_state::INIT ||
-           (thd->is_error() || thd->killed || thd->pq_error));
-    leader_thd->pq_error = true;
+           (thd->is_error() || thd->killed || thd->pq_context().error));
+    leader_thd->pq_context().error = true;
     msg_handler->send_exception_msg(ERROR_MSG);
   }
   msg_handler->set_detached_status(MQ_HAVE_DETACHED);
@@ -1836,7 +1836,7 @@ bool pq_make_join_readinfo(JOIN *join, Gather_operator *gather,
     TABLE *const table = qep_tab->table();
     if (prep_for_pos ||
         // PQ's stable sort needs row IDs => calls position()
-        (qep_tab->pq_div_tab && join->pq_stable_sort))
+        (qep_tab->pq_div_tab && join->pq_context().pq_stable_sort))
       table->prepare_for_position();
   }
   std::vector<Item *> predicates_below_join;
@@ -1877,7 +1877,7 @@ bool pq_make_join_readinfo(JOIN *join, Gather_operator *gather,
             qep_tab->set_condition(idx_remainder_cond);
           }
         }
-      } else if (join->pq_last_sort_idx == int(i) &&
+      } else if (join->pq_context().pq_last_sort_idx == int(i) &&
                  i >= join->primary_tables) { /** set order by */
         assert(qep_tab->filesort);
         // join->m_select_limit indicates whether to perform a full table scan,
@@ -1893,14 +1893,14 @@ bool pq_make_join_readinfo(JOIN *join, Gather_operator *gather,
         // send to leader is sorted with group-field. Consequently, leader
         // can employ merge sort to merge these partial results and then
         // re-aggregate them in a streaming manner.
-        if (join->pq_rebuilt_group) {
-          assert(join->saved_join_group_list);
+        if (join->pq_context().pq_rebuilt_group) {
+          assert(join->pq_context().saved_join_group_list);
           assert(join->m_select_limit == HA_POS_ERROR);
           SQL_I_List<ORDER> orig_list;
 
-          restore_list(join->saved_join_group_list, orig_list);
+          restore_list(join->pq_context().saved_join_group_list, orig_list);
           ORDER *order = restore_optimized_group_order(
-              orig_list, join->saved_optimized_vars.optimized_group_flags);
+              orig_list, join->pq_context().saved_optimized_vars.optimized_group_flags);
           if (order) {
             ORDER_with_src group_list = ORDER_with_src(order, ESC_GROUP_BY);
             join->add_sorting_to_table(i, &group_list, false);
@@ -1934,14 +1934,14 @@ bool pq_make_join_readinfo(JOIN *join, Gather_operator *gather,
     // For explain analyze scenaio, pq leader need to create iterator of
     // workers' query plan, then leader can gather worker's execution timing
     // info.
-    join->thd->pq_leader_create_fake_iter = true;
+    join->thd->pq_context().leader_create_fake_iter = true;
     // Pretend this is pq woker thread when create iterator.
     if (gather && gather->m_workers) {
-      join->thd->pq_worker_info = gather->m_workers[0];
+      join->thd->pq_context().worker_info = gather->m_workers[0];
     }
     join->query_expression()->create_iterator_from_accesspath(join->thd);
-    join->thd->pq_leader_create_fake_iter = false;
-    join->thd->pq_worker_info = nullptr;
+    join->thd->pq_context().leader_create_fake_iter = false;
+    join->thd->pq_context().worker_info = nullptr;
   }
 
   return false;
@@ -1953,7 +1953,7 @@ bool pq_make_join_readinfo(JOIN *join, Gather_operator *gather,
    @param join  JOIN object
 */
 bool pq_check_stable_sort(JOIN *join) {
-  if ((join->pq_last_sort_idx >= (int)join->primary_tables) ||
+  if ((join->pq_context().pq_last_sort_idx >= (int)join->primary_tables) ||
       (join->need_tmp_before_win &&
        join->m_ordered_index_usage != JOIN::ORDERED_INDEX_ORDER_BY)) {
     return false;
@@ -2212,7 +2212,7 @@ bool set_key_order(QEP_TAB *tab, std::vector<std::string> &key_fields,
   SQL_I_List<ORDER> order_list;
 
   for (Item *item : order_items) {
-    ORDER *order = new (thd->pq_mem_root) ORDER();
+    ORDER *order = new (thd->pq_context().mem_root) ORDER();
     if (!order) {
       *order_ptr = NULL;
       return true;
@@ -2236,7 +2236,7 @@ void EstimatePQGatherOperatorCost(AccessPath *path, THD *thd) {
     // Keep same logic with JOIN::is_suit_for_pq_based_cost,
     // use same interface with JOIN::is_suit_for_pq_based_cost later.
     double rows =
-        get_full_access_path_row_nums(worker_access_path) * thd->pq_dop;
+        get_full_access_path_row_nums(worker_access_path) * thd->pq_context().dop;
     double parl_cost = get_full_access_path_cost(worker_access_path);
     if (rows > 0 && parl_cost > 0) {
       path->set_num_output_rows(rows);

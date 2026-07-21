@@ -563,8 +563,8 @@ bool Item_subselect::fix_fields(THD *thd, Item **ref) {
         PQ-unsupported item classes.
     */
     for (auto sl = unit->first_query_block(); sl; sl = sl->next_query_block()) {
-      sl->m_suite_for_pq = false;
-      sl->pq_unsuite_info = PQUnsuiteInfo::SUBQUERY_TRANS;
+      sl->pq_context().m_suite_for_pq = false;
+      sl->pq_context().pq_unsuite_info = PQUnsuiteInfo::SUBQUERY_TRANS;
     }
   }
 
@@ -690,7 +690,8 @@ bool Item_subselect::exec(THD *thd) {
   // return as the result has been cached.
   assert(unit);
   if ((unit->is_executed() || assigned()) &&
-      unit->outer_query_block()->parallel_exec && !unit->uncacheable) {
+      unit->outer_query_block()->pq_context().parallel_exec &&
+      !unit->uncacheable) {
     // If the outer query is marked as "parallel execute", then the
     // included subquery in "Item_subselect" is sure to be suitable for PQ.
     assert(unit->subquery_suite_for_parallel_query() ==
@@ -3163,7 +3164,7 @@ SubqueryWithResult::SubqueryWithResult(Query_expression *u,
   // If this unit is shared, then PQ worker should not set unit->item as
   // its cloned item; this value should remain as the original item in PQ
   // leader.
-  if (!unit->outer_query_block()->parallel_exec) {
+  if (!unit->outer_query_block()->pq_context().parallel_exec) {
     unit->item = si;
   }
 }
@@ -3416,10 +3417,10 @@ Item_subselect *Item_subselect::pq_clone_common(THD *thd, Query_block *select) {
   Item_subselect *new_item;
   switch (substype()) {
     case SINGLEROW_SUBS:
-      new_item = new (thd->pq_mem_root) Item_singlerow_subselect();
+      new_item = new (thd->pq_context().mem_root) Item_singlerow_subselect();
       break;
     case EXISTS_SUBS:
-      new_item = new (thd->pq_mem_root) Item_exists_subselect();
+      new_item = new (thd->pq_context().mem_root) Item_exists_subselect();
       break;
     default:
       assert(false);
@@ -3467,11 +3468,13 @@ Item_subselect *Item_subselect::pq_clone_common(THD *thd, Query_block *select) {
       switch (substype()) {
         case SINGLEROW_SUBS:
           new_query_result =
-              new (thd->pq_mem_root) Query_result_scalar_subquery(new_item);
+              new (thd->pq_context().mem_root)
+                  Query_result_scalar_subquery(new_item);
           break;
         case EXISTS_SUBS:
           new_query_result =
-              new (thd->pq_mem_root) Query_result_exists_subquery(new_item);
+              new (thd->pq_context().mem_root)
+                  Query_result_exists_subquery(new_item);
           break;
         default:
           assert(false);

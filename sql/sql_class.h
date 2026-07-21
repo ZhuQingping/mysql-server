@@ -92,6 +92,7 @@
 #include "sql/mdl.h"
 #include "sql/opt_costmodel.h"
 #include "sql/opt_trace_context.h"  // Opt_trace_context
+#include "sql/parallel_query/pq_context.h"
 #include "sql/psi_memory_key.h"
 #include "sql/query_options.h"
 #include "sql/resourcegroups/resource_group_basic_types.h"
@@ -1075,6 +1076,8 @@ class THD : public MDL_context_owner,
   Thd_mem_cnt m_mem_cnt;
 
  private:
+  PQ_thd_context m_pq_context;
+
   bool is_stmt_prepare() const = delete;
   bool is_stmt_prepare_or_first_sp_execute() const = delete;
   bool is_stmt_prepare_or_first_stmt_execute() const = delete;
@@ -1194,78 +1197,35 @@ class THD : public MDL_context_owner,
   unsigned char m_uuid[UUID_LEN];
 
  public:
-  enum PQ_CLONE_PHASE {
-    PQ_PREPARE = 0,
-    PQ_OPTIMIZE,
-    PQ_EXECUTEION,
-    PQ_UNKONWN
-  };
-
-  PQ_CLONE_PHASE clone_phase{PQ_UNKONWN};
-  /// data structures for parallel query
-  /** memory root for PQ */
-  MEM_ROOT *pq_mem_root;
-  /* using for PQ worker threads */
-  THD *pq_leader;
-  /** gather operator of all query blocks */
-  std::vector<Gather_operator *> pq_gathers;
-  /** worker manager info used by worker therad */
-  PQ_worker_manager *pq_worker_info{nullptr};
-
-  /// If set to true, it indicates that the query failed execution with parallel
-  /// query, and we are now retrying without parallel query. Currently only used
-  /// for sending a warning to the client saying that this happened.
-  bool retry_without_pq{false};
-
-  /** indicates whether the query is executed in PQ */
-  bool has_pq;
-  /** pq support explain analyze, leader create fake iterator of worker plan */
-  bool pq_leader_create_fake_iter;
-  /* parallel query running threads in session*/
-  uint pq_threads_running;
-  /* degree of parallel */
-  uint pq_dop;
-  /* disable parallel execute */
-  bool no_pq;
-  /* disable parallel query for store procedure and trigger */
+  PQ_thd_context &pq_context() { return m_pq_context; }
+  const PQ_thd_context &pq_context() const { return m_pq_context; }
+  /* disable parallel query for stored programs and triggers */
   bool in_sp_trigger;
-  /* indicates whether occurring error during execution */
-  bool pq_error;
-  /** found_rows in PQ */
-  uint64 pq_current_found_rows;
-  /* Indicates whether the query was executed using PQ. */
-  bool pq_executed{false};
   /** determine query is suite for PQ */
   bool suite_for_parallel_query(PQUnsuiteInfo *pq_info) const;
   /** worker thread */
-  bool is_pq_worker() const { return pq_leader; }
-  bool is_pq_real_worker() const { return pq_leader && pq_worker_info; }
+  bool is_pq_worker() const { return m_pq_context.is_worker(); }
+  bool is_pq_real_worker() const { return m_pq_context.is_real_worker(); }
   /** leader thread */
-  bool is_pq_leader() const { return !pq_leader; }
+  bool is_pq_leader() const { return m_pq_context.is_leader(); }
   /** there is error during parallel execution */
+  // Keep this predicate inline: message-queue send/receive loops poll it.
   bool is_pq_error() const {
-    return !pq_leader
-               ? pq_error
-               : (pq_error || (pq_leader->is_killed() || pq_leader->pq_error ||
-                               pq_leader->is_error()));
+    return m_pq_context.leader == nullptr
+               ? m_pq_context.error
+               : (m_pq_context.error || m_pq_context.leader->is_killed() ||
+                  m_pq_context.leader->pq_context().error ||
+                  m_pq_context.leader->is_error());
   }
   /** merge pq-releated status */
   bool pq_merge_status(THD *thd);
-  /** reset pq-releated status */
-  bool pq_status_reset();
   /** copy property from other thd */
   void pq_copy_from(THD *thd);
-  /** check whether pq clone status is PQ_PREPARE or PQ_OPTIMIZE. */
+  /** check whether pq clone status is PREPARE or OPTIMIZE. */
   bool is_in_pq_phase() {
-    return clone_phase == THD::PQ_PREPARE || clone_phase == THD::PQ_OPTIMIZE;
+    return m_pq_context.clone_phase == PQ_clone_phase::PREPARE ||
+           m_pq_context.clone_phase == PQ_clone_phase::OPTIMIZE;
   }
-
-#ifndef NDEBUG
-  // one worker skips the fetch of scan ctx; it aims to make one worker
-  // read nothing, thus letting other workers do all reads; for testing
-  // only, and implemented only in Temptable engine.
-  bool pq_skip_fetch_ctx{false};
-#endif  // NDEBUG
 
  public:
   /* Used to execute base64 coded binlog events in MySQL server */
@@ -2939,7 +2899,6 @@ class THD : public MDL_context_owner,
    */
   bool running_explain_analyze = false;
 
-  bool pq_explain_analyze = false;
 
   /**
     When operation on DD tables is in progress then THD is set to kill immune

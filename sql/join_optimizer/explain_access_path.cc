@@ -304,7 +304,7 @@ static std::unique_ptr<Json_object> ExplainMaterializeAccessPath(
     accesspath to avoid repeat CTE over and over again if pq enabled.
   */
   MaterializePathParameters *param_bak = param;
-  if (current_thd && current_thd->has_pq && param->saved_param) {
+  if (current_thd && current_thd->pq_context().has_pq && param->saved_param) {
     param = param->saved_param;
   }
 
@@ -313,7 +313,8 @@ static std::unique_ptr<Json_object> ExplainMaterializeAccessPath(
     plan once.
   */
   const bool explain_cte_now = param->cte != nullptr && [&]() {
-    if (explain_analyze && !(current_thd && current_thd->has_pq)) {
+    if (explain_analyze &&
+        !(current_thd && current_thd->pq_context().has_pq)) {
       /*
         Find the temporary table for which the CTE was materialized, if there
         is one.
@@ -1260,7 +1261,8 @@ static std::unique_ptr<Json_object> SetObjectMembers(
           path->hash_join().partial_results_from_build_input &&
           path->hash_join().partial_results_from_probe_input;
       description = HashJoinTypeToString(
-          type, &json_join_type, join->thd->has_pq, uses_shared_hash_table);
+          type, &json_join_type, join->thd->pq_context().has_pq,
+          uses_shared_hash_table);
 
       std::unique_ptr<Json_array> hash_condition(new (std::nothrow)
                                                      Json_array());

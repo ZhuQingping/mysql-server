@@ -1,7 +1,7 @@
 # Parallel Query 当前规格入口
 
-> 状态：`commit-bound-current`
-> 当前实现基线：`1f6c4a5cbeab86dddcf8da7cdb3a3c29bb3509a9` (`stable_branch`)
+> 状态：`refactor-commit-ready`
+> 稳定对照基线：`1b9ffd755d4` (`stable_branch`)；当前分支：`pq-local-refactor-clean`
 > MySQL 基线：8.0.41
 > 文档用途：AI 特性开发、代码走读、故障诊断、质量加固
 > 运行验证：见 [`current/quality/verification_evidence.md`](current/quality/verification_evidence.md)
@@ -48,7 +48,7 @@ GAP-ID
 
 ### 必读入口
 
-1. [`manifest.yaml`](manifest.yaml)：基线、文档状态、默认读取集合和生成顺序。
+1. [`manifest.yaml`](manifest.yaml)：稳定对照基线、受控 PQ 源码快照、文档状态和生成顺序。
 2. [`current/00_architecture_overview.md`](current/00_architecture_overview.md)：整体架构、主流程和跨模块不变量。
 3. [`current/01_current_support_matrix.md`](current/01_current_support_matrix.md)：当前支持、部分支持和串行回退契约。
 
@@ -68,6 +68,7 @@ GAP-ID
 | 事务与 DML | [`modules/10_transaction_dml_binlog.md`](current/modules/10_transaction_dml_binlog.md) | 隔离级别、锁、INSERT/REPLACE SELECT、binlog |
 | 资源 | [`modules/11_resource_accounting.md`](current/modules/11_resource_accounting.md) | 线程、内存、MQ、临时表、VFD、资源归还 |
 | 可观测和集成 | [`modules/12_observability_integrations.md`](current/modules/12_observability_integrations.md) | EXPLAIN、trace、status、plan cache、PTRC、日志 |
+| Context 所有权重构 | [`current/13_context_ownership_refactor.md`](current/13_context_ownership_refactor.md) | THD、Query_block、JOIN 的 PQ 状态边界、等价性和验收合同 |
 
 ### 质量与诊断
 
@@ -161,7 +162,7 @@ runbooks/hang_kill_resource_leak.md
 3. Requirement → Source → Test 映射是否改变。
 4. `conformance_gaps.md` 中的 gap 是否关闭、扩大或失效。
 5. 重新生成 inventory 和 Handbook。
-6. 更新 `verification_evidence.md` 中的目标提交、命令和结果；没有定向运行证据时不得写
+6. 更新 `verification_evidence.md` 中的目标范围、命令和结果；没有定向运行证据时不得写
    `verified`。
 
 模块文档格式见 [`MODULE_TEMPLATE.md`](MODULE_TEMPLATE.md)。

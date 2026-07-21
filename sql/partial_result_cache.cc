@@ -713,7 +713,7 @@ static void reset_record(TableCollection *const tc) {
     // TABLE::const_table are uniformly set to false. Therefore,
     // TABLE::pq_saved_const_table should be used.
     if (!table->has_null_row() && !table->const_table &&
-        !(table->in_use && table->in_use->has_pq &&
+        !(table->in_use && table->in_use->pq_context().has_pq &&
           table->pq_saved_const_table)) {
       memset_s(table->record[0], table->s->reclength, 0, table->s->reclength);
     }

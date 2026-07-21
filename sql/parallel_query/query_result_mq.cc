@@ -165,17 +165,17 @@ Query_result_mq::Query_result_mq(JOIN *join, MQueue_handle *msg_handler,
 bool Query_result_mq::send_result_set_metadata(
     THD *thd, const mem_root_deque<Item *> &MY_ATTRIBUTE((unused)),
     uint flags MY_ATTRIBUTE((unused))) {
-  m_param = new (thd->pq_mem_root) Temp_table_param();
+  m_param = new (thd->pq_context().mem_root) Temp_table_param();
   if (!m_param || m_join->make_worker_tmp_table()) return true;
 
   send_fields = &m_join->tmp_fields[REF_SLICE_PQ_TMP];
   uint field_size = send_fields->size();
   send_fields_size = field_size + MQ_FIELDS_DATA_HEADER_LENGTH;
 
-  mq_fields_data = new (thd->pq_mem_root) Field_raw_data[send_fields_size]{};
-  mq_fields_null_array = new (thd->pq_mem_root) bool[2 * field_size];
+  mq_fields_data = new (thd->pq_context().mem_root) Field_raw_data[send_fields_size]{};
+  mq_fields_null_array = new (thd->pq_context().mem_root) bool[2 * field_size];
   mq_fields_null_flag = new (
-      thd->pq_mem_root) char[field_size / MQ_FIELDS_DATA_HEADER_LENGTH + 2];
+      thd->pq_context().mem_root) char[field_size / MQ_FIELDS_DATA_HEADER_LENGTH + 2];
 
   if (!mq_fields_data || !mq_fields_null_array || !mq_fields_null_flag) {
     return true;
@@ -314,7 +314,7 @@ bool Query_result_mq::send_data(
   total_copy_bytes += 2;
 
   if (m_stable_output) {
-    auto file = m_join->qep_tab[m_join->idx_div_tab].table()->file;
+    auto file = m_join->qep_tab[m_join->pq_context().idx_div_tab].table()->file;
     assert(file);
     // PQblockScanIterator::Read() called file->position() to fill file->ref
     mq_fields_data[1].m_ptr = &file->ref[0];

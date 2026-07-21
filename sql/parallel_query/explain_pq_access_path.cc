@@ -343,11 +343,11 @@ std::string ParallelIteratorTimingString(
 void PQGatherTimingInfo(const RowIterator *iter,
                         ParallelIterTimingInfo *worker_info) {
   if (!current_thd || !worker_info) return;
-  assert(iter && current_thd->pq_worker_info);
+  assert(iter && current_thd->pq_context().worker_info);
   IteratorTimingInfo running_info;
   iter->GetProfiler()->CopyToRunningInfo(running_info);
   if (running_info.m_num_init_calls > 0) {
-    worker_info->time_info[current_thd->pq_worker_info->worker_index] =
+    worker_info->time_info[current_thd->pq_context().worker_info->worker_index] =
         running_info;
     worker_info->copy_num++;
   }

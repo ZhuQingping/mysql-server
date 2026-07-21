@@ -497,6 +497,7 @@ SET(SQL_SHARED_SOURCES
   parallel_query/exchange_sort.cc
   parallel_query/explain_pq_access_path.cc
   parallel_query/msg_queue.cc
+  parallel_query/pq_context.cc
   parallel_query/pq_clone.cc
   parallel_query/pq_clone_item.cc
   parallel_query/pq_hash_join_shared_context.cc

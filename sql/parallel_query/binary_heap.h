@@ -49,7 +49,7 @@ class binary_heap {
   /* @retval: false of success, and true otherwise. */
   bool init_binary_heap() {
     if (!m_capacity) return true;
-    m_queue = new (m_thd->pq_mem_root) int[m_capacity + 1];
+    m_queue = new (m_thd->pq_context().mem_root) int[m_capacity + 1];
     if (!m_queue || DBUG_EVALUATE_IF("pq_msort_error9", true, false)) {
       my_error(ER_STD_BAD_ALLOC_ERROR, MYF(0), "", "(PQ::init)");
       return true;

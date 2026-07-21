@@ -823,7 +823,8 @@ bool File_query_log::write_slow(THD *thd, ulonglong current_utime,
   if (thd->lex->sql_command == SQLCOM_SELECT ||
       thd->lex->sql_command == SQLCOM_INSERT_SELECT ||
       thd->lex->sql_command == SQLCOM_REPLACE_SELECT) {
-    if (my_b_printf(&log_file, "# PQ_executed: %u\n", thd->pq_executed) ==
+    if (my_b_printf(&log_file, "# PQ_executed: %u\n",
+                    thd->pq_context().executed) ==
         (uint)-1)
       goto err;
   }

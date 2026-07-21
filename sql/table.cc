@@ -8152,7 +8152,7 @@ bool ORDER::convert_to_list(SQL_I_List<ORDER> &list, THD *thd) {
   ORDER *tmp_order = this;
   ORDER *tmp_next = nullptr;
   while (tmp_order) {
-    tmp_next = new (thd->pq_mem_root) ORDER();
+    tmp_next = new (thd->pq_context().mem_root) ORDER();
     if (!tmp_next) return true;
     /** for distinct order, item_initial is null */
     if (!tmp_order->item_initial) {

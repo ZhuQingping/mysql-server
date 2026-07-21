@@ -268,7 +268,7 @@ bool Item_row::refix_fields(THD *thd, Item **) {
 }
 
 bool Item_subselect::refix_fields(THD *thd, Item **) {
-  if (!unit->outer_query_block()->parallel_exec) {
+  if (!unit->outer_query_block()->pq_context().parallel_exec) {
     assert(false);
     return true;
   }

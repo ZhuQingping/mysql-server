@@ -536,7 +536,7 @@ void Copy_field::invoke_do_copy(bool reverse) {
   const Field *from = reverse ? m_to_field : m_from_field;
   Field *to = reverse ? m_from_field : m_to_field;
 
-  if (current_thd->has_pq) do_copy_extra(from, to);
+  if (current_thd->pq_context().has_pq) do_copy_extra(from, to);
 
   (*(m_do_copy))(this, from, to);
 
